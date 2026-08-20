@@ -112,13 +112,20 @@ Opt into a bounded strategy portfolio and retain the complete selection record:
 ./target/release/pcbex route-kicad examples/simple.kicad_pcb \
   --output target/pcbex-demo/simple.converged.kicad_pcb \
   --convergence-report target/pcbex-demo/simple.convergence.json
+
+./target/release/pcbex verify-kicad-routing-convergence \
+  examples/simple.kicad_pcb \
+  --routed target/pcbex-demo/simple.converged.kicad_pcb \
+  --report target/pcbex-demo/simple.convergence.json \
+  --output target/pcbex-demo/simple.convergence.verification.json \
+  --require-complete
 ```
 
 The normal single-pass route stays the default. Convergence shares one A* work
 ceiling across all declared rounds and candidates, rejects DRC-invalid winners,
-and publishes a closed no-clobber report. See
-[Routing Convergence](docs/ROUTING_CONVERGENCE.md) for selection order and
-failure semantics.
+and publishes a closed no-clobber report. The verifier reruns that exact
+decision and regenerates the routed bytes. See [Routing Convergence](docs/ROUTING_CONVERGENCE.md)
+and [Fresh Verification](docs/ROUTING_CONVERGENCE_VERIFICATION.md).
 
 ### Build a manufacturing package
 
@@ -203,6 +210,7 @@ it enters a routing, manufacturing, or authorization flow.
 | --- | --- | --- |
 | Board JSON v2 | Geometry, nets, layers, rules, and routed copper | `pcbex schema` |
 | Routing convergence report v1 | Bounded candidate rounds and validity-first selection | `pcbex routing-convergence-report-schema` |
+| Routing convergence verification v1 | Fresh replay plus exact routed-artifact binding | `pcbex routing-convergence-verification-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

@@ -242,6 +242,137 @@ while pending:
         pending.extend(value)
 PY
 
+# v1.475 consumes the exact v1.474 source closure again, freshly replays the
+# retained convergence decision, and accepts only the exact routed KiCad
+# bytes. A truthful partial result is retained before the optional complete
+# gate; malformed or substituted evidence produces no verification artifact.
+convergence_verification_first="$output_directory/routing-convergence.verification.first.json"
+convergence_verification_second="$output_directory/routing-convergence.verification.second.json"
+convergence_verification_partial="$output_directory/routing-convergence.verification.partial.json"
+convergence_verification_partial_error="$output_directory/routing-convergence.verification.partial.stderr"
+convergence_verification_schema="$output_directory/routing-convergence.verification.schema.json"
+convergence_verification_tampered_board="$output_directory/routing-convergence.tampered.kicad_pcb"
+convergence_verification_tampered_report="$output_directory/routing-convergence.tampered.json"
+convergence_verification_tampered_output="$output_directory/routing-convergence.tampered.verification.json"
+
+"$pcbex_binary" routing-convergence-verification-report-schema \
+  --output "$convergence_verification_schema"
+"$pcbex_binary" verify-kicad-routing-convergence examples/simple.kicad_pcb \
+  --routed "$convergence_first_board" \
+  --report "$convergence_first_report" \
+  --output "$convergence_verification_first" \
+  --require-complete
+"$pcbex_binary" verify-kicad-routing-convergence examples/simple.kicad_pcb \
+  --routed "$convergence_second_board" \
+  --report "$convergence_second_report" \
+  --output "$convergence_verification_second" \
+  --require-complete
+cmp "$convergence_verification_first" "$convergence_verification_second"
+
+if "$pcbex_binary" verify-kicad-routing-convergence examples/simple.kicad_pcb \
+  --routed "$convergence_partial_board" \
+  --report "$convergence_partial_report" \
+  --output "$convergence_verification_partial" \
+  --require-complete 2>"$convergence_verification_partial_error"; then
+  echo "expected fresh routing convergence verification to gate a partial result" >&2
+  exit 1
+fi
+test -s "$convergence_verification_partial"
+grep -Fq \
+  'fresh routing convergence verification retained an incomplete routing result' \
+  "$convergence_verification_partial_error"
+
+cp "$convergence_first_board" "$convergence_verification_tampered_board"
+printf '\n' >>"$convergence_verification_tampered_board"
+if "$pcbex_binary" verify-kicad-routing-convergence examples/simple.kicad_pcb \
+  --routed "$convergence_verification_tampered_board" \
+  --report "$convergence_first_report" \
+  --output "$convergence_verification_tampered_output"; then
+  echo "expected routed KiCad byte substitution to fail verification" >&2
+  exit 1
+fi
+test ! -e "$convergence_verification_tampered_output"
+
+python3 - "$convergence_first_report" "$convergence_verification_tampered_report" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, output = map(Path, sys.argv[1:])
+report = json.loads(source.read_bytes())
+report["final_metrics"]["total_length_nm"] += 1
+output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+PY
+if "$pcbex_binary" verify-kicad-routing-convergence examples/simple.kicad_pcb \
+  --routed "$convergence_first_board" \
+  --report "$convergence_verification_tampered_report" \
+  --output "$convergence_verification_tampered_output"; then
+  echo "expected convergence-report substitution to fail fresh replay" >&2
+  exit 1
+fi
+test ! -e "$convergence_verification_tampered_output"
+
+python3 - \
+  examples/simple.kicad_pcb "$convergence_first_board" \
+  "$convergence_first_report" "$convergence_verification_first" \
+  "$convergence_verification_partial" "$convergence_verification_schema" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+input_path, routed_path, convergence_path, positive_path, partial_path, schema_path = map(
+    Path, sys.argv[1:]
+)
+positive = json.loads(positive_path.read_bytes())
+partial = json.loads(partial_path.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+
+assert positive["schema_version"] == 1
+assert positive["scope"] == "fresh_exact_routing_convergence_verification"
+assert positive["input_kind"] == "kicad_pcb"
+assert positive["status"] == "verified_complete"
+assert positive["routing_complete"] is True
+assert positive["convergence"]["status"] == "converged"
+assert len(positive["binding_sha256"]) == 64
+assert set(positive["binding_sha256"]) <= set("0123456789abcdef")
+for claim in (
+    "source_authenticity_verified",
+    "native_kicad_drc_verified",
+    "manufacturability_verified",
+    "release_authorized",
+):
+    assert positive[claim] is False
+assert set(positive["validation"].values()) == {True}
+
+for role, path in (
+    ("input", input_path),
+    ("routed_output", routed_path),
+    ("retained_report", convergence_path),
+):
+    source = path.read_bytes()
+    assert positive["sources"][role] == {
+        "bytes": len(source),
+        "sha256": hashlib.sha256(source).hexdigest(),
+    }
+
+assert partial["status"] == "verified_no_admissible_candidate"
+assert partial["routing_complete"] is False
+assert partial["convergence"]["converged"] is False
+
+pending = [schema]
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

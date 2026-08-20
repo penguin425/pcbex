@@ -73,7 +73,7 @@ fn route_convergence_is_deterministic_and_schema_is_closed() {
     );
     let report: Value = serde_json::from_slice(&fs::read(&first_report).unwrap()).unwrap();
     assert_eq!(report["schema_version"], 1);
-    assert_eq!(report["engine_version"], "1.474.0");
+    assert_eq!(report["engine_version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(report["scope"], "bounded_deterministic_routing_convergence");
     assert_eq!(report["status"], "converged");
     assert_eq!(report["converged"], true);

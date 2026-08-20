@@ -20,6 +20,8 @@ use std::{
 pub const ROUTING_CONVERGENCE_REPORT_SCHEMA_VERSION: u32 = 1;
 pub const MAX_ROUTING_CONVERGENCE_ROUNDS: usize = 8;
 pub const MAX_ROUTING_CONVERGENCE_CANDIDATES_PER_ROUND: usize = 32;
+/// Maximum retained or freshly rendered routing-convergence report size.
+pub const MAX_ROUTING_CONVERGENCE_REPORT_BYTES: u64 = 16 * 1024 * 1024;
 
 const DEFAULT_ROUNDS: usize = 3;
 const DEFAULT_CANDIDATES_PER_ROUND: usize = 5;
@@ -186,6 +188,15 @@ pub fn route_board_with_convergence(
     board: &Board,
     options: &RoutingConvergenceOptions,
 ) -> Result<RoutingConvergenceResult, String> {
+    route_board_with_convergence_for_engine(board, options, env!("CARGO_PKG_VERSION"))
+}
+
+fn route_board_with_convergence_for_engine(
+    board: &Board,
+    options: &RoutingConvergenceOptions,
+    engine_version: &str,
+) -> Result<RoutingConvergenceResult, String> {
+    validate_engine_version(engine_version)?;
     validate_options(options)?;
     validate_routing_resource_bounds(board)?;
     let input_check = check_board(board);
@@ -219,7 +230,7 @@ pub fn route_board_with_convergence(
             report: RoutingConvergenceReport {
                 schema_version: ROUTING_CONVERGENCE_REPORT_SCHEMA_VERSION,
                 scope: "bounded_deterministic_routing_convergence".into(),
-                engine_version: env!("CARGO_PKG_VERSION").into(),
+                engine_version: engine_version.into(),
                 status: RoutingConvergenceStatus::Converged,
                 converged: true,
                 design_rules_unchanged: true,
@@ -367,7 +378,7 @@ pub fn route_board_with_convergence(
         report: RoutingConvergenceReport {
             schema_version: ROUTING_CONVERGENCE_REPORT_SCHEMA_VERSION,
             scope: "bounded_deterministic_routing_convergence".into(),
-            engine_version: env!("CARGO_PKG_VERSION").into(),
+            engine_version: engine_version.into(),
             status,
             converged,
             design_rules_unchanged: true,
@@ -385,6 +396,58 @@ pub fn route_board_with_convergence(
             rounds,
         },
     })
+}
+
+/// Freshly reproduce one retained convergence report from the exact effective
+/// input Board. The retained producer version is preserved only as report
+/// metadata; schema-v1 behavior is always recomputed by the current verifier.
+/// Every other field must match the fresh deterministic result exactly.
+pub fn verify_routing_convergence_report(
+    board: &Board,
+    retained: &RoutingConvergenceReport,
+) -> Result<RoutingConvergenceResult, String> {
+    if retained.schema_version != ROUTING_CONVERGENCE_REPORT_SCHEMA_VERSION {
+        return Err("unsupported routing convergence report schema version".into());
+    }
+    if retained.scope != "bounded_deterministic_routing_convergence" {
+        return Err("routing convergence report scope is invalid".into());
+    }
+    validate_engine_version(&retained.engine_version)?;
+    let fresh = route_board_with_convergence_for_engine(
+        board,
+        &retained.options,
+        &retained.engine_version,
+    )?;
+    if fresh.report != *retained {
+        return Err(
+            "retained routing convergence report does not match a fresh deterministic replay"
+                .into(),
+        );
+    }
+    Ok(fresh)
+}
+
+fn validate_engine_version(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 32 {
+        return Err("routing convergence engine version is not bounded semantic version".into());
+    }
+    let mut components = value.split('.');
+    for _ in 0..3 {
+        let Some(component) = components.next() else {
+            return Err(
+                "routing convergence engine version is not bounded semantic version".into(),
+            );
+        };
+        if component.is_empty() || !component.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(
+                "routing convergence engine version is not bounded semantic version".into(),
+            );
+        }
+    }
+    if components.next().is_some() {
+        return Err("routing convergence engine version is not bounded semantic version".into());
+    }
+    Ok(())
 }
 
 fn validate_options(options: &RoutingConvergenceOptions) -> Result<(), String> {
@@ -638,9 +701,15 @@ fn quality_score(board: &Board, quality: &RoutingQuality) -> (usize, u64, i64, u
 pub fn render_routing_convergence_report(
     report: &RoutingConvergenceReport,
 ) -> Result<String, String> {
-    serde_json::to_string_pretty(report)
+    let rendered = serde_json::to_string_pretty(report)
         .map(|rendered| format!("{rendered}\n"))
-        .map_err(|error| format!("rendering routing convergence report: {error}"))
+        .map_err(|error| format!("rendering routing convergence report: {error}"))?;
+    if rendered.len() as u64 > MAX_ROUTING_CONVERGENCE_REPORT_BYTES {
+        return Err(format!(
+            "routing convergence report exceeds {MAX_ROUTING_CONVERGENCE_REPORT_BYTES} bytes"
+        ));
+    }
+    Ok(rendered)
 }
 
 pub fn routing_convergence_report_json_schema() -> Value {
@@ -875,6 +944,53 @@ mod tests {
                 .all(|candidate| {
                     candidate.status == RoutingConvergenceCandidateStatus::Admissible
                 })
+        );
+    }
+
+    #[test]
+    fn fresh_verifier_reproduces_retained_producer_version_and_rejects_tampering() {
+        let board = parse_board_json(include_str!("../../../examples/simple.json")).unwrap();
+        let options = RoutingConvergenceOptions {
+            max_rounds: 1,
+            candidates_per_round: 2,
+            candidate_workers: 2,
+            router_workers: 1,
+            maximum_work_units: MAX_ASTAR_WORK_BUDGET,
+        };
+        let retained = route_board_with_convergence_for_engine(&board, &options, "1.474.0")
+            .unwrap()
+            .report;
+        let verified = verify_routing_convergence_report(&board, &retained).unwrap();
+        assert_eq!(verified.report, retained);
+
+        let mut tampered = retained.clone();
+        tampered.final_metrics.total_length_nm += 1;
+        assert!(verify_routing_convergence_report(&board, &tampered).is_err());
+
+        let mut malformed = retained;
+        malformed.engine_version = "v1".into();
+        assert!(verify_routing_convergence_report(&board, &malformed).is_err());
+    }
+
+    #[test]
+    fn fresh_verifier_retains_exact_partial_outcome() {
+        let board = parse_board_json(include_str!("../../../examples/simple.json")).unwrap();
+        let options = RoutingConvergenceOptions {
+            max_rounds: 1,
+            candidates_per_round: 1,
+            candidate_workers: 1,
+            router_workers: 1,
+            maximum_work_units: 1,
+        };
+        let retained = route_board_with_convergence(&board, &options)
+            .unwrap()
+            .report;
+        assert!(!retained.converged);
+        let verified = verify_routing_convergence_report(&board, &retained).unwrap();
+        assert_eq!(verified.report, retained);
+        assert_eq!(
+            board_identity(&verified.board).unwrap(),
+            board_identity(&board).unwrap()
         );
     }
 

@@ -145,13 +145,16 @@ asset set, and protected-branch status before publication. See
 
 Routing convergence stays inside `pcbex-core`: it allocates one bounded A* work
 portfolio, generates deterministic strategy candidates, runs the authoritative
-checker, and accepts only strict validity-first improvements. The CLI owns the
-explicit no-clobber report publication and KiCad/JSON serialization.
+checker, and accepts only strict validity-first improvements. The same crate
+freshly reproduces retained schema-v1 decisions while preserving their producer
+version. The CLI owns raw-source capture, exact KiCad/JSON regeneration,
+cross-role alias rejection, and no-clobber verification evidence.
 
-Neither layer turns a convergence record into native KiCad DRC, manufacturing,
-or release authority. The path-free report binds the effective and selected
-internal Board models, not the authenticity of raw input files or policy
-origins.
+Neither layer turns either convergence artifact into native KiCad DRC,
+manufacturing, or release authority. The producer report binds the effective
+and selected internal Board models. The outer verifier additionally binds raw
+source identities and exact routed bytes, but still does not authenticate those
+sources or their policy origins.
 
 ## Public discovery
 

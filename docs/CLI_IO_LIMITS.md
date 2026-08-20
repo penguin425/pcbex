@@ -53,6 +53,21 @@ partial/no-candidate board and report are both retained before the unrouted
 gate fails. The report binds canonical internal Board identities rather than
 raw source-file bytes; see [Routing Convergence](ROUTING_CONVERGENCE.md).
 
+The v1.475 fresh verifier adds a distinct 32 MiB no-clobber report. Board JSON
+verification captures the input Board, exact routed Board, 16 MiB retained
+convergence report, and optional 4 MiB physical profile under a 276 MiB
+aggregate. KiCad verification additionally captures optional project/custom
+rules at 128 MiB each and exactly one external DFM (4 MiB), policy pack
+(64 MiB), or physical profile (4 MiB) under a 592 MiB aggregate. Input roles
+must not alias, JSON inputs reject duplicate keys, and the retained report must
+be canonical with one trailing LF. After fresh replay and exact routed-output
+regeneration, every source is reread before synchronized no-replace
+publication. These sequential checks are not an atomic multi-file snapshot.
+A truthful partial result is retained before `--require-complete` fails;
+malformed, substituted, changed, unsafe, or cross-bound input produces no
+verification report. See
+[Fresh Routing Convergence Verification](ROUTING_CONVERGENCE_VERIFICATION.md).
+
 The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
 contract. Circuit-spec input remains capped at 16 MiB, schematic input at
 64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,
