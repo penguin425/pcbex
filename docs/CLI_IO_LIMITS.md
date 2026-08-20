@@ -42,6 +42,17 @@ Output-directory creation is also outside the per-file transaction. A command ma
 therefore retain already completed evidence files when a later publication or
 quality gate fails, as documented by that command.
 
+The v1.474 routing-convergence report is an explicit no-clobber output. Its
+destination rejects symbolic-link components and lexical/canonical aliasing
+with the board input, routed board output, applied profiles/rules, and optional
+SVG or JSON adapter outputs. pcbex reserves a sibling temporary file before
+routing, renders the bounded closed report in memory, synchronizes it, and
+publishes without replacement. The routed board keeps its historical output
+semantics; board and report publication are not one transaction. A valid
+partial/no-candidate board and report are both retained before the unrouted
+gate fails. The report binds canonical internal Board identities rather than
+raw source-file bytes; see [Routing Convergence](ROUTING_CONVERGENCE.md).
+
 The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
 contract. Circuit-spec input remains capped at 16 MiB, schematic input at
 64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,

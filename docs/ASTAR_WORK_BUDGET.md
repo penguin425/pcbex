@@ -42,9 +42,13 @@ a smaller explicit limit while retaining a deterministic worker bound. Limits
 larger than the production ceiling are rejected as configuration errors rather
 than silently weakening the boundary.
 
-The limit is aggregate only within one board-routing call. A
-`route_candidates` portfolio currently gives each candidate its own top-level
-budget. This budget is not a wall-clock deadline and does not cover zone BFS,
+The limit is aggregate only within one board-routing call. A historical
+`route_candidates` portfolio gives each candidate its own top-level budget.
+The opt-in `route_board_with_convergence` boundary instead divides one declared
+ceiling deterministically across every round/candidate slot, so the complete
+portfolio cannot exceed it. Unused slot allocations are not reassigned. See
+[`ROUTING_CONVERGENCE.md`](ROUTING_CONVERGENCE.md) for the exact allocation and
+selection contract. This budget is not a wall-clock deadline and does not cover zone BFS,
 arc linearization, placement, post-route optimization, file I/O, or child
 process execution. Zone BFS has its own independent ceiling documented in
 [`ZONE_FILL_WORK_BUDGET.md`](ZONE_FILL_WORK_BUDGET.md); the other boundaries

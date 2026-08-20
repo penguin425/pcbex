@@ -190,7 +190,7 @@ fn router_workers() -> usize {
     2
 }
 
-fn objective(index: usize) -> RoutingCandidateObjective {
+pub(crate) fn objective(index: usize) -> RoutingCandidateObjective {
     match index % 5 {
         0 => RoutingCandidateObjective::Balanced,
         1 => RoutingCandidateObjective::Shortest,
@@ -200,7 +200,7 @@ fn objective(index: usize) -> RoutingCandidateObjective {
     }
 }
 
-fn objective_costs(board: &Board, objective: RoutingCandidateObjective) -> (u32, u32) {
+pub(crate) fn objective_costs(board: &Board, objective: RoutingCandidateObjective) -> (u32, u32) {
     let bend = board.rules.bend_cost;
     let via = board.rules.via_cost;
     match objective {
@@ -213,7 +213,7 @@ fn objective_costs(board: &Board, objective: RoutingCandidateObjective) -> (u32,
     }
 }
 
-fn selection_cost(board: &Board, quality: &RoutingQuality) -> u64 {
+pub(crate) fn selection_cost(board: &Board, quality: &RoutingQuality) -> u64 {
     let grid = board.rules.grid_nm.max(1) as u64;
     let length = quality.total_length_nm.max(0) as u64 / grid;
     length

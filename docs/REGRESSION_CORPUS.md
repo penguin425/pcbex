@@ -18,6 +18,12 @@ The large fixture is recreated by `scripts/generate-large-corpus.py` on every
 run so its topology remains reviewable without committing a bulky generated
 artifact.
 
+The focused routing-convergence suite also routes the compact JSON and KiCad
+fixtures through multiple deterministic objectives. It requires exact repeated
+Board/report bytes, bounded aggregate allocation, DRC-valid winners, closed
+schemas, retained negative reports, and no-clobber/alias rejection. Full corpus
+runs remain the compatibility gate for unchanged single-pass routing.
+
 ```sh
 cargo build --workspace --release --locked
 scripts/regression-corpus.sh target/release/pcbex build/regression-corpus

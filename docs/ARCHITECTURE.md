@@ -141,6 +141,18 @@ asset set, and protected-branch status before publication. See
 [CI Execution Limits](CI_EXECUTION_LIMITS.md), and
 [Completion Audit](COMPLETION_AUDIT.md).
 
+## Routing convergence ownership
+
+Routing convergence stays inside `pcbex-core`: it allocates one bounded A* work
+portfolio, generates deterministic strategy candidates, runs the authoritative
+checker, and accepts only strict validity-first improvements. The CLI owns the
+explicit no-clobber report publication and KiCad/JSON serialization.
+
+Neither layer turns a convergence record into native KiCad DRC, manufacturing,
+or release authority. The path-free report binds the effective and selected
+internal Board models, not the authenticity of raw input files or policy
+origins.
+
 ## Public discovery
 
 Prefer runtime discovery over copied command lists:

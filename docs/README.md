@@ -36,6 +36,9 @@ boundary document for the artifact you plan to produce or trust.
 
 - [A* Work Budget](ASTAR_WORK_BUDGET.md) — deterministic routing work limits.
 
+- [Routing Convergence](ROUTING_CONVERGENCE.md) — bounded strategy portfolios,
+  validity-first selection, and closed convergence evidence.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
