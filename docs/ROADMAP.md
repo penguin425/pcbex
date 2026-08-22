@@ -188,13 +188,15 @@ auditable release.
 | v1.473.0 | Deterministic multi-unit KiCad handoff | Add an opt-in closed circuit-spec v3 whose physical parts contain explicit symbol units and whose connections bind reference, unit, and package pin; generate and freshly verify real KiCad multi-unit schematics, then collapse only globally unique physical pins into the unchanged board/BOM/manufacturing model while keeping existing circuit-spec v2 documents and workflows migration-free |
 | v1.474.0 | Bounded deterministic routing convergence | Opt into validity-first multi-round JSON/KiCad routing under one deterministic aggregate A* allocation, accept only strict improvements with no checker finding beyond explicit unrouted nets, retain every bounded strategy and decision in a closed Board-bound report, and preserve unchanged single-pass behavior and design rules |
 | v1.475.0 | Fresh exact routing convergence verification | Capture the raw JSON or KiCad routing source closure, freshly reproduce one canonical retained v1.474 convergence decision with its producer version, regenerate the selected routed artifact byte for byte, and retain a closed hash-bound complete/partial verification before an optional complete gate without claiming source authenticity, native KiCad DRC, manufacturability, or release authority |
-| v1.476.0 | Fresh routing-to-manufacturing handoff | Freshly reproduce one exact retained v1.475 KiCad routing verification, then use the same captured routed board and sidecars to reproduce one retained manufacturing ZIP; retain incomplete routing without invoking fabrication and keep authenticity, native DRC, manufacturability, and release authority false |
+| v1.476.0 | Fresh routing-to-manufacturing handoff (bundled) | Freshly reproduce one exact retained v1.475 KiCad routing verification, then use the same captured routed board and sidecars to reproduce one retained manufacturing ZIP; retain incomplete routing without invoking fabrication and keep authenticity, native DRC, manufacturability, and release authority false. This contract milestone first ships inside v1.477.0 and has no standalone tag |
 | v1.477.0 | Fresh routing/native-DRC/manufacturing handoff | Freshly reproduce the exact retained v1.476 handoff, replay one retained normalized native KiCad DRC report against the same routed board and companions, and retain routing-incomplete or DRC-rejected evidence before a ready gate while keeping manufacturability, fabrication approval, and release authority false |
 
-`ROADMAP.json` is the canonical machine-readable milestone ledger. The release
-audit rejects duplicate or unordered milestones, a version mismatch, missing
-tags, malformed release metadata, missing or extra assets, invalid SPDX JSON,
-and archive checksum mismatches. An optional repository audit also verifies
+`ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
+milestone remains ordered and documented but intentionally has no standalone
+tag; `released` and `current` milestones require tags. The release audit rejects
+duplicate or unordered milestones, a version mismatch, missing required tags,
+malformed release metadata, missing or extra assets, invalid SPDX JSON, and
+archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict Rust/Python/KiCad/Deterministic Pipeline checks pinned
 to the GitHub Actions app (`app_id: 15368`), linear history, conversation
 resolution, and force-push/deletion protection.
@@ -1534,8 +1536,9 @@ not authenticate sources or policy origins, rerun native KiCad DRC, establish
 manufacturability or global routing optimality, approve fabrication, or grant
 release authority. Those remain focused downstream boundaries.
 
-The released v1.476.0 milestone composes the KiCad half of v1.475 with the
-existing fresh manufacturing-package replay. One Python-owned boundary captures
+The v1.476.0 contract milestone is bundled into v1.477.0 rather than published
+under a standalone tag. It composes the KiCad half of v1.475 with the existing
+fresh manufacturing-package replay. One Python-owned boundary captures
 the original board, routed board, retained convergence and v1.475 reports,
 retained manufacturing ZIP, optional project/rules, and exactly one built-in
 DFM, external DFM, or physical-profile selection. It rejects cross-role aliases
