@@ -178,6 +178,16 @@ canonical policy pin and exact submitted approval envelopes before it can set
 the conjunctive outer release decision. See
 [Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
 
+The Python v1.479 consumer leaves both v1.478 authorities unchanged. After the
+complete evidence closure is captured, it resolves three single-token native
+entrypoints, matches their stable bytes to protected external digests, and
+supplies those absolute commands to a fresh v1.478 reassessment of the retained
+report's stable evidence/approval subject. The path-free outer result proves
+byte-pin agreement at observation points, not historical-decision reuse, binary
+origin, dependency/plugin provenance, OS state, isolation, or an external
+factory effect. See
+[Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md).
+
 ## Public discovery
 
 Prefer runtime discovery over copied command lists:

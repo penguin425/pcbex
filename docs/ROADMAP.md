@@ -191,6 +191,7 @@ auditable release.
 | v1.476.0 | Fresh routing-to-manufacturing handoff (bundled) | Freshly reproduce one exact retained v1.475 KiCad routing verification, then use the same captured routed board and sidecars to reproduce one retained manufacturing ZIP; retain incomplete routing without invoking fabrication and keep authenticity, native DRC, manufacturability, and release authority false. This contract milestone first ships inside v1.477.0 and has no standalone tag |
 | v1.477.0 | Fresh routing/native-DRC/manufacturing handoff | Freshly reproduce the exact retained v1.476 handoff, replay one retained normalized native KiCad DRC report against the same routed board and companions, and retain routing-incomplete or DRC-rejected evidence before a ready gate while keeping manufacturability, fabrication approval, and release authority false |
 | v1.478.0 | Policy-pinned routing/DRC fabrication release | Freshly reproduce one exact v1.477 handoff, require the same package in a factory-required pipeline, and cross-check a dedicated fabrication quorum against an externally expected canonical policy digest before a conjunctive offline release decision, without claiming tool, policy, receipt, or source authenticity, external submission, capacity, ordering, payment, or one-time use |
+| v1.479.0 | Externally digest-pinned release entrypoints | Freshly reassess the stable evidence, scope, policy, and approval subject of one canonical retained v1.478 release while requiring the resolved routing pcbex, authorization pcbex, and KiCad CLI native entrypoint bytes to match three independent deployment-supplied SHA-256 pins; retain the fresh point-in-time decision and path-free executable observations without claiming historical-decision reuse, binary origin, signatures, libraries, plugins, loader state, sandboxing, source authenticity, external submission, capacity, ordering, or payment |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1584,7 +1585,7 @@ gate failure, and one domain-separated digest. Source/tool authenticity,
 manufacturability, fabrication approval, external submission, ordering,
 payment, and release authority remain false or outside scope.
 
-The current v1.478.0 milestone consumes the complete v1.477 closure plus one
+The released v1.478.0 milestone consumes the complete v1.477 closure plus one
 factory-required deterministic pipeline plan/report and 1–100 signed
 fabrication approvals. It captures every plan-selected role and exact firmware
 entry before consuming the approval sequence, rejects approval-to-pipeline
@@ -1607,3 +1608,39 @@ manufacturability, external submission, capacity reservation, ordering,
 payment, and one-time challenge use remain false. The result is a sequential
 point-in-time offline snapshot, not an atomic filesystem transaction or an
 external factory action.
+
+The current v1.479.0 milestone adds a separate strict consumer for the v1.478
+boundary. It captures the complete v1.478 closure and retained outer
+report before selected tools run, resolves the routing pcbex, authorization
+pcbex, and KiCad CLI commands to absolute native entrypoints, and requires each
+bounded byte stream to equal an independently supplied lowercase SHA-256 pin.
+Routing and authorization commands contain exactly one executable; wrapper
+arguments are rejected rather than leaving a second script or interpreter
+outside the pin set.
+
+The same resolved absolute entrypoints are supplied to the unchanged v1.478
+replay. The retained and fresh reports must share a domain-separated digest of
+their stable sources, routing projection, approval identities/counts, scope,
+pipeline, package, receipt, policy, and policy pin. The fresh verifier samples
+a new authorization time; volatile child-report identity, time, decision,
+gates, and dependent outer binding are not copied from the historical report.
+A custom monotonic-clock callback cannot substitute and later restore
+an entrypoint between observation and a process boundary: every such callback
+return triggers an exact reread, and all three entrypoints are reread after the
+nested replay. A retained positive may therefore become a truthful fresh
+negative after expiry. Digest, format, canonical-report, alias, mutation, or
+replay-subject mismatch is a hard error
+with no outer report; a valid nested authorization negative remains inspectable
+before the optional final gate.
+
+The closed path-free schema-v1 report retains the full normalized v1.478
+result, the retained report's exact raw identity and shared subject digest,
+three fixed role-specific native format/size/observed/expected digest records,
+eight validation flags, one stable outer
+gate, and a domain-separated binding. A positive decision establishes only
+that the verifier observed the selected native entrypoint files matching the
+external pins around the point-in-time replay. It does not authenticate who
+built or distributed them, attest signatures, libraries, loaders, plugins,
+environment or operating-system state, defeat an independently concurrent
+same-principal writer, provide a sandbox, prove manufacturability, contact a
+factory, reserve capacity, submit files, place an order, or perform payment.

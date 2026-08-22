@@ -54,6 +54,10 @@ boundary document for the artifact you plan to produce or trust.
   — cross-bind that fresh package to a factory-required pipeline and dedicated
   fabrication approval quorum under an externally expected policy digest.
 
+- [Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md)
+  — freshly reassess that release subject while matching three selected native
+  entrypoint files to deployment-owned SHA-256 pins.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

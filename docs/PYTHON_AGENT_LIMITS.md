@@ -494,6 +494,7 @@ limit before network access.
 | Fresh routing-to-manufacturing handoff (`replay-routing-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; routing receives half of the remaining budget, then manufacturing preserves its existing cleanup/final-reread reserve | closed | 64 KiB for routing; 1 MiB for manufacturing | 1 MiB per child |
 | Fresh routing/native-DRC/manufacturing handoff (`replay-routing-drc-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.476 replay receives half of the remaining budget, then native DRC preserves up to 15 seconds or half of its remaining interval | closed | 64 KiB for routing/native DRC; 1 MiB for manufacturing | 1 MiB per child |
 | Policy-pinned routing/DRC fabrication release (`replay-routing-drc-fabrication-release`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.477 replay receives half of the remaining budget, then fabrication authorization reserves up to 30 seconds or half of its remaining interval | closed | 64 KiB fabrication summary; nested routing/manufacturing limits remain unchanged | 1 MiB for fabrication; nested child limits remain unchanged |
+| Executable-pinned fabrication release (`replay-executable-pinned-fabrication-release`) | reuses the complete v1.478 aggregate deadline, finite `0 < seconds <= 600`; default 300; entrypoint capture occurs after the evidence closure and before its first selected child | closed | unchanged nested v1.478 stdout limits | unchanged nested v1.478 stderr limits |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Dual-control procurement signing/verification (`sign-procurement-approval`, `verify-procurement-authorization`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both complete v1.470 replays, trusted authorization child, cleanup, comparison, rendering, and final rereads remain nested inside it | closed | 1 MiB per child | 1 MiB per child |
@@ -632,6 +633,17 @@ caller rereads precede the 4 MiB outer result. This sequential snapshot does
 not authenticate the selected tools, policy distributor, receipt, signer
 custody, or local clock. See
 [Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
+
+The v1.479 consumer additionally requires three one-token native commands.
+Each resolved entrypoint is a stable regular executable capped at 128 MiB;
+their aggregate is 384 MiB, the outer report is 8 MiB, and the derived complete
+input ceiling is 1,857 MiB. Expected digests are exact built-in lowercase-hex
+strings and must come from an independent protected source. The default clock
+uses pre/post replay byte observations; every injected clock callback return
+also triggers an exact entrypoint reread before execution continues. This is
+callback-driven mutation detection, not an atomic observation-to-exec lock or
+full toolchain provenance. See
+[Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md).
 
 The composed v1.457 replay uses the handoff command's single outer monotonic
 deadline rather than starting a second independent authority. It covers all

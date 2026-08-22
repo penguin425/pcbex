@@ -1126,6 +1126,182 @@ while pending:
 assert objects > 0 and arrays > 0
 PY
 
+# v1.479 keeps the complete v1.478 authority intact while requiring the three
+# native command entrypoints selected by this deployment to match independent
+# expected SHA-256 pins. Each retained report must share its time-invariant
+# replay subject with a fresh positive or quorum-negative assessment; a wrong
+# pin is a hard pre-child failure.
+executable_pinned_positive="$output_directory/executable-pinned-fabrication.release.json"
+executable_pinned_negative="$output_directory/executable-pinned-fabrication.negative.json"
+executable_pinned_negative_error="$output_directory/executable-pinned-fabrication.negative.stderr"
+executable_pinned_wrong_pin="$output_directory/executable-pinned-fabrication.wrong-pin.json"
+executable_pinned_schema="$output_directory/executable-pinned-fabrication.schema.json"
+
+read -r executable_pinned_pcbex_sha executable_pinned_kicad_sha <<EOF
+$(python3 - "$pcbex_binary" "$kicad_cli_binary" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+print(*(hashlib.sha256(Path(path).resolve(strict=True).read_bytes()).hexdigest()
+        for path in sys.argv[1:]))
+PY
+)
+EOF
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  executable-pinned-fabrication-release-report-schema \
+  --output "$executable_pinned_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-executable-pinned-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_approval_a" \
+  --approval "$fabrication_release_approval_b" \
+  --routing-drc-fabrication-release-report "$fabrication_release_positive" \
+  --expected-routing-pcbex-sha256 "$executable_pinned_pcbex_sha" \
+  --expected-authorization-pcbex-sha256 "$executable_pinned_pcbex_sha" \
+  --expected-kicad-cli-sha256 "$executable_pinned_kicad_sha" \
+  --output "$executable_pinned_positive" \
+  --require-authorized
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-executable-pinned-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_approval_a" \
+  --routing-drc-fabrication-release-report "$fabrication_release_single" \
+  --expected-routing-pcbex-sha256 "$executable_pinned_pcbex_sha" \
+  --expected-authorization-pcbex-sha256 "$executable_pinned_pcbex_sha" \
+  --expected-kicad-cli-sha256 "$executable_pinned_kicad_sha" \
+  --output "$executable_pinned_negative" \
+  --require-authorized 2>"$executable_pinned_negative_error"; then
+  echo "expected the digest-pinned nested quorum negative to fail its final gate" >&2
+  exit 1
+fi
+test -s "$executable_pinned_negative"
+grep -Fxq \
+  'executable-pinned fabrication release report was retained but is not authorized' \
+  "$executable_pinned_negative_error"
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-executable-pinned-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_approval_a" \
+  --approval "$fabrication_release_approval_b" \
+  --routing-drc-fabrication-release-report "$fabrication_release_positive" \
+  --expected-routing-pcbex-sha256 "$(printf '%064d' 0)" \
+  --expected-authorization-pcbex-sha256 "$executable_pinned_pcbex_sha" \
+  --expected-kicad-cli-sha256 "$executable_pinned_kicad_sha" \
+  --output "$executable_pinned_wrong_pin"; then
+  echo "expected a wrong executable digest pin to fail without output" >&2
+  exit 1
+fi
+test ! -e "$executable_pinned_wrong_pin"
+
+PYTHONPATH=agent/src python3 - \
+  "$executable_pinned_positive" "$executable_pinned_negative" \
+  "$executable_pinned_schema" "$fabrication_release_positive" \
+  "$fabrication_release_single" "$executable_pinned_pcbex_sha" \
+  "$executable_pinned_kicad_sha" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from pcbex_agent import render_executable_pinned_fabrication_release_report
+from pcbex_agent import routing_drc_fabrication_release as v1478
+
+(
+    positive_path,
+    negative_path,
+    schema_path,
+    nested_positive_path,
+    nested_negative_path,
+) = map(Path, sys.argv[1:6])
+pcbex_sha, kicad_sha = sys.argv[6:8]
+positive = json.loads(positive_path.read_bytes())
+negative = json.loads(negative_path.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+nested_positive = json.loads(nested_positive_path.read_bytes())
+nested_negative = json.loads(nested_negative_path.read_bytes())
+
+assert positive_path.read_bytes() == \
+    render_executable_pinned_fabrication_release_report(positive)
+assert positive["schema_version"] == 1
+assert positive["verification_scope"] == \
+    "fresh-exact-executable-pinned-fabrication-release-v1"
+assert positive["status"] == "release_authorized"
+assert positive["routing_drc_fabrication_release_authorized"] is True
+assert positive["executable_digest_pins_verified"] is True
+assert positive["release_authorized"] is True
+assert positive["gate_failures"] == []
+assert positive["sources"]["routing_drc_fabrication_release_report"] == {
+    "bytes": len(nested_positive_path.read_bytes()),
+    "sha256": hashlib.sha256(nested_positive_path.read_bytes()).hexdigest(),
+    "replay_subject_sha256": v1478._retained_replay_subject_sha256(
+        nested_positive
+    ),
+}
+assert v1478._retained_replay_subject_sha256(
+    positive["routing_drc_fabrication_release"]
+) == v1478._retained_replay_subject_sha256(nested_positive)
+assert positive["executable_pins"]["routing_pcbex"]["sha256"] == pcbex_sha
+assert positive["executable_pins"]["authorization_pcbex"]["sha256"] == pcbex_sha
+assert positive["executable_pins"]["kicad_cli"]["sha256"] == kicad_sha
+for pin in positive["executable_pins"].values():
+    assert pin["format"] == "elf"
+    assert pin["sha256"] == pin["expected_sha256"]
+    assert pin["matched"] is True
+assert set(positive["validation"].values()) == {True}
+for claim in (
+    "source_authenticity_verified",
+    "executable_origin_authenticity_verified",
+    "toolchain_authenticity_verified",
+    "policy_pack_authenticity_verified",
+    "factory_receipt_authenticity_verified",
+    "manufacturability_verified",
+    "external_submission_performed",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "challenge_one_time_use_enforced",
+):
+    assert positive[claim] is False, claim
+
+assert negative["status"] == "not_authorized"
+assert negative["routing_drc_fabrication_release_authorized"] is False
+assert negative["executable_digest_pins_verified"] is True
+assert negative["release_authorized"] is False
+assert negative["gate_failures"] == [
+    "routing_drc_fabrication_release_not_authorized"
+]
+assert negative["sources"]["routing_drc_fabrication_release_report"] == {
+    "bytes": len(nested_negative_path.read_bytes()),
+    "sha256": hashlib.sha256(nested_negative_path.read_bytes()).hexdigest(),
+    "replay_subject_sha256": v1478._retained_replay_subject_sha256(
+        nested_negative
+    ),
+}
+assert v1478._retained_replay_subject_sha256(
+    negative["routing_drc_fabrication_release"]
+) == v1478._retained_replay_subject_sha256(nested_negative)
+
+pending = [schema]
+objects = arrays = 0
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            objects += 1
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            arrays += 1
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+assert objects > 0 and arrays > 0
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

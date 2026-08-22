@@ -217,6 +217,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Routing/manufacturing handoff v1 | Bind one freshly verified routed KiCad board to one exact manufacturing ZIP | `pcbex-agent routing-manufacturing-handoff-report-schema` |
 | Routing/native-DRC/manufacturing handoff v1 | Add fresh normalized KiCad DRC evidence to the exact routed package | `pcbex-agent routing-drc-manufacturing-handoff-report-schema` |
 | Routing/DRC fabrication release v1 | Bind that package to a factory-required pipeline and policy-pinned fabrication quorum | `pcbex-agent routing-drc-fabrication-release-report-schema` |
+| Executable-pinned fabrication release v1 | Freshly reassess one retained release subject while matching routing, authorization, and KiCad native entrypoints to deployment-owned SHA-256 pins | `pcbex-agent executable-pinned-fabrication-release-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

@@ -101,6 +101,18 @@ before `--require-authorized`; invalid pin, signature, binding, alias, mutation,
 or child-summary evidence produces no outer report. See
 [Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
 
+The v1.479 `replay-executable-pinned-fabrication-release` command adds one
+8 MiB no-clobber report, one retained 4 MiB v1.478 report, and three selected
+native entrypoint reads capped at 128 MiB each and 384 MiB in aggregate. Bare
+names resolve through `PATH`; relative paths resolve from the initial caller
+directory; resolved targets must be executable regular PE, Mach-O, or ELF
+files. Routing and authorization commands accept no wrapper arguments. Exact
+entrypoint bytes must match three independently supplied SHA-256 pins and pass
+post-replay rereads. The result remains an observation snapshot rather than a
+binary-origin, library/plugin, loader/OS, sandbox, or same-principal race
+guarantee. See
+[Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md).
+
 The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
 contract. Circuit-spec input remains capped at 16 MiB, schematic input at
 64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,
