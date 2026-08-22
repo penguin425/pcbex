@@ -181,7 +181,9 @@ if argv and argv[0] == "verify-native-kicad-drc-report":
     if config["forged_summary"]:
         summary["board_sha256"] = "0" * 64
     summary.update(config["summary_override"])
-    print(json.dumps(summary, separators=(",", ":")))
+    sys.stdout.buffer.write(
+        (json.dumps(summary, separators=(",", ":")) + "\n").encode("utf-8")
+    )
     mutation = config["mutate"]
     if mutation:
         path = Path(mutation)
