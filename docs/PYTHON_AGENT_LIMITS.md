@@ -491,6 +491,8 @@ limit before network access.
 | Circuit handoff chain/native ERC/AI quorum/catalog-provenance replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Circuit handoff retained-board binding replay | same aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
+| Fresh routing-to-manufacturing handoff (`replay-routing-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; routing receives half of the remaining budget, then manufacturing preserves its existing cleanup/final-reread reserve | closed | 64 KiB for routing; 1 MiB for manufacturing | 1 MiB per child |
+| Fresh routing/native-DRC/manufacturing handoff (`replay-routing-drc-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.476 replay receives half of the remaining budget, then native DRC preserves up to 15 seconds or half of its remaining interval | closed | 64 KiB for routing/native DRC; 1 MiB for manufacturing | 1 MiB per child |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Dual-control procurement signing/verification (`sign-procurement-approval`, `verify-procurement-authorization`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both complete v1.470 replays, trusted authorization child, cleanup, comparison, rendering, and final rereads remain nested inside it | closed | 1 MiB per child | 1 MiB per child |
@@ -569,6 +571,49 @@ deadline during non-preemptible post-commit work. The Python consumer accepts
 only a successful child, exact fresh archive bytes, all final rereads, and a
 deadline check after temporary cleanup and immediately before return, so it
 cannot report replay success after expiry.
+
+The v1.476 routing-to-manufacturing handoff first creates a bounded immutable
+baseline before invoking the injected clock or command hooks. This initial
+capture is not wall-clock timed. The source union is capped at 688 MiB: the
+original KiCad board at 128 MiB, retained convergence report at 16 MiB,
+retained v1.475 verification at 32 MiB, and the existing manufacturing replay
+closure at its 512 MiB aggregate. The latter includes the routed board,
+retained ZIP, optional project/rules sidecars, and one external DFM or physical
+profile. Cross-role aliases fail before either child runs.
+
+After that baseline, command hooks run under working-directory guards and are
+followed by source rereads. One aggregate monotonic deadline then covers both
+children, subsequent comparisons, rereads, and cleanup. Hook-driven
+working-directory changes and backwards or non-finite clock samples are
+restored and rejected; source rereads prevent later hooks from replacing the
+captured baseline.
+
+Python stages the exact captured routing closure, gives the v1.475 verifier half
+of the remaining budget, limits its stdout to 64 KiB and stderr to 1 MiB, and
+requires exact retained verification bytes. It validates the nested binding and
+source projection before invoking manufacturing. An incomplete fresh routing
+decision skips `fabricate` and becomes a retained `not_ready` result. A complete
+decision passes the same captured routed board and sidecars to the existing
+v1.455 replay, which keeps its own 1 MiB stream ceilings and inner reserve.
+Every caller source is reread before the 4 MiB outer result returns. See
+[Fresh Routing-to-Manufacturing Handoff](ROUTING_MANUFACTURING_HANDOFF.md).
+
+The v1.477 routing/native-DRC/manufacturing handoff extends that immutable
+baseline with the 4 MiB retained v1.476 report and 32 MiB retained normalized
+DRC report. The complete direct union is capped at 724 MiB. Both reports are
+strictly decoded and binding-checked before any child starts; every source role
+must remain distinct.
+
+The first private stage gives the complete v1.476 replay half of the remaining
+outer budget and requires its pretty JSON bytes to equal the retained report.
+When that result is incomplete, native DRC is skipped and a bounded negative is
+returned. Otherwise Python invokes `verify-native-kicad-drc-report` against the
+same staged routed board, project, and rules. The child emits only its 17-field
+digest summary; Python matches it to the already captured compact report,
+rechecks the native run binding and counts, rereads the staged closure after the
+last clock hook, then cross-binds all shared identities. Output is capped at
+1 MiB. See
+[Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
 
 The composed v1.457 replay uses the handoff command's single outer monotonic
 deadline rather than starting a second independent authority. It covers all

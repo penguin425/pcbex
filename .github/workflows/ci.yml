@@ -1878,6 +1878,18 @@ jobs:
         run: >-
           cargo +stable test --package pcbex
           --test routing_convergence_verification --release --locked
+      - name: Run cross-platform v1.476 routing-manufacturing handoff boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_routing_manufacturing_handoff_v1476 -v
+      - name: Run cross-platform v1.477 routing-DRC-manufacturing handoff boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_routing_drc_manufacturing_handoff_v1477 -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

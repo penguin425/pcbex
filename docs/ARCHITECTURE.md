@@ -86,7 +86,7 @@ writer.
 | Verification | ERC/DRC, quality, board binding, final BOM/CPL | KiCad and CLI |
 | Reproducible output | Firmware bundle, manufacturing ZIP, pipeline report | CLI |
 | External observation | Provider receipt, factory receipt, supplier-offer receipt | CLI or agent adapters |
-| Composition | Handoff replay, assembly evidence, supplier coverage | Python agent |
+| Composition | Handoff replay, routing/manufacturing binding, assembly evidence, supplier coverage | Python agent |
 | Authorization | Signed review, fabrication release, procurement release | Rust cryptography plus owning orchestrator |
 | Local admission | Fabrication and procurement challenge reservation markers | Owning verifier plus Rust pinned-ledger boundary |
 
@@ -155,6 +155,20 @@ manufacturing, or release authority. The producer report binds the effective
 and selected internal Board models. The outer verifier additionally binds raw
 source identities and exact routed bytes, but still does not authenticate those
 sources or their policy origins.
+
+The Python v1.476 composer keeps that Rust authority intact. It freshly invokes
+the v1.475 KiCad verifier, then passes the same captured routed-board bytes and
+sidecars into the existing manufacturing replay. Only an exact regenerated ZIP
+produces `verified_ready`; incomplete routing skips fabrication and remains a
+retained negative. See
+[Fresh Routing-to-Manufacturing Handoff](ROUTING_MANUFACTURING_HANDOFF.md).
+
+The Python v1.477 composer adds no new routing or DRC algorithm. It first
+reproduces the complete v1.476 report, then invokes the existing Rust native
+DRC verifier against the same staged routed board, project, and custom rules.
+Only an exact clean normalized report yields `native_kicad_drc_verified`; all
+manufacturability and authorization claims remain false. See
+[Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
 
 ## Public discovery
 

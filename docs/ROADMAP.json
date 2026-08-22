@@ -909,6 +909,16 @@
     {
       "id": "fresh-exact-routing-convergence-verification",
       "release": "v1.475.0",
+      "status": "released"
+    },
+    {
+      "id": "fresh-routing-to-manufacturing-handoff",
+      "release": "v1.476.0",
+      "status": "released"
+    },
+    {
+      "id": "fresh-routing-native-drc-manufacturing-handoff",
+      "release": "v1.477.0",
       "status": "current"
     }
   ]

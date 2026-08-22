@@ -42,6 +42,14 @@ boundary document for the artifact you plan to produce or trust.
 - [Fresh Routing Convergence Verification](ROUTING_CONVERGENCE_VERIFICATION.md)
   — replay retained decisions from raw sources and require exact routed bytes.
 
+- [Fresh Routing-to-Manufacturing Handoff](ROUTING_MANUFACTURING_HANDOFF.md) —
+  bind the freshly verified routed KiCad board to an exactly reproduced
+  manufacturing ZIP.
+
+- [Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md)
+  — require the same routed board and sidecars to reproduce both the retained
+  package and normalized native DRC evidence.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

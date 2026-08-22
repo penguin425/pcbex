@@ -655,6 +655,14 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex\n"
             "          --test routing_convergence_verification --release --locked"
         )
+        routing_manufacturing_handoff_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_routing_manufacturing_handoff_v1476 -v"
+        )
+        routing_drc_manufacturing_handoff_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_routing_drc_manufacturing_handoff_v1477 -v"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -667,11 +675,19 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(multi_unit_kicad_command, boundaries)
         self.assertIn(routing_convergence_command, boundaries)
         self.assertIn(routing_convergence_verification_command, boundaries)
+        self.assertEqual(document.count(routing_manufacturing_handoff_command), 1)
+        self.assertIn(routing_manufacturing_handoff_command, boundaries)
+        self.assertEqual(
+            document.count(routing_drc_manufacturing_handoff_command), 1
+        )
+        self.assertIn(routing_drc_manufacturing_handoff_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
         self.assertNotIn(routing_convergence_command, rust_windows)
         self.assertNotIn(routing_convergence_verification_command, rust_windows)
+        self.assertNotIn(routing_manufacturing_handoff_command, rust_windows)
+        self.assertNotIn(routing_drc_manufacturing_handoff_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -725,6 +741,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         routing_convergence_verification_step = boundaries.index(
             "- name: Run cross-platform v1.475 fresh routing-convergence verification boundaries"
+        )
+        routing_manufacturing_handoff_step = boundaries.index(
+            "- name: Run cross-platform v1.476 routing-manufacturing handoff boundaries"
+        )
+        routing_drc_manufacturing_handoff_step = boundaries.index(
+            "- name: Run cross-platform v1.477 routing-DRC-manufacturing handoff boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -793,11 +815,31 @@ class CiExecutionPolicyTests(unittest.TestCase):
         ]
         self.assertIn(routing_convergence_command, routing_convergence_block)
         routing_convergence_verification_block = boundaries[
-            routing_convergence_verification_step:toolchain_step
+            routing_convergence_verification_step:routing_manufacturing_handoff_step
         ]
         self.assertIn(
             routing_convergence_verification_command,
             routing_convergence_verification_block,
+        )
+        routing_manufacturing_handoff_block = boundaries[
+            routing_manufacturing_handoff_step:routing_drc_manufacturing_handoff_step
+        ]
+        self.assertIn(
+            "PYTHONPATH: agent/src", routing_manufacturing_handoff_block
+        )
+        self.assertIn(
+            routing_manufacturing_handoff_command,
+            routing_manufacturing_handoff_block,
+        )
+        routing_drc_manufacturing_handoff_block = boundaries[
+            routing_drc_manufacturing_handoff_step:toolchain_step
+        ]
+        self.assertIn(
+            "PYTHONPATH: agent/src", routing_drc_manufacturing_handoff_block
+        )
+        self.assertIn(
+            routing_drc_manufacturing_handoff_command,
+            routing_drc_manufacturing_handoff_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -810,7 +852,15 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertLess(
             routing_convergence_step, routing_convergence_verification_step
         )
-        self.assertLess(routing_convergence_verification_step, toolchain_step)
+        self.assertLess(
+            routing_convergence_verification_step,
+            routing_manufacturing_handoff_step,
+        )
+        self.assertLess(
+            routing_manufacturing_handoff_step,
+            routing_drc_manufacturing_handoff_step,
+        )
+        self.assertLess(routing_drc_manufacturing_handoff_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

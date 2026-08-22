@@ -437,7 +437,7 @@ fn hex_decode_array<const N: usize>(value: &str, label: &str) -> Result<[u8; N],
         return Err(format!("{label} must contain {} hexadecimal digits", N * 2));
     }
     let mut output = [0_u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let high = hex_nibble(pair[0]).ok_or_else(|| format!("invalid {label} hexadecimal"))?;
         let low = hex_nibble(pair[1]).ok_or_else(|| format!("invalid {label} hexadecimal"))?;
         output[index] = (high << 4) | low;

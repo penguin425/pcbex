@@ -717,6 +717,20 @@ def _replay_captured_manufacturing_package(
                     *profile_arguments,
                 ]
             )
+            # The aggregate clock is injectable. Re-read every staged child
+            # input after its final pre-spawn sample so a callback cannot swap
+            # a file for the child and restore it on the next clock call.
+            for path, expected, maximum in staged:
+                try:
+                    observed = read_bytes(path, max_bytes=maximum)
+                except (BoundedIOError, OSError, TypeError, ValueError):
+                    raise _fail(
+                        "staged manufacturing input changed before execution"
+                    ) from None
+                if observed != expected:
+                    raise _fail(
+                        "staged manufacturing input changed before execution"
+                    )
             try:
                 completed = run_bounded(
                     argv,
@@ -728,7 +742,6 @@ def _replay_captured_manufacturing_package(
                 raise _fail("manufacturing child process failed") from None
             if completed.returncode != 0:
                 raise _fail("manufacturing child rejected the replay")
-            _remaining(deadline, clock)
 
             fresh_path = output_dir / "manufacturing.zip"
             fresh_raw = _read_source(

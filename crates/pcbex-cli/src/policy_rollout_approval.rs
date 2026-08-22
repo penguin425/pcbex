@@ -678,7 +678,7 @@ fn decode_hex_array<const N: usize>(value: &str, label: &str) -> Result<[u8; N],
         return Err(format!("{label} must contain {} hexadecimal digits", N * 2));
     }
     let mut output = [0_u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let decode = |byte| match byte {
             b'0'..=b'9' => Some(byte - b'0'),
             b'a'..=b'f' => Some(byte - b'a' + 10),

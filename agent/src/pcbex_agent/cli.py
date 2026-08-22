@@ -109,6 +109,20 @@ from .manufacturing_replay import (
     manufacturing_package_replay_result_json_schema,
     replay_manufacturing_package,
 )
+from .routing_manufacturing_handoff import (
+    MAXIMUM_ROUTING_MANUFACTURING_HANDOFF_REPORT_BYTES,
+    RoutingManufacturingHandoffError,
+    evaluate_routing_manufacturing_handoff,
+    render_routing_manufacturing_handoff_report,
+    routing_manufacturing_handoff_report_json_schema,
+)
+from .routing_drc_manufacturing_handoff import (
+    MAXIMUM_ROUTING_DRC_MANUFACTURING_HANDOFF_REPORT_BYTES,
+    RoutingDrcManufacturingHandoffError,
+    evaluate_routing_drc_manufacturing_handoff,
+    render_routing_drc_manufacturing_handoff_report,
+    routing_drc_manufacturing_handoff_report_json_schema,
+)
 from .deterministic_pipeline_replay import (
     DeterministicPipelineReplayError,
     deterministic_pipeline_replay_result_json_schema,
@@ -326,6 +340,56 @@ def _preflight_procurement_authorization_output(
                 "procurement authorization output must differ from every input path"
             )
     return frozen_output
+
+
+def _preflight_routing_manufacturing_output(
+    output: Path,
+    inputs: tuple[Path | None, ...],
+    *,
+    label: str = "routing/manufacturing",
+) -> Path:
+    """Freeze the new report destination and reject source/output overlap."""
+
+    try:
+        validate_no_clobber_path(output)
+        frozen_output = Path(os.path.abspath(output))
+        validate_no_clobber_path(frozen_output)
+        output_identity = _procurement_authorization_comparison_path(frozen_output)
+        for source in inputs:
+            if source is None:
+                continue
+            aliases = (
+                _procurement_authorization_comparison_path(source)
+                == output_identity
+            )
+            if not aliases:
+                try:
+                    same_parent = os.path.samefile(
+                        frozen_output.parent,
+                        Path(os.path.abspath(source)).parent,
+                    )
+                except FileNotFoundError:
+                    same_parent = False
+                if same_parent:
+                    aliases = (
+                        unicodedata.normalize(
+                            "NFC", os.path.normcase(frozen_output.name)
+                        ).casefold()
+                        == unicodedata.normalize(
+                            "NFC", os.path.normcase(source.name)
+                        ).casefold()
+                    )
+            if aliases:
+                raise BoundedIOError(
+                    f"{label} output must differ from every input path"
+                )
+        return frozen_output
+    except BoundedIOError:
+        raise
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise BoundedIOError(
+            f"{label} output path is unsafe or already exists"
+        ) from None
 
 
 def _add_procurement_authorization_sources(
@@ -919,6 +983,129 @@ def main() -> None:
         help="write the closed fresh manufacturing-package replay result schema",
     )
     manufacturing_replay_schema.add_argument("-o", "--output", type=Path)
+    routing_manufacturing = sub.add_parser(
+        "replay-routing-manufacturing-handoff",
+        help=(
+            "freshly bind one retained routing verification to one exact "
+            "manufacturing ZIP"
+        ),
+    )
+    routing_manufacturing.add_argument("input_board", type=Path)
+    routing_manufacturing.add_argument("routed_board", type=Path)
+    routing_manufacturing.add_argument(
+        "--convergence-report", type=Path, required=True, metavar="REPORT"
+    )
+    routing_manufacturing.add_argument(
+        "--routing-verification-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_manufacturing.add_argument(
+        "--manufacturing-package", type=Path, required=True, metavar="ZIP"
+    )
+    routing_manufacturing.add_argument("--pcbex", default="pcbex")
+    routing_manufacturing.add_argument("--kicad-cli", default="kicad-cli")
+    routing_manufacturing.add_argument("--kicad-project", type=Path)
+    routing_manufacturing.add_argument("--kicad-rules", type=Path)
+    routing_manufacturing.add_argument("--grid-mm", type=float, default=0.25)
+    routing_manufacturing.add_argument("--width-mm", type=float, default=0.25)
+    routing_manufacturing.add_argument("--clearance-mm", type=float, default=0.20)
+    routing_manufacturing.add_argument(
+        "--via-diameter-mm", type=float, default=0.60
+    )
+    routing_manufacturing.add_argument("--via-drill-mm", type=float, default=0.30)
+    routing_manufacturing.add_argument("--bend-cost", type=int, default=5)
+    routing_manufacturing.add_argument("--via-cost", type=int, default=20)
+    routing_manufacturing_profiles = (
+        routing_manufacturing.add_mutually_exclusive_group()
+    )
+    routing_manufacturing_profiles.add_argument("--fab")
+    routing_manufacturing_profiles.add_argument("--fab-profile", type=Path)
+    routing_manufacturing_profiles.add_argument("--physical-profile", type=Path)
+    routing_manufacturing.add_argument(
+        "--timeout-seconds", type=float, default=300.0
+    )
+    routing_manufacturing.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    routing_manufacturing.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="fail only after retaining an exact report that is not ready",
+    )
+    routing_manufacturing_schema = sub.add_parser(
+        "routing-manufacturing-handoff-report-schema",
+        help="write the closed routing-to-manufacturing handoff JSON Schema",
+    )
+    routing_manufacturing_schema.add_argument("-o", "--output", type=Path)
+    routing_drc_manufacturing = sub.add_parser(
+        "replay-routing-drc-manufacturing-handoff",
+        help=(
+            "freshly bind one routing/manufacturing handoff to an exact "
+            "native KiCad DRC report"
+        ),
+    )
+    routing_drc_manufacturing.add_argument("input_board", type=Path)
+    routing_drc_manufacturing.add_argument("routed_board", type=Path)
+    routing_drc_manufacturing.add_argument(
+        "--convergence-report", type=Path, required=True, metavar="REPORT"
+    )
+    routing_drc_manufacturing.add_argument(
+        "--routing-verification-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_drc_manufacturing.add_argument(
+        "--manufacturing-package", type=Path, required=True, metavar="ZIP"
+    )
+    routing_drc_manufacturing.add_argument(
+        "--routing-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_drc_manufacturing.add_argument(
+        "--native-drc-report", type=Path, required=True, metavar="REPORT"
+    )
+    routing_drc_manufacturing.add_argument("--pcbex", default="pcbex")
+    routing_drc_manufacturing.add_argument("--kicad-cli", default="kicad-cli")
+    routing_drc_manufacturing.add_argument("--kicad-project", type=Path)
+    routing_drc_manufacturing.add_argument("--kicad-rules", type=Path)
+    routing_drc_manufacturing.add_argument("--grid-mm", type=float, default=0.25)
+    routing_drc_manufacturing.add_argument("--width-mm", type=float, default=0.25)
+    routing_drc_manufacturing.add_argument(
+        "--clearance-mm", type=float, default=0.20
+    )
+    routing_drc_manufacturing.add_argument(
+        "--via-diameter-mm", type=float, default=0.60
+    )
+    routing_drc_manufacturing.add_argument(
+        "--via-drill-mm", type=float, default=0.30
+    )
+    routing_drc_manufacturing.add_argument("--bend-cost", type=int, default=5)
+    routing_drc_manufacturing.add_argument("--via-cost", type=int, default=20)
+    routing_drc_profiles = routing_drc_manufacturing.add_mutually_exclusive_group()
+    routing_drc_profiles.add_argument("--fab")
+    routing_drc_profiles.add_argument("--fab-profile", type=Path)
+    routing_drc_profiles.add_argument("--physical-profile", type=Path)
+    routing_drc_manufacturing.add_argument(
+        "--timeout-seconds", type=float, default=300.0
+    )
+    routing_drc_manufacturing.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    routing_drc_manufacturing.add_argument(
+        "--require-ready",
+        action="store_true",
+        help="fail only after retaining an exact report that is not ready",
+    )
+    routing_drc_manufacturing_schema = sub.add_parser(
+        "routing-drc-manufacturing-handoff-report-schema",
+        help="write the closed routing/native-DRC/manufacturing JSON Schema",
+    )
+    routing_drc_manufacturing_schema.add_argument("-o", "--output", type=Path)
     procurement_intent = sub.add_parser(
         "build-procurement-intent",
         help="bind one exact final BOM to fully replayed catalog SKU selections",
@@ -2175,6 +2362,177 @@ def main() -> None:
             raise SystemExit(
                 f"manufacturing package replay schema failed: {error}"
             ) from error
+    elif args.command == "replay-routing-manufacturing-handoff":
+        try:
+            frozen_output = _preflight_routing_manufacturing_output(
+                args.output,
+                (
+                    args.input_board,
+                    args.routed_board,
+                    args.convergence_report,
+                    args.routing_verification_report,
+                    args.manufacturing_package,
+                    args.kicad_project,
+                    args.kicad_rules,
+                    args.fab_profile,
+                    args.physical_profile,
+                ),
+            )
+            result = evaluate_routing_manufacturing_handoff(
+                args.input_board,
+                args.routed_board,
+                args.convergence_report,
+                args.routing_verification_report,
+                args.manufacturing_package,
+                args.pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                grid_mm=args.grid_mm,
+                width_mm=args.width_mm,
+                clearance_mm=args.clearance_mm,
+                via_diameter_mm=args.via_diameter_mm,
+                via_drill_mm=args.via_drill_mm,
+                bend_cost=args.bend_cost,
+                via_cost=args.via_cost,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_routing_manufacturing_handoff_report(result)
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_ROUTING_MANUFACTURING_HANDOFF_REPORT_BYTES,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            RoutingManufacturingHandoffError,
+        ) as error:
+            raise SystemExit(
+                f"routing/manufacturing handoff replay failed: {error}"
+            ) from None
+        if args.require_ready and not result["ready"]:
+            raise SystemExit(
+                "routing/manufacturing handoff report was retained but is not ready"
+            )
+    elif args.command == "routing-manufacturing-handoff-report-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    routing_manufacturing_handoff_report_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (
+            OSError,
+            BoundedIOError,
+            RoutingManufacturingHandoffError,
+        ) as error:
+            raise SystemExit(
+                f"routing/manufacturing handoff schema failed: {error}"
+            ) from None
+    elif args.command == "replay-routing-drc-manufacturing-handoff":
+        try:
+            frozen_output = _preflight_routing_manufacturing_output(
+                args.output,
+                (
+                    args.input_board,
+                    args.routed_board,
+                    args.convergence_report,
+                    args.routing_verification_report,
+                    args.manufacturing_package,
+                    args.routing_manufacturing_handoff_report,
+                    args.native_drc_report,
+                    args.kicad_project,
+                    args.kicad_rules,
+                    args.fab_profile,
+                    args.physical_profile,
+                ),
+                label="routing/DRC/manufacturing",
+            )
+            result = evaluate_routing_drc_manufacturing_handoff(
+                args.input_board,
+                args.routed_board,
+                args.convergence_report,
+                args.routing_verification_report,
+                args.manufacturing_package,
+                args.routing_manufacturing_handoff_report,
+                args.native_drc_report,
+                args.pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                grid_mm=args.grid_mm,
+                width_mm=args.width_mm,
+                clearance_mm=args.clearance_mm,
+                via_diameter_mm=args.via_diameter_mm,
+                via_drill_mm=args.via_drill_mm,
+                bend_cost=args.bend_cost,
+                via_cost=args.via_cost,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_routing_drc_manufacturing_handoff_report(result)
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_ROUTING_DRC_MANUFACTURING_HANDOFF_REPORT_BYTES,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            RoutingDrcManufacturingHandoffError,
+        ) as error:
+            raise SystemExit(
+                f"routing/DRC/manufacturing handoff replay failed: {error}"
+            ) from None
+        if args.require_ready and not result["ready"]:
+            raise SystemExit(
+                "routing/DRC/manufacturing handoff report was retained but is not ready"
+            )
+    elif args.command == "routing-drc-manufacturing-handoff-report-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    routing_drc_manufacturing_handoff_report_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (
+            OSError,
+            BoundedIOError,
+            RoutingDrcManufacturingHandoffError,
+        ) as error:
+            raise SystemExit(
+                f"routing/DRC/manufacturing handoff schema failed: {error}"
+            ) from None
     elif args.command == "build-procurement-intent":
         try:
             validate_no_clobber_path(args.output)
