@@ -651,7 +651,7 @@ fn decode_hex_array<const N: usize>(value: &str, label: &str) -> Result<[u8; N],
         return Err(format!("{label} has the wrong length"));
     }
     let mut bytes = [0_u8; N];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let text = std::str::from_utf8(pair).map_err(|_| format!("{label} is not hexadecimal"))?;
         bytes[index] =
             u8::from_str_radix(text, 16).map_err(|_| format!("{label} is not hexadecimal"))?;

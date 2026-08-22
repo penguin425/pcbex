@@ -3139,7 +3139,7 @@ fn hex_decode<const N: usize>(value: &str, label: &str) -> Result<[u8; N], Strin
         return Err(format!("{label} must contain exactly {} hex bytes", N));
     }
     let mut output = [0_u8; N];
-    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, chunk) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         output[index] = (hex_nibble(chunk[0], label)? << 4) | hex_nibble(chunk[1], label)?;
     }
     Ok(output)
