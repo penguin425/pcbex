@@ -175,7 +175,9 @@ summary = {
 }
 if config["forge_summary"]:
     summary[config["forge_summary"]] = "0" * 64
-sys.stdout.write(json.dumps(summary, separators=(",", ":")) + "\n")
+sys.stdout.buffer.write(
+    (json.dumps(summary, separators=(",", ":")) + "\n").encode("utf-8")
+)
 ''',
         encoding="utf-8",
     )
