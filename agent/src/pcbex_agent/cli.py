@@ -137,6 +137,13 @@ from .executable_pinned_fabrication_release import (
     executable_pinned_fabrication_release_report_json_schema,
     render_executable_pinned_fabrication_release_report,
 )
+from .signed_factory_receipt_release import (
+    MAXIMUM_SIGNED_FACTORY_RECEIPT_RELEASE_REPORT_BYTES,
+    SignedFactoryReceiptReleaseError,
+    evaluate_signed_factory_receipt_release,
+    render_signed_factory_receipt_release_report,
+    signed_factory_receipt_release_report_json_schema,
+)
 from .deterministic_pipeline_replay import (
     DeterministicPipelineReplayError,
     deterministic_pipeline_replay_result_json_schema,
@@ -1322,6 +1329,128 @@ def main() -> None:
         help="write the closed executable-pinned fabrication-release JSON Schema",
     )
     executable_pinned_release_schema.add_argument("-o", "--output", type=Path)
+    signed_receipt_release = sub.add_parser(
+        "replay-signed-factory-receipt-release",
+        help=(
+            "freshly replay one v1.479 release and authenticate its exact "
+            "factory receipt with a policy-pinned signature"
+        ),
+    )
+    signed_receipt_release.add_argument("input_board", type=Path)
+    signed_receipt_release.add_argument("routed_board", type=Path)
+    signed_receipt_release.add_argument(
+        "--convergence-report", type=Path, required=True, metavar="REPORT"
+    )
+    signed_receipt_release.add_argument(
+        "--routing-verification-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_release.add_argument(
+        "--manufacturing-package", type=Path, required=True, metavar="ZIP"
+    )
+    signed_receipt_release.add_argument(
+        "--routing-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_release.add_argument(
+        "--native-drc-report", type=Path, required=True, metavar="REPORT"
+    )
+    signed_receipt_release.add_argument(
+        "--routing-drc-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_release.add_argument(
+        "--deterministic-pipeline-plan", type=Path, required=True, metavar="PLAN"
+    )
+    signed_receipt_release.add_argument(
+        "--deterministic-pipeline-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_release.add_argument(
+        "--approval", type=Path, required=True, action="append", metavar="APPROVAL"
+    )
+    signed_receipt_release.add_argument(
+        "--routing-drc-fabrication-release-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_release.add_argument(
+        "--executable-pinned-fabrication-release-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_release.add_argument(
+        "--factory-receipt", type=Path, required=True, metavar="RECEIPT"
+    )
+    signed_receipt_release.add_argument(
+        "--policy-pack", type=Path, required=True, metavar="POLICY"
+    )
+    signed_receipt_release.add_argument(
+        "--signed-factory-receipt-attestation",
+        type=Path,
+        required=True,
+        metavar="ATTESTATION",
+    )
+    signed_receipt_release.add_argument(
+        "--expected-policy-pack-canonical-sha256", required=True
+    )
+    signed_receipt_release.add_argument(
+        "--expected-routing-pcbex-sha256", required=True
+    )
+    signed_receipt_release.add_argument(
+        "--expected-authorization-pcbex-sha256", required=True
+    )
+    signed_receipt_release.add_argument(
+        "--expected-kicad-cli-sha256", required=True
+    )
+    signed_receipt_release.add_argument("--pcbex", default="pcbex")
+    signed_receipt_release.add_argument("--authorization-pcbex", default="pcbex")
+    signed_receipt_release.add_argument("--kicad-cli", default="kicad-cli")
+    signed_receipt_release.add_argument("--kicad-project", type=Path)
+    signed_receipt_release.add_argument("--kicad-rules", type=Path)
+    signed_receipt_release.add_argument("--grid-mm", type=float, default=0.25)
+    signed_receipt_release.add_argument("--width-mm", type=float, default=0.25)
+    signed_receipt_release.add_argument(
+        "--clearance-mm", type=float, default=0.20
+    )
+    signed_receipt_release.add_argument(
+        "--via-diameter-mm", type=float, default=0.60
+    )
+    signed_receipt_release.add_argument(
+        "--via-drill-mm", type=float, default=0.30
+    )
+    signed_receipt_release.add_argument("--bend-cost", type=int, default=5)
+    signed_receipt_release.add_argument("--via-cost", type=int, default=20)
+    signed_receipt_profiles = signed_receipt_release.add_mutually_exclusive_group()
+    signed_receipt_profiles.add_argument("--fab")
+    signed_receipt_profiles.add_argument("--fab-profile", type=Path)
+    signed_receipt_profiles.add_argument("--physical-profile", type=Path)
+    signed_receipt_release.add_argument(
+        "--timeout-seconds", type=float, default=300.0
+    )
+    signed_receipt_release.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    signed_receipt_release.add_argument(
+        "--require-authenticated",
+        action="store_true",
+        help="fail only after retaining a valid release that is not authenticated",
+    )
+    signed_receipt_release_schema = sub.add_parser(
+        "signed-factory-receipt-release-report-schema",
+        help="write the closed signed factory-receipt release JSON Schema",
+    )
+    signed_receipt_release_schema.add_argument("-o", "--output", type=Path)
     procurement_intent = sub.add_parser(
         "build-procurement-intent",
         help="bind one exact final BOM to fully replayed catalog SKU selections",
@@ -2949,6 +3078,117 @@ def main() -> None:
         ) as error:
             raise SystemExit(
                 f"executable-pinned fabrication release schema failed: {error}"
+            ) from None
+    elif args.command == "replay-signed-factory-receipt-release":
+        try:
+            frozen_output = _preflight_routing_manufacturing_output(
+                args.output,
+                (
+                    args.input_board,
+                    args.routed_board,
+                    args.convergence_report,
+                    args.routing_verification_report,
+                    args.manufacturing_package,
+                    args.routing_manufacturing_handoff_report,
+                    args.native_drc_report,
+                    args.routing_drc_manufacturing_handoff_report,
+                    args.deterministic_pipeline_plan,
+                    args.deterministic_pipeline_report,
+                    args.routing_drc_fabrication_release_report,
+                    args.executable_pinned_fabrication_release_report,
+                    args.factory_receipt,
+                    args.policy_pack,
+                    args.signed_factory_receipt_attestation,
+                    args.kicad_project,
+                    args.kicad_rules,
+                    args.fab_profile,
+                    args.physical_profile,
+                    *args.approval,
+                ),
+                label="signed factory receipt release",
+            )
+            result = evaluate_signed_factory_receipt_release(
+                args.input_board,
+                args.routed_board,
+                args.convergence_report,
+                args.routing_verification_report,
+                args.manufacturing_package,
+                args.routing_manufacturing_handoff_report,
+                args.native_drc_report,
+                args.routing_drc_manufacturing_handoff_report,
+                args.deterministic_pipeline_plan,
+                args.deterministic_pipeline_report,
+                args.approval,
+                args.routing_drc_fabrication_release_report,
+                args.executable_pinned_fabrication_release_report,
+                args.factory_receipt,
+                args.policy_pack,
+                args.signed_factory_receipt_attestation,
+                args.expected_policy_pack_canonical_sha256,
+                args.expected_routing_pcbex_sha256,
+                args.expected_authorization_pcbex_sha256,
+                args.expected_kicad_cli_sha256,
+                args.pcbex,
+                args.authorization_pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                grid_mm=args.grid_mm,
+                width_mm=args.width_mm,
+                clearance_mm=args.clearance_mm,
+                via_diameter_mm=args.via_diameter_mm,
+                via_drill_mm=args.via_drill_mm,
+                bend_cost=args.bend_cost,
+                via_cost=args.via_cost,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_signed_factory_receipt_release_report(result)
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_SIGNED_FACTORY_RECEIPT_RELEASE_REPORT_BYTES,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            SignedFactoryReceiptReleaseError,
+        ) as error:
+            raise SystemExit(
+                f"signed factory receipt release replay failed: {error}"
+            ) from None
+        if args.require_authenticated and not result["release_authenticated"]:
+            raise SystemExit(
+                "signed factory receipt release report was retained but is not authenticated"
+            )
+    elif args.command == "signed-factory-receipt-release-report-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    signed_factory_receipt_release_report_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (
+            OSError,
+            BoundedIOError,
+            SignedFactoryReceiptReleaseError,
+        ) as error:
+            raise SystemExit(
+                f"signed factory receipt release schema failed: {error}"
             ) from None
     elif args.command == "build-procurement-intent":
         try:

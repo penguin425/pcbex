@@ -1902,6 +1902,16 @@ jobs:
         run: >-
           python -m unittest
           agent.tests.test_executable_pinned_fabrication_release_v1479 -v
+      - name: Run cross-platform v1.480 signed factory-receipt boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_signed_factory_receipt_release_v1480 -v
+      - name: Run cross-platform v1.480 factory-receipt cryptographic boundaries
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --release --locked
+          factory_receipt_attestation
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

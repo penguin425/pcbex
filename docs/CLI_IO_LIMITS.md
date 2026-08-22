@@ -113,6 +113,21 @@ binary-origin, library/plugin, loader/OS, sandbox, or same-principal race
 guarantee. See
 [Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md).
 
+The v1.480 Rust receipt boundary reads one 128 MiB manufacturing ZIP, one 64
+MiB normalized receipt, one 64 MiB organization policy pack, and one 1 MiB
+signed attestation. Signing publishes at most 1 MiB; verification publishes at
+most 4 MiB. Every JSON input rejects duplicate and unknown keys, every source
+is reread before publication, destinations never overwrite, and the expected
+canonical policy digest must come from outside the submitted evidence.
+
+The signer validates all public evidence, selected factory identity, output
+aliases, and policy bounds before opening the private key. On Unix that key
+must belong to the effective UID and have mode exactly `0400` or `0600`; all
+platforms use the hardened no-follow/reparse, stable-handle, and alias checks.
+An inactive or policy-overlong attestation is retained as `not_authenticated`
+before `--require-authenticated` fails. See
+[Signed Factory-receipt Release](SIGNED_FACTORY_RECEIPT_RELEASE.md).
+
 The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
 contract. Circuit-spec input remains capped at 16 MiB, schematic input at
 64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,

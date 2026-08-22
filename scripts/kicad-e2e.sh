@@ -783,6 +783,40 @@ fabrication_release_schema="$output_directory/routing-drc-fabrication.schema.jso
 fabrication_release_tampered_approval="$output_directory/routing-drc-fabrication.tampered-approval.json"
 fabrication_release_tampered_output="$output_directory/routing-drc-fabrication.tampered-output.json"
 fabrication_release_pin_output="$output_directory/routing-drc-fabrication.pin-output.json"
+factory_receipt_secret_directory="$(mktemp -d)"
+factory_receipt_private_key="$factory_receipt_secret_directory/factory-receipt.key"
+factory_receipt_public_key="$output_directory/factory-receipt.pub"
+factory_receipt_policy_template="$output_directory/factory-receipt-policy-template.json"
+trap 'rm -f -- "$factory_receipt_private_key"; rmdir -- "$factory_receipt_secret_directory" 2>/dev/null || true' EXIT
+
+"$pcbex_binary" approval-keygen \
+  --private-key "$factory_receipt_private_key" \
+  --public-key "$factory_receipt_public_key"
+python3 - \
+  examples/acme-policy-pack.json \
+  "$factory_receipt_public_key" \
+  "$factory_receipt_policy_template" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, public_key, output = map(Path, sys.argv[1:])
+pack = json.loads(source.read_text(encoding="utf-8"))
+pack["factory_receipt_attestation_policy"] = {
+    "maximum_validity_seconds": 3600,
+    "trusted_keys": [
+        {
+            "factory_id": "kicad-e2e-factory",
+            "provider": "generic",
+            "public_key": public_key.read_text(encoding="ascii").strip(),
+        }
+    ],
+}
+output.write_bytes(
+    json.dumps(pack, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    + b"\n"
+)
+PY
 
 mkdir -p "$fabrication_release_input_dir" "$fabrication_release_routed_dir"
 # This dedicated project ignores only KiCad's installed-library footprint
@@ -868,7 +902,7 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
 python3 scripts/fabrication_authorization_action_ci.py \
   --pcbex "$pcbex_binary" \
   --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci \
-  --policy-template examples/acme-policy-pack.json \
+  --policy-template "$factory_receipt_policy_template" \
   --board "$fabrication_release_routed_board" \
   --manufacturing-package "$fabrication_release_package" \
   --output-dir "$fabrication_release_fixture" \
@@ -1300,6 +1334,258 @@ while pending:
     elif isinstance(value, list):
         pending.extend(value)
 assert objects > 0 and arrays > 0
+PY
+
+# v1.480 authenticates the exact normalized factory receipt selected by the
+# freshly replayed v1.479 release. A dedicated factory key is selected by the
+# externally pinned organization policy; legal identity, TLS, raw response,
+# capacity, order placement, payment, and one-time challenge use stay false.
+factory_receipt_source="$fabrication_release_fixture/factory-receipt.json"
+factory_receipt_policy="$fabrication_release_fixture/final-policy-pack.json"
+factory_receipt_signed="$output_directory/factory-receipt.attestation.json"
+factory_receipt_signed_expired="$output_directory/factory-receipt.attestation.expired.json"
+factory_receipt_signed_tampered="$output_directory/factory-receipt.attestation.tampered.json"
+factory_receipt_report="$output_directory/factory-receipt.attestation-report.json"
+factory_receipt_report_expired="$output_directory/factory-receipt.attestation-report.expired.json"
+factory_receipt_report_expired_error="$output_directory/factory-receipt.attestation-report.expired.stderr"
+factory_receipt_tampered_output="$output_directory/factory-receipt.attestation-report.tampered.json"
+factory_receipt_signed_schema="$output_directory/factory-receipt.attestation.schema.json"
+factory_receipt_report_schema="$output_directory/factory-receipt.attestation-report.schema.json"
+signed_receipt_release_positive="$output_directory/signed-factory-receipt.release.json"
+signed_receipt_release_negative="$output_directory/signed-factory-receipt.negative.json"
+signed_receipt_release_negative_error="$output_directory/signed-factory-receipt.negative.stderr"
+signed_receipt_release_schema="$output_directory/signed-factory-receipt.schema.json"
+
+factory_receipt_now="$(date +%s)"
+factory_receipt_issued="$((factory_receipt_now - 10))"
+factory_receipt_expires="$((factory_receipt_now + 1800))"
+
+"$pcbex_binary" signed-factory-receipt-attestation-schema \
+  --output "$factory_receipt_signed_schema"
+"$pcbex_binary" factory-receipt-attestation-report-schema \
+  --output "$factory_receipt_report_schema"
+"$pcbex_binary" sign-factory-receipt-attestation \
+  "$fabrication_release_package" \
+  --factory-receipt "$factory_receipt_source" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest" \
+  --private-key "$factory_receipt_private_key" \
+  --factory-id kicad-e2e-factory \
+  --attestation-id kicad-e2e-receipt-current \
+  --challenge "$(printf 'c%.0s' {1..64})" \
+  --issued-at-unix "$factory_receipt_issued" \
+  --expires-at-unix "$factory_receipt_expires" \
+  --output "$factory_receipt_signed"
+"$pcbex_binary" sign-factory-receipt-attestation \
+  "$fabrication_release_package" \
+  --factory-receipt "$factory_receipt_source" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest" \
+  --private-key "$factory_receipt_private_key" \
+  --factory-id kicad-e2e-factory \
+  --attestation-id kicad-e2e-receipt-expired \
+  --challenge "$(printf 'd%.0s' {1..64})" \
+  --issued-at-unix 1 \
+  --expires-at-unix 2 \
+  --output "$factory_receipt_signed_expired"
+
+rm -f -- "$factory_receipt_private_key"
+rmdir -- "$factory_receipt_secret_directory"
+trap - EXIT
+
+"$pcbex_binary" verify-factory-receipt-attestation \
+  "$fabrication_release_package" \
+  --factory-receipt "$factory_receipt_source" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest" \
+  --signed-attestation "$factory_receipt_signed" \
+  --output "$factory_receipt_report" \
+  --require-authenticated
+
+if "$pcbex_binary" verify-factory-receipt-attestation \
+  "$fabrication_release_package" \
+  --factory-receipt "$factory_receipt_source" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest" \
+  --signed-attestation "$factory_receipt_signed_expired" \
+  --output "$factory_receipt_report_expired" \
+  --require-authenticated 2>"$factory_receipt_report_expired_error"; then
+  echo "expected an expired factory receipt attestation to fail its final gate" >&2
+  exit 1
+fi
+test -s "$factory_receipt_report_expired"
+grep -Fq \
+  'factory receipt attestation is not active under the pinned policy' \
+  "$factory_receipt_report_expired_error"
+
+python3 - "$factory_receipt_signed" "$factory_receipt_signed_tampered" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, output = map(Path, sys.argv[1:])
+value = json.loads(source.read_bytes())
+value["signature"] = ("0" if value["signature"][0] != "0" else "1") + value["signature"][1:]
+output.write_bytes(json.dumps(value, indent=2).encode("utf-8") + b"\n")
+PY
+if "$pcbex_binary" verify-factory-receipt-attestation \
+  "$fabrication_release_package" \
+  --factory-receipt "$factory_receipt_source" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest" \
+  --signed-attestation "$factory_receipt_signed_tampered" \
+  --output "$factory_receipt_tampered_output"; then
+  echo "expected a tampered factory receipt signature to fail without output" >&2
+  exit 1
+fi
+test ! -e "$factory_receipt_tampered_output"
+
+signed_receipt_release_common=(
+  "${fabrication_release_common[@]}"
+  --approval "$fabrication_release_approval_a"
+  --approval "$fabrication_release_approval_b"
+  --routing-drc-fabrication-release-report "$fabrication_release_positive"
+  --executable-pinned-fabrication-release-report "$executable_pinned_positive"
+  --factory-receipt "$factory_receipt_source"
+  --policy-pack "$factory_receipt_policy"
+  --expected-routing-pcbex-sha256 "$executable_pinned_pcbex_sha"
+  --expected-authorization-pcbex-sha256 "$executable_pinned_pcbex_sha"
+  --expected-kicad-cli-sha256 "$executable_pinned_kicad_sha"
+)
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  signed-factory-receipt-release-report-schema \
+  --output "$signed_receipt_release_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-signed-factory-receipt-release \
+  "${signed_receipt_release_common[@]}" \
+  --signed-factory-receipt-attestation "$factory_receipt_signed" \
+  --output "$signed_receipt_release_positive" \
+  --require-authenticated
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-signed-factory-receipt-release \
+  "${signed_receipt_release_common[@]}" \
+  --signed-factory-receipt-attestation "$factory_receipt_signed_expired" \
+  --output "$signed_receipt_release_negative" \
+  --require-authenticated 2>"$signed_receipt_release_negative_error"; then
+  echo "expected an expired signed receipt release to fail its final gate" >&2
+  exit 1
+fi
+test -s "$signed_receipt_release_negative"
+grep -Fxq \
+  'signed factory receipt release report was retained but is not authenticated' \
+  "$signed_receipt_release_negative_error"
+
+PYTHONPATH=agent/src python3 - \
+  "$signed_receipt_release_positive" "$signed_receipt_release_negative" \
+  "$signed_receipt_release_schema" "$factory_receipt_report" \
+  "$factory_receipt_report_expired" "$factory_receipt_signed" \
+  "$fabrication_release_package" "$factory_receipt_source" \
+  "$factory_receipt_policy" "$executable_pinned_positive" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from pcbex_agent import render_signed_factory_receipt_release_report
+
+(
+    positive_path,
+    negative_path,
+    schema_path,
+    attestation_report_path,
+    expired_report_path,
+    signed_path,
+    package_path,
+    receipt_path,
+    policy_path,
+    nested_path,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+positive = json.loads(positive_path.read_bytes())
+negative = json.loads(negative_path.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+attestation_report = json.loads(attestation_report_path.read_bytes())
+expired_report = json.loads(expired_report_path.read_bytes())
+
+assert positive_path.read_bytes() == render_signed_factory_receipt_release_report(positive)
+assert positive["schema_version"] == 1
+assert positive["verification_scope"] == \
+    "fresh-exact-signed-factory-receipt-release-v1"
+assert positive["status"] == "release_authenticated"
+assert positive["executable_pinned_fabrication_release_authorized"] is True
+assert positive["factory_receipt_attestation_verified"] is True
+assert positive["factory_receipt_authenticity_verified"] is True
+assert positive["release_authenticated"] is True
+assert positive["gate_failures"] == []
+assert positive["sources"]["manufacturing_package"] == identity(package_path)
+assert positive["sources"]["factory_receipt"] == identity(receipt_path)
+assert positive["sources"]["policy_pack"] == identity(policy_path)
+assert positive["sources"]["signed_factory_receipt_attestation"] == identity(signed_path)
+outer_attestation_report = positive["factory_receipt_attestation"]
+for key, value in attestation_report.items():
+    if key not in {"evaluated_at_unix", "binding_sha256"}:
+        assert outer_attestation_report[key] == value, key
+assert (
+    outer_attestation_report["attestation"]["issued_at_unix"]
+    <= outer_attestation_report["evaluated_at_unix"]
+    <= outer_attestation_report["attestation"]["expires_at_unix"]
+)
+assert positive["attestation_verifier"] == \
+    positive["executable_pinned_fabrication_release"]["executable_pins"]["authorization_pcbex"]
+assert positive["sources"]["executable_pinned_fabrication_release_report"]["bytes"] == \
+    len(nested_path.read_bytes())
+assert set(positive["validation"].values()) == {True}
+
+for claim in (
+    "trusted_time_verified",
+    "factory_legal_identity_verified",
+    "endpoint_transport_authenticity_verified",
+    "raw_response_authenticity_verified",
+    "source_authenticity_verified",
+    "executable_origin_authenticity_verified",
+    "toolchain_authenticity_verified",
+    "policy_pack_authenticity_verified",
+    "manufacturability_verified",
+    "external_submission_performed",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "challenge_one_time_use_enforced",
+):
+    assert positive[claim] is False, claim
+
+assert negative["status"] == "not_authenticated"
+assert negative["release_authenticated"] is False
+assert negative["factory_receipt_authenticity_verified"] is False
+assert negative["gate_failures"] == [
+    "factory_receipt_attestation_not_authenticated"
+]
+assert expired_report["status"] == "not_authenticated"
+assert expired_report["gate_failures"] == [
+    "factory_receipt_attestation_window_inactive"
+]
+
+pending = [schema]
+objects = arrays = 0
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            objects += 1
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            arrays += 1
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+assert objects > 20 and arrays > 5
 PY
 
 # Reuse the same real Rust binary through the Python saved-generation

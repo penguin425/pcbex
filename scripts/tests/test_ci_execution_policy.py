@@ -671,6 +671,14 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "python -m unittest\n"
             "          agent.tests.test_executable_pinned_fabrication_release_v1479 -v"
         )
+        signed_factory_receipt_release_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_signed_factory_receipt_release_v1480 -v"
+        )
+        factory_receipt_attestation_command = (
+            "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
+            "          factory_receipt_attestation"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -695,6 +703,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
             document.count(executable_pinned_fabrication_release_command), 1
         )
         self.assertIn(executable_pinned_fabrication_release_command, boundaries)
+        self.assertEqual(
+            document.count(signed_factory_receipt_release_command), 1
+        )
+        self.assertIn(signed_factory_receipt_release_command, boundaries)
+        self.assertEqual(document.count(factory_receipt_attestation_command), 1)
+        self.assertIn(factory_receipt_attestation_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
@@ -704,6 +718,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(routing_drc_manufacturing_handoff_command, rust_windows)
         self.assertNotIn(routing_drc_fabrication_release_command, rust_windows)
         self.assertNotIn(executable_pinned_fabrication_release_command, rust_windows)
+        self.assertNotIn(signed_factory_receipt_release_command, rust_windows)
+        self.assertNotIn(factory_receipt_attestation_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -769,6 +785,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         executable_pinned_fabrication_release_step = boundaries.index(
             "- name: Run cross-platform v1.479 executable-pinned fabrication-release boundaries"
+        )
+        signed_factory_receipt_release_step = boundaries.index(
+            "- name: Run cross-platform v1.480 signed factory-receipt boundaries"
+        )
+        factory_receipt_attestation_step = boundaries.index(
+            "- name: Run cross-platform v1.480 factory-receipt cryptographic boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -874,7 +896,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             routing_drc_fabrication_release_block,
         )
         executable_pinned_fabrication_release_block = boundaries[
-            executable_pinned_fabrication_release_step:toolchain_step
+            executable_pinned_fabrication_release_step:signed_factory_receipt_release_step
         ]
         self.assertIn(
             "PYTHONPATH: agent/src", executable_pinned_fabrication_release_block
@@ -882,6 +904,23 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             executable_pinned_fabrication_release_command,
             executable_pinned_fabrication_release_block,
+        )
+        signed_factory_receipt_release_block = boundaries[
+            signed_factory_receipt_release_step:factory_receipt_attestation_step
+        ]
+        self.assertIn(
+            "PYTHONPATH: agent/src", signed_factory_receipt_release_block
+        )
+        self.assertIn(
+            signed_factory_receipt_release_command,
+            signed_factory_receipt_release_block,
+        )
+        factory_receipt_attestation_block = boundaries[
+            factory_receipt_attestation_step:toolchain_step
+        ]
+        self.assertIn(
+            factory_receipt_attestation_command,
+            factory_receipt_attestation_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -910,7 +949,15 @@ class CiExecutionPolicyTests(unittest.TestCase):
             routing_drc_fabrication_release_step,
             executable_pinned_fabrication_release_step,
         )
-        self.assertLess(executable_pinned_fabrication_release_step, toolchain_step)
+        self.assertLess(
+            executable_pinned_fabrication_release_step,
+            signed_factory_receipt_release_step,
+        )
+        self.assertLess(
+            signed_factory_receipt_release_step,
+            factory_receipt_attestation_step,
+        )
+        self.assertLess(factory_receipt_attestation_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

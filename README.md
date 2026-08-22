@@ -47,6 +47,9 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
   approvals to exact evidence, then reserve approved challenges in pinned local
   ledgers without claiming an order or payment.
 
+- **Authenticate factory receipts:** Bind the exact normalized receipt and
+  manufacturing package to a dedicated policy-pinned Ed25519 key.
+
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
 
@@ -218,6 +221,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Routing/native-DRC/manufacturing handoff v1 | Add fresh normalized KiCad DRC evidence to the exact routed package | `pcbex-agent routing-drc-manufacturing-handoff-report-schema` |
 | Routing/DRC fabrication release v1 | Bind that package to a factory-required pipeline and policy-pinned fabrication quorum | `pcbex-agent routing-drc-fabrication-release-report-schema` |
 | Executable-pinned fabrication release v1 | Freshly reassess one retained release subject while matching routing, authorization, and KiCad native entrypoints to deployment-owned SHA-256 pins | `pcbex-agent executable-pinned-fabrication-release-report-schema` |
+| Signed factory-receipt release v1 | Freshly replay the executable-pinned release and authenticate its exact normalized receipt with a dedicated policy-pinned Ed25519 key | `pcbex-agent signed-factory-receipt-release-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
