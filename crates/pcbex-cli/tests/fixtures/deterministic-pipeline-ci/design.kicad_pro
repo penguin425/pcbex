@@ -1,0 +1,27 @@
+{
+  "board": {
+    "design_settings": {
+      "drc_exclusions": [],
+      "meta": {
+        "version": 2
+      },
+      "rule_severities": {
+        "lib_footprint_issues": "ignore"
+      }
+    }
+  },
+  "boards": [],
+  "cvpcb": {},
+  "erc": {},
+  "libraries": {},
+  "meta": {
+    "filename": "design.kicad_pro",
+    "version": 1
+  },
+  "net_settings": {
+    "classes": []
+  },
+  "pcbnew": {},
+  "schematic": {},
+  "text_variables": {}
+}

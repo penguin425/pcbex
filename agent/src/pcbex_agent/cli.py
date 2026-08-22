@@ -123,6 +123,13 @@ from .routing_drc_manufacturing_handoff import (
     render_routing_drc_manufacturing_handoff_report,
     routing_drc_manufacturing_handoff_report_json_schema,
 )
+from .routing_drc_fabrication_release import (
+    MAXIMUM_ROUTING_DRC_FABRICATION_RELEASE_REPORT_BYTES,
+    RoutingDrcFabricationReleaseError,
+    evaluate_routing_drc_fabrication_release,
+    render_routing_drc_fabrication_release_report,
+    routing_drc_fabrication_release_report_json_schema,
+)
 from .deterministic_pipeline_replay import (
     DeterministicPipelineReplayError,
     deterministic_pipeline_replay_result_json_schema,
@@ -1106,6 +1113,102 @@ def main() -> None:
         help="write the closed routing/native-DRC/manufacturing JSON Schema",
     )
     routing_drc_manufacturing_schema.add_argument("-o", "--output", type=Path)
+    routing_drc_fabrication_release = sub.add_parser(
+        "replay-routing-drc-fabrication-release",
+        help=(
+            "freshly cross-bind one routing/DRC/manufacturing handoff to "
+            "policy-pinned fabrication authorization"
+        ),
+    )
+    routing_drc_fabrication_release.add_argument("input_board", type=Path)
+    routing_drc_fabrication_release.add_argument("routed_board", type=Path)
+    routing_drc_fabrication_release.add_argument(
+        "--convergence-report", type=Path, required=True, metavar="REPORT"
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--routing-verification-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--manufacturing-package", type=Path, required=True, metavar="ZIP"
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--routing-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--native-drc-report", type=Path, required=True, metavar="REPORT"
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--routing-drc-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--deterministic-pipeline-plan",
+        type=Path,
+        required=True,
+        metavar="PLAN",
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--deterministic-pipeline-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--approval", type=Path, required=True, action="append", metavar="APPROVAL"
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--expected-policy-pack-canonical-sha256", required=True
+    )
+    routing_drc_fabrication_release.add_argument("--pcbex", default="pcbex")
+    routing_drc_fabrication_release.add_argument(
+        "--authorization-pcbex", default="pcbex"
+    )
+    routing_drc_fabrication_release.add_argument("--kicad-cli", default="kicad-cli")
+    routing_drc_fabrication_release.add_argument("--kicad-project", type=Path)
+    routing_drc_fabrication_release.add_argument("--kicad-rules", type=Path)
+    routing_drc_fabrication_release.add_argument("--grid-mm", type=float, default=0.25)
+    routing_drc_fabrication_release.add_argument("--width-mm", type=float, default=0.25)
+    routing_drc_fabrication_release.add_argument(
+        "--clearance-mm", type=float, default=0.20
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--via-diameter-mm", type=float, default=0.60
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--via-drill-mm", type=float, default=0.30
+    )
+    routing_drc_fabrication_release.add_argument("--bend-cost", type=int, default=5)
+    routing_drc_fabrication_release.add_argument("--via-cost", type=int, default=20)
+    routing_drc_release_profiles = (
+        routing_drc_fabrication_release.add_mutually_exclusive_group()
+    )
+    routing_drc_release_profiles.add_argument("--fab")
+    routing_drc_release_profiles.add_argument("--fab-profile", type=Path)
+    routing_drc_release_profiles.add_argument("--physical-profile", type=Path)
+    routing_drc_fabrication_release.add_argument(
+        "--timeout-seconds", type=float, default=300.0
+    )
+    routing_drc_fabrication_release.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    routing_drc_fabrication_release.add_argument(
+        "--require-authorized",
+        action="store_true",
+        help="fail only after retaining a valid release that is not authorized",
+    )
+    routing_drc_fabrication_release_schema = sub.add_parser(
+        "routing-drc-fabrication-release-report-schema",
+        help="write the closed routing/DRC fabrication-release JSON Schema",
+    )
+    routing_drc_fabrication_release_schema.add_argument("-o", "--output", type=Path)
     procurement_intent = sub.add_parser(
         "build-procurement-intent",
         help="bind one exact final BOM to fully replayed catalog SKU selections",
@@ -2532,6 +2635,104 @@ def main() -> None:
         ) as error:
             raise SystemExit(
                 f"routing/DRC/manufacturing handoff schema failed: {error}"
+            ) from None
+    elif args.command == "replay-routing-drc-fabrication-release":
+        try:
+            frozen_output = _preflight_routing_manufacturing_output(
+                args.output,
+                (
+                    args.input_board,
+                    args.routed_board,
+                    args.convergence_report,
+                    args.routing_verification_report,
+                    args.manufacturing_package,
+                    args.routing_manufacturing_handoff_report,
+                    args.native_drc_report,
+                    args.routing_drc_manufacturing_handoff_report,
+                    args.deterministic_pipeline_plan,
+                    args.deterministic_pipeline_report,
+                    args.kicad_project,
+                    args.kicad_rules,
+                    args.fab_profile,
+                    args.physical_profile,
+                    *args.approval,
+                ),
+                label="routing/DRC/fabrication release",
+            )
+            result = evaluate_routing_drc_fabrication_release(
+                args.input_board,
+                args.routed_board,
+                args.convergence_report,
+                args.routing_verification_report,
+                args.manufacturing_package,
+                args.routing_manufacturing_handoff_report,
+                args.native_drc_report,
+                args.routing_drc_manufacturing_handoff_report,
+                args.deterministic_pipeline_plan,
+                args.deterministic_pipeline_report,
+                args.approval,
+                args.expected_policy_pack_canonical_sha256,
+                args.pcbex,
+                args.authorization_pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                grid_mm=args.grid_mm,
+                width_mm=args.width_mm,
+                clearance_mm=args.clearance_mm,
+                via_diameter_mm=args.via_diameter_mm,
+                via_drill_mm=args.via_drill_mm,
+                bend_cost=args.bend_cost,
+                via_cost=args.via_cost,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_routing_drc_fabrication_release_report(result)
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_ROUTING_DRC_FABRICATION_RELEASE_REPORT_BYTES,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            RoutingDrcFabricationReleaseError,
+        ) as error:
+            raise SystemExit(
+                f"routing/DRC/fabrication release replay failed: {error}"
+            ) from None
+        if args.require_authorized and not result["release_authorized"]:
+            raise SystemExit(
+                "routing/DRC/fabrication release report was retained but is not authorized"
+            )
+    elif args.command == "routing-drc-fabrication-release-report-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    routing_drc_fabrication_release_report_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (
+            OSError,
+            BoundedIOError,
+            RoutingDrcFabricationReleaseError,
+        ) as error:
+            raise SystemExit(
+                f"routing/DRC/fabrication release schema failed: {error}"
             ) from None
     elif args.command == "build-procurement-intent":
         try:

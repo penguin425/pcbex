@@ -753,6 +753,379 @@ while pending:
         pending.extend(value)
 PY
 
+# v1.478 closes the next offline release boundary. One exact, freshly replayed
+# v1.477 routing/native-DRC/manufacturing result must name the same package as
+# one factory-required deterministic pipeline, while a caller-pinned canonical
+# organization policy must authorize that exact pipeline through two distinct
+# Ed25519 fabrication approvals.
+fabrication_release_fixture="$output_directory/routing-drc-fabrication.fixture"
+fabrication_release_input_dir="$output_directory/routing-drc-fabrication.input"
+fabrication_release_routed_dir="$output_directory/routing-drc-fabrication.routed"
+fabrication_release_routing_input="$fabrication_release_input_dir/design.kicad_pcb"
+fabrication_release_routed_board="$fabrication_release_routed_dir/design.kicad_pcb"
+fabrication_release_input_project="$fabrication_release_input_dir/design.kicad_pro"
+fabrication_release_routed_project="$fabrication_release_routed_dir/design.kicad_pro"
+fabrication_release_convergence="$output_directory/routing-drc-fabrication.convergence.json"
+fabrication_release_verification="$output_directory/routing-drc-fabrication.verification.json"
+fabrication_release_package_dir="$output_directory/routing-drc-fabrication.package"
+fabrication_release_package="$fabrication_release_package_dir/manufacturing.zip"
+fabrication_release_routing_handoff="$output_directory/routing-drc-fabrication.routing-handoff.json"
+fabrication_release_native_drc="$output_directory/routing-drc-fabrication.native-drc.json"
+fabrication_release_retained_routing="$output_directory/routing-drc-fabrication.routing-drc-handoff.json"
+fabrication_release_partial_handoff="$output_directory/routing-drc-fabrication.partial-routing-handoff.json"
+fabrication_release_partial_retained="$output_directory/routing-drc-fabrication.partial-routing-drc-handoff.json"
+fabrication_release_positive="$output_directory/routing-drc-fabrication.release.json"
+fabrication_release_single="$output_directory/routing-drc-fabrication.single.json"
+fabrication_release_single_error="$output_directory/routing-drc-fabrication.single.stderr"
+fabrication_release_routing_negative="$output_directory/routing-drc-fabrication.routing-negative.json"
+fabrication_release_routing_negative_error="$output_directory/routing-drc-fabrication.routing-negative.stderr"
+fabrication_release_schema="$output_directory/routing-drc-fabrication.schema.json"
+fabrication_release_tampered_approval="$output_directory/routing-drc-fabrication.tampered-approval.json"
+fabrication_release_tampered_output="$output_directory/routing-drc-fabrication.tampered-output.json"
+fabrication_release_pin_output="$output_directory/routing-drc-fabrication.pin-output.json"
+
+mkdir -p "$fabrication_release_input_dir" "$fabrication_release_routed_dir"
+# This dedicated project ignores only KiCad's installed-library footprint
+# comparison. Copper, geometry, connectivity, and manufacturing DRC remain
+# enabled; library provenance is an explicit v1.478 nonclaim.
+cp crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
+  "$fabrication_release_input_project"
+cp crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
+  "$fabrication_release_routed_project"
+"$pcbex_binary" route-kicad \
+  crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pcb \
+  --project crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
+  --output "$fabrication_release_routing_input" --drc
+"$pcbex_binary" route-kicad "$fabrication_release_routing_input" \
+  --project "$fabrication_release_input_project" \
+  --output "$fabrication_release_routed_board" \
+  --convergence-report "$fabrication_release_convergence" \
+  --convergence-rounds 2 \
+  --convergence-candidates 3 \
+  --convergence-workers 2 \
+  --convergence-router-workers 1 \
+  --drc
+"$pcbex_binary" verify-kicad-routing-convergence \
+  "$fabrication_release_routing_input" \
+  --routed "$fabrication_release_routed_board" \
+  --report "$fabrication_release_convergence" \
+  --output "$fabrication_release_verification" \
+  --require-complete
+mkdir -p "$fabrication_release_package_dir"
+"$pcbex_binary" fabricate "$fabrication_release_routed_board" \
+  --output-dir "$fabrication_release_package_dir"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-manufacturing-handoff \
+  "$fabrication_release_routing_input" "$fabrication_release_routed_board" \
+  --convergence-report "$fabrication_release_convergence" \
+  --routing-verification-report "$fabrication_release_verification" \
+  --manufacturing-package "$fabrication_release_package" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --kicad-project "$fabrication_release_routed_project" \
+  --output "$fabrication_release_routing_handoff" \
+  --require-ready
+"$pcbex_binary" run-native-kicad-drc "$fabrication_release_routed_board" \
+  --project "$fabrication_release_routed_project" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$fabrication_release_native_drc" \
+  --require-approved
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-manufacturing-handoff \
+  "$fabrication_release_routing_input" "$fabrication_release_routed_board" \
+  --convergence-report "$fabrication_release_convergence" \
+  --routing-verification-report "$fabrication_release_verification" \
+  --manufacturing-package "$fabrication_release_package" \
+  --routing-manufacturing-handoff-report "$fabrication_release_routing_handoff" \
+  --native-drc-report "$fabrication_release_native_drc" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --kicad-project "$fabrication_release_routed_project" \
+  --output "$fabrication_release_retained_routing" \
+  --require-ready
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-manufacturing-handoff \
+  examples/simple.kicad_pcb "$convergence_partial_board" \
+  --convergence-report "$convergence_partial_report" \
+  --routing-verification-report "$convergence_verification_partial" \
+  --manufacturing-package "$fabrication_release_package" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$fabrication_release_partial_handoff"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-manufacturing-handoff \
+  examples/simple.kicad_pcb "$convergence_partial_board" \
+  --convergence-report "$convergence_partial_report" \
+  --routing-verification-report "$convergence_verification_partial" \
+  --manufacturing-package "$fabrication_release_package" \
+  --routing-manufacturing-handoff-report "$fabrication_release_partial_handoff" \
+  --native-drc-report "$routing_drc_partial_native" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$fabrication_release_partial_retained"
+
+python3 scripts/fabrication_authorization_action_ci.py \
+  --pcbex "$pcbex_binary" \
+  --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci \
+  --policy-template examples/acme-policy-pack.json \
+  --board "$fabrication_release_routed_board" \
+  --manufacturing-package "$fabrication_release_package" \
+  --output-dir "$fabrication_release_fixture" \
+  --timeout-seconds 300 >/dev/null
+
+fabrication_release_plan="$fabrication_release_fixture/factory-required-plan.json"
+fabrication_release_pipeline_report="$fabrication_release_fixture/factory-required-report.json"
+fabrication_release_approval_a="$fabrication_release_fixture/approval-a.json"
+fabrication_release_approval_b="$fabrication_release_fixture/approval-b.json"
+fabrication_release_policy_digest="$(python3 - "$fabrication_release_approval_a" "$fabrication_release_approval_b" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+approvals = [json.loads(Path(path).read_bytes()) for path in sys.argv[1:]]
+digests = {
+    approval["evidence"]["policy_pack"]["canonical_sha256"]
+    for approval in approvals
+}
+assert len(digests) == 1
+digest = digests.pop()
+assert isinstance(digest, str) and len(digest) == 64
+assert all(character in "0123456789abcdef" for character in digest)
+print(digest)
+PY
+)"
+
+fabrication_release_common=(
+  "$fabrication_release_routing_input" "$fabrication_release_routed_board"
+  --convergence-report "$fabrication_release_convergence"
+  --routing-verification-report "$fabrication_release_verification"
+  --manufacturing-package "$fabrication_release_package"
+  --routing-manufacturing-handoff-report "$fabrication_release_routing_handoff"
+  --native-drc-report "$fabrication_release_native_drc"
+  --routing-drc-manufacturing-handoff-report "$fabrication_release_retained_routing"
+  --deterministic-pipeline-plan "$fabrication_release_plan"
+  --deterministic-pipeline-report "$fabrication_release_pipeline_report"
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest"
+  --pcbex "$pcbex_binary"
+  --authorization-pcbex "$pcbex_binary"
+  --kicad-cli "$kicad_cli_binary"
+  --kicad-project "$fabrication_release_routed_project"
+  --timeout-seconds 600
+)
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  routing-drc-fabrication-release-report-schema \
+  --output "$fabrication_release_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_approval_a" \
+  --approval "$fabrication_release_approval_b" \
+  --output "$fabrication_release_positive" \
+  --require-authorized
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_approval_a" \
+  --output "$fabrication_release_single" \
+  --require-authorized 2>"$fabrication_release_single_error"; then
+  echo "expected one fabrication approval to fail the final release gate" >&2
+  exit 1
+fi
+test -s "$fabrication_release_single"
+grep -Fxq \
+  'routing/DRC/fabrication release report was retained but is not authorized' \
+  "$fabrication_release_single_error"
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-fabrication-release \
+  examples/simple.kicad_pcb "$convergence_partial_board" \
+  --convergence-report "$convergence_partial_report" \
+  --routing-verification-report "$convergence_verification_partial" \
+  --manufacturing-package "$fabrication_release_package" \
+  --routing-manufacturing-handoff-report "$fabrication_release_partial_handoff" \
+  --native-drc-report "$routing_drc_partial_native" \
+  --routing-drc-manufacturing-handoff-report "$fabrication_release_partial_retained" \
+  --deterministic-pipeline-plan "$fabrication_release_plan" \
+  --deterministic-pipeline-report "$fabrication_release_pipeline_report" \
+  --approval "$fabrication_release_approval_a" \
+  --approval "$fabrication_release_approval_b" \
+  --expected-policy-pack-canonical-sha256 "$fabrication_release_policy_digest" \
+  --pcbex "$pcbex_binary" \
+  --authorization-pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 600 \
+  --output "$fabrication_release_routing_negative" \
+  --require-authorized 2>"$fabrication_release_routing_negative_error"; then
+  echo "expected incomplete routing evidence to fail the final release gate" >&2
+  exit 1
+fi
+test -s "$fabrication_release_routing_negative"
+grep -Fxq \
+  'routing/DRC/fabrication release report was retained but is not authorized' \
+  "$fabrication_release_routing_negative_error"
+
+python3 - "$fabrication_release_approval_a" "$fabrication_release_tampered_approval" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, target = map(Path, sys.argv[1:])
+approval = json.loads(source.read_bytes())
+approval["signature"] = ("0" if approval["signature"][0] != "0" else "1") + approval["signature"][1:]
+target.write_bytes(json.dumps(approval, indent=2).encode("utf-8") + b"\n")
+PY
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_tampered_approval" \
+  --approval "$fabrication_release_approval_b" \
+  --output "$fabrication_release_tampered_output"; then
+  echo "expected a tampered fabrication approval to fail without output" >&2
+  exit 1
+fi
+test ! -e "$fabrication_release_tampered_output"
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-fabrication-release \
+  "${fabrication_release_common[@]}" \
+  --approval "$fabrication_release_approval_a" \
+  --approval "$fabrication_release_approval_b" \
+  --expected-policy-pack-canonical-sha256 "$(printf '%064d' 0)" \
+  --output "$fabrication_release_pin_output"; then
+  echo "expected a mismatched policy pin to fail without output" >&2
+  exit 1
+fi
+test ! -e "$fabrication_release_pin_output"
+
+PYTHONPATH=agent/src python3 - \
+  "$fabrication_release_positive" "$fabrication_release_single" \
+  "$fabrication_release_routing_negative" "$fabrication_release_schema" \
+  "$fabrication_release_retained_routing" "$fabrication_release_package" \
+  "$fabrication_release_plan" "$fabrication_release_pipeline_report" \
+  "$fabrication_release_approval_a" "$fabrication_release_approval_b" \
+  "$fabrication_release_fixture/factory-receipt.json" \
+  "$fabrication_release_fixture/final-policy-pack.json" \
+  "$fabrication_release_policy_digest" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from pcbex_agent import render_routing_drc_fabrication_release_report
+
+(
+    positive_path,
+    single_path,
+    routing_negative_path,
+    schema_path,
+    retained_routing_path,
+    package_path,
+    plan_path,
+    pipeline_report_path,
+    approval_a_path,
+    approval_b_path,
+    receipt_path,
+    policy_path,
+) = map(Path, sys.argv[1:13])
+policy_digest = sys.argv[13]
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+positive = json.loads(positive_path.read_bytes())
+single = json.loads(single_path.read_bytes())
+routing_negative = json.loads(routing_negative_path.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+
+assert positive_path.read_bytes() == render_routing_drc_fabrication_release_report(positive)
+assert list(positive) == list(single) == list(routing_negative)
+assert positive["schema_version"] == 1
+assert positive["verification_scope"] == \
+    "fresh-exact-routing-drc-fabrication-release-v1"
+assert positive["status"] == "release_authorized"
+assert positive["routing_drc_manufacturing_ready"] is True
+assert positive["fabrication_authorized"] is True
+assert positive["release_authorized"] is True
+assert positive["gate_failures"] == []
+assert positive["sources"]["routing_drc_manufacturing_handoff_report"] == \
+    identity(retained_routing_path)
+assert positive["sources"]["deterministic_pipeline_plan"] == identity(plan_path)
+assert positive["sources"]["deterministic_pipeline_report"] == \
+    identity(pipeline_report_path)
+assert positive["sources"]["manufacturing_package"] == identity(package_path)
+assert positive["sources"]["factory_receipt"] == identity(receipt_path)
+assert positive["sources"]["policy_pack"] == identity(policy_path)
+assert positive["sources"]["signed_approvals"] == [
+    identity(approval_a_path),
+    identity(approval_b_path),
+]
+assert positive["routing_drc_manufacturing"]["manufacturing_package"] == \
+    identity(package_path)
+assert positive["fabrication_authorization"]["manufacturing_package"] == \
+    identity(package_path)
+assert positive["fabrication_authorization"]["approvals"] == 2
+assert positive["fabrication_authorization"]["rejections"] == 0
+assert positive["fabrication_authorization"]["gate_failures"] == []
+assert positive["fabrication_authorization"]["quote_authenticity_verified"] is False
+assert positive["fabrication_authorization"]["challenge_one_time_use_enforced"] is False
+assert positive["policy_pin"] == {
+    "expected_canonical_sha256": policy_digest,
+    "matched": True,
+}
+assert set(positive["validation"].values()) == {True}
+
+for claim in (
+    "source_authenticity_verified",
+    "toolchain_authenticity_verified",
+    "policy_pack_authenticity_verified",
+    "factory_receipt_authenticity_verified",
+    "manufacturability_verified",
+    "external_submission_performed",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "challenge_one_time_use_enforced",
+):
+    assert positive[claim] is False, claim
+
+assert single["status"] == "not_authorized"
+assert single["routing_drc_manufacturing_ready"] is True
+assert single["fabrication_authorized"] is False
+assert single["release_authorized"] is False
+assert single["gate_failures"] == ["fabrication_not_authorized"]
+assert single["fabrication_authorization"]["gate_failures"] == [
+    "insufficient_fabrication_approvals:required=2:actual=1"
+]
+
+assert routing_negative["status"] == "not_authorized"
+assert routing_negative["routing_drc_manufacturing_ready"] is False
+assert routing_negative["fabrication_authorized"] is True
+assert routing_negative["release_authorized"] is False
+assert routing_negative["gate_failures"] == [
+    "routing_drc_manufacturing_not_ready"
+]
+
+pending = [schema]
+objects = arrays = 0
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            objects += 1
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            arrays += 1
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+assert objects > 0 and arrays > 0
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

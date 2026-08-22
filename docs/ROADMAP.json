@@ -919,6 +919,11 @@
     {
       "id": "fresh-routing-native-drc-manufacturing-handoff",
       "release": "v1.477.0",
+      "status": "released"
+    },
+    {
+      "id": "policy-pinned-routing-drc-fabrication-release",
+      "release": "v1.478.0",
       "status": "current"
     }
   ]

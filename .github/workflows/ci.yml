@@ -1890,6 +1890,12 @@ jobs:
         run: >-
           python -m unittest
           agent.tests.test_routing_drc_manufacturing_handoff_v1477 -v
+      - name: Run cross-platform v1.478 routing-DRC fabrication-release boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_routing_drc_fabrication_release_v1478 -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

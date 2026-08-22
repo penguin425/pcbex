@@ -143,6 +143,9 @@ organization or fabricator constraints. Read the
 [manufacturing package contract](docs/MANUFACTURING_PACKAGE.md) before treating
 the archive as release evidence.
 
+When release also requires fresh native DRC and a policy-pinned human quorum,
+use the [routing/DRC fabrication-release boundary](docs/ROUTING_DRC_FABRICATION_RELEASE.md).
+
 ### Generate a multi-unit KiCad handoff
 
 Use circuit-spec v3 when one physical package appears as multiple schematic
@@ -213,6 +216,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Routing convergence verification v1 | Fresh replay plus exact routed-artifact binding | `pcbex routing-convergence-verification-report-schema` |
 | Routing/manufacturing handoff v1 | Bind one freshly verified routed KiCad board to one exact manufacturing ZIP | `pcbex-agent routing-manufacturing-handoff-report-schema` |
 | Routing/native-DRC/manufacturing handoff v1 | Add fresh normalized KiCad DRC evidence to the exact routed package | `pcbex-agent routing-drc-manufacturing-handoff-report-schema` |
+| Routing/DRC fabrication release v1 | Bind that package to a factory-required pipeline and policy-pinned fabrication quorum | `pcbex-agent routing-drc-fabrication-release-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

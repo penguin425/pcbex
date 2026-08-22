@@ -493,6 +493,7 @@ limit before network access.
 | Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
 | Fresh routing-to-manufacturing handoff (`replay-routing-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; routing receives half of the remaining budget, then manufacturing preserves its existing cleanup/final-reread reserve | closed | 64 KiB for routing; 1 MiB for manufacturing | 1 MiB per child |
 | Fresh routing/native-DRC/manufacturing handoff (`replay-routing-drc-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.476 replay receives half of the remaining budget, then native DRC preserves up to 15 seconds or half of its remaining interval | closed | 64 KiB for routing/native DRC; 1 MiB for manufacturing | 1 MiB per child |
+| Policy-pinned routing/DRC fabrication release (`replay-routing-drc-fabrication-release`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.477 replay receives half of the remaining budget, then fabrication authorization reserves up to 30 seconds or half of its remaining interval | closed | 64 KiB fabrication summary; nested routing/manufacturing limits remain unchanged | 1 MiB for fabrication; nested child limits remain unchanged |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Dual-control procurement signing/verification (`sign-procurement-approval`, `verify-procurement-authorization`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both complete v1.470 replays, trusted authorization child, cleanup, comparison, rendering, and final rereads remain nested inside it | closed | 1 MiB per child | 1 MiB per child |
@@ -614,6 +615,23 @@ rechecks the native run binding and counts, rereads the staged closure after the
 last clock hook, then cross-binds all shared identities. Output is capped at
 1 MiB. See
 [Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
+
+The v1.478 release composer adds the factory-required deterministic plan,
+retained pipeline report, complete plan-selected closure, and 1–100 signed
+fabrication approvals. It captures that closure before consuming the approval
+sequence, caps the complete union at 1,469 MiB and approvals at 100 MiB, and
+requires the plan's exact package bytes to equal the v1.477 package before any
+selected tool or clock hook runs.
+
+After an exact private v1.477 replay, Python runs the explicit trusted Rust
+fabrication verifier without a shell. A no-hook final staged reread immediately
+precedes spawn. The returned canonical report and compact summary must bind the
+captured plan, pipeline report, package, receipt, policy, expected canonical
+policy digest, and complete signer-sorted approval envelopes. Final staged and
+caller rereads precede the 4 MiB outer result. This sequential snapshot does
+not authenticate the selected tools, policy distributor, receipt, signer
+custody, or local clock. See
+[Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
 
 The composed v1.457 replay uses the handoff command's single outer monotonic
 deadline rather than starting a second independent authority. It covers all

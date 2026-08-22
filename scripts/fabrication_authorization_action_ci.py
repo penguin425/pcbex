@@ -467,9 +467,33 @@ def _build_fixture(
     policy_template: Path,
     output_dir: Path,
     *,
+    board: Path | None,
+    manufacturing_package: Path | None,
     timeout_seconds: int,
     executable_identity: pipeline_fixture.ExecutableIdentity,
 ) -> dict[str, Any]:
+    if (board is None) != (manufacturing_package is None):
+        raise FixtureError(
+            "--board and --manufacturing-package must be supplied together"
+        )
+    board_override = (
+        _read(
+            board,
+            maximum=MAX_SOURCE_BYTES,
+            role="externally supplied board",
+        )
+        if board is not None
+        else None
+    )
+    package_override = (
+        _read(
+            manufacturing_package,
+            maximum=pipeline_fixture.MAX_PACKAGE_BYTES,
+            role="externally supplied manufacturing package",
+        )
+        if manufacturing_package is not None
+        else None
+    )
     try:
         pipeline_fixture._require_regular_directory(fixture_dir, "fixture directory")
         pipeline_fixture._prepare_fresh_output(output_dir)
@@ -483,6 +507,17 @@ def _build_fixture(
     )
     if not isinstance(policy_template_value, dict):
         raise FixtureError("policy template must be an object")
+
+    board_path = output_dir / "design.kicad_pcb"
+    if board is not None and board_override is not None:
+        if board.name in ("", ".", "..") or Path(board.name).name != board.name:
+            raise FixtureError("externally supplied board filename is unsafe")
+        board_path = output_dir / board.name
+        if board_path != output_dir / "design.kicad_pcb" and (
+            board_path.exists() or board_path.is_symlink()
+        ):
+            raise FixtureError("externally supplied board filename collides")
+        board_path.write_bytes(board_override)
 
     version_result = _run_checked(
         pcbex,
@@ -571,7 +606,7 @@ def _build_fixture(
             pcbex,
             [
                 "analyze-kicad",
-                "design.kicad_pcb",
+                board_path.name,
                 "--policy-pack",
                 "final-policy-pack.json",
                 "--output-dir",
@@ -599,14 +634,26 @@ def _build_fixture(
         )
 
         package_path = output_dir / "manufacturing.zip"
-        try:
-            pipeline_fixture._write_manufacturing_package(
-                package_path,
-                output_dir / "design.kicad_pcb",
-                engine_version=engine_version,
-            )
-        except pipeline_fixture.FixtureError as error:
-            raise FixtureError(str(error)) from error
+        if package_override is None:
+            try:
+                pipeline_fixture._write_manufacturing_package(
+                    package_path,
+                    board_path,
+                    engine_version=engine_version,
+                )
+            except pipeline_fixture.FixtureError as error:
+                raise FixtureError(str(error)) from error
+        else:
+            try:
+                pipeline_fixture.atomic_write_no_clobber(
+                    package_path,
+                    package_override,
+                    max_bytes=pipeline_fixture.MAX_PACKAGE_BYTES,
+                )
+            except (OSError, ValueError) as error:
+                raise FixtureError(
+                    f"could not retain the supplied manufacturing package: {error}"
+                ) from error
         package_source = _read(
             package_path,
             maximum=MAX_REPORT_BYTES,
@@ -628,7 +675,7 @@ def _build_fixture(
             "electrical_review": _descriptor(
                 output_dir, output_dir / "electrical-review.json"
             ),
-            "board": _descriptor(output_dir, output_dir / "design.kicad_pcb"),
+            "board": _descriptor(output_dir, board_path),
             "analysis_manifest": _descriptor(
                 output_dir, output_dir / "analysis/run.json"
             ),
@@ -782,6 +829,19 @@ def _parser() -> argparse.ArgumentParser:
         help="fresh fixture output directory",
     )
     parser.add_argument(
+        "--board",
+        help=(
+            "optional exact routed board paired with --manufacturing-package"
+        ),
+    )
+    parser.add_argument(
+        "--manufacturing-package",
+        help=(
+            "optional exact manufacturing ZIP to bind instead of generating "
+            "the fixture package"
+        ),
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=int,
         default=300,
@@ -804,6 +864,12 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.fixture_dir),
             Path(args.policy_template),
             Path(args.output_dir),
+            board=Path(args.board) if args.board is not None else None,
+            manufacturing_package=(
+                Path(args.manufacturing_package)
+                if args.manufacturing_package is not None
+                else None
+            ),
             timeout_seconds=args.timeout_seconds,
             executable_identity=executable_identity,
         )

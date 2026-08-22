@@ -50,6 +50,10 @@ boundary document for the artifact you plan to produce or trust.
   — require the same routed board and sidecars to reproduce both the retained
   package and normalized native DRC evidence.
 
+- [Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md)
+  — cross-bind that fresh package to a factory-required pipeline and dedicated
+  fabrication approval quorum under an externally expected policy digest.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

@@ -90,6 +90,17 @@ valid routing-incomplete or DRC-rejected decision is retained before
 child-summary mismatches produce no outer report. See
 [Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
 
+The v1.478 Python-agent boundary publishes a separate 4 MiB no-clobber release
+report. CLI preflight covers every direct routing report, plan, retained
+pipeline report, approval, sidecar, and destination. The Python core additionally
+captures the complete plan-selected closure, enforces a 1,469 MiB union and a
+100-file/100 MiB approval aggregate, requires the same manufacturing package
+on both sides, and invokes the trusted Rust fabrication verifier only from a
+private stage. Valid independent routing or fabrication negatives are retained
+before `--require-authorized`; invalid pin, signature, binding, alias, mutation,
+or child-summary evidence produces no outer report. See
+[Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
+
 The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
 contract. Circuit-spec input remains capped at 16 MiB, schematic input at
 64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,
