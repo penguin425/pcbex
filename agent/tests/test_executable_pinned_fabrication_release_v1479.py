@@ -459,7 +459,8 @@ class ExecutablePinnedFabricationReleaseTests(unittest.TestCase):
     def test_cli_retains_negative_before_require_authorized(self):
         sources = self.positive_sources
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "release.json"
+            root = Path(directory).resolve(strict=True)
+            output = root / "release.json"
             rendered = b'{"retained":true}\n'
             argv = [
                 "pcbex-agent",
