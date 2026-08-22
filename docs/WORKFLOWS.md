@@ -14,6 +14,7 @@ evidence your next consumer actually needs.
 | Converged KiCad PCB plus retained ZIP | Fresh board-to-package evidence | routing verification → routing/manufacturing handoff |
 | Converged KiCad PCB plus retained ZIP and native DRC | Fresh clean release evidence | routing/manufacturing handoff → routing/native-DRC/manufacturing handoff |
 | Fresh clean package plus factory pipeline and approvals | Policy-pinned offline fabrication release | routing/DRC handoff → fabrication authorization → release composition |
+| Retained fabrication release plus protected binary pins | Digest-pinned point-in-time release | stable v1.478 subject → three native entrypoint pin checks → fresh assessment and outer binding |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
 | Manufacturing package | Exact BOM/CPL and procurement intent | final verifiers → procurement intent |
@@ -207,6 +208,12 @@ When a deployment also has a factory-required pipeline, an externally expected
 canonical policy digest, and dedicated fabrication approvals, compose the
 point-in-time decision with
 [Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
+
+When deployment policy also owns expected hashes for the routing pcbex,
+authorization pcbex, and KiCad CLI files, add the strict
+[Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md)
+consumer. It binds those entrypoint observations without promoting them to
+binary-origin, dynamic-library, plugin, loader, sandbox, or OS provenance.
 
 ### Firmware evidence
 

@@ -130,6 +130,13 @@ from .routing_drc_fabrication_release import (
     render_routing_drc_fabrication_release_report,
     routing_drc_fabrication_release_report_json_schema,
 )
+from .executable_pinned_fabrication_release import (
+    MAXIMUM_EXECUTABLE_PINNED_FABRICATION_RELEASE_REPORT_BYTES,
+    ExecutablePinnedFabricationReleaseError,
+    evaluate_executable_pinned_fabrication_release,
+    executable_pinned_fabrication_release_report_json_schema,
+    render_executable_pinned_fabrication_release_report,
+)
 from .deterministic_pipeline_replay import (
     DeterministicPipelineReplayError,
     deterministic_pipeline_replay_result_json_schema,
@@ -1209,6 +1216,112 @@ def main() -> None:
         help="write the closed routing/DRC fabrication-release JSON Schema",
     )
     routing_drc_fabrication_release_schema.add_argument("-o", "--output", type=Path)
+    executable_pinned_release = sub.add_parser(
+        "replay-executable-pinned-fabrication-release",
+        help=(
+            "freshly reassess one v1.478 release subject with externally pinned "
+            "native entrypoint bytes"
+        ),
+    )
+    executable_pinned_release.add_argument("input_board", type=Path)
+    executable_pinned_release.add_argument("routed_board", type=Path)
+    executable_pinned_release.add_argument(
+        "--convergence-report", type=Path, required=True, metavar="REPORT"
+    )
+    executable_pinned_release.add_argument(
+        "--routing-verification-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    executable_pinned_release.add_argument(
+        "--manufacturing-package", type=Path, required=True, metavar="ZIP"
+    )
+    executable_pinned_release.add_argument(
+        "--routing-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    executable_pinned_release.add_argument(
+        "--native-drc-report", type=Path, required=True, metavar="REPORT"
+    )
+    executable_pinned_release.add_argument(
+        "--routing-drc-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    executable_pinned_release.add_argument(
+        "--deterministic-pipeline-plan", type=Path, required=True, metavar="PLAN"
+    )
+    executable_pinned_release.add_argument(
+        "--deterministic-pipeline-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    executable_pinned_release.add_argument(
+        "--approval", type=Path, required=True, action="append", metavar="APPROVAL"
+    )
+    executable_pinned_release.add_argument(
+        "--routing-drc-fabrication-release-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    executable_pinned_release.add_argument(
+        "--expected-policy-pack-canonical-sha256", required=True
+    )
+    executable_pinned_release.add_argument(
+        "--expected-routing-pcbex-sha256", required=True
+    )
+    executable_pinned_release.add_argument(
+        "--expected-authorization-pcbex-sha256", required=True
+    )
+    executable_pinned_release.add_argument(
+        "--expected-kicad-cli-sha256", required=True
+    )
+    executable_pinned_release.add_argument("--pcbex", default="pcbex")
+    executable_pinned_release.add_argument("--authorization-pcbex", default="pcbex")
+    executable_pinned_release.add_argument("--kicad-cli", default="kicad-cli")
+    executable_pinned_release.add_argument("--kicad-project", type=Path)
+    executable_pinned_release.add_argument("--kicad-rules", type=Path)
+    executable_pinned_release.add_argument("--grid-mm", type=float, default=0.25)
+    executable_pinned_release.add_argument("--width-mm", type=float, default=0.25)
+    executable_pinned_release.add_argument(
+        "--clearance-mm", type=float, default=0.20
+    )
+    executable_pinned_release.add_argument(
+        "--via-diameter-mm", type=float, default=0.60
+    )
+    executable_pinned_release.add_argument(
+        "--via-drill-mm", type=float, default=0.30
+    )
+    executable_pinned_release.add_argument("--bend-cost", type=int, default=5)
+    executable_pinned_release.add_argument("--via-cost", type=int, default=20)
+    executable_pinned_profiles = (
+        executable_pinned_release.add_mutually_exclusive_group()
+    )
+    executable_pinned_profiles.add_argument("--fab")
+    executable_pinned_profiles.add_argument("--fab-profile", type=Path)
+    executable_pinned_profiles.add_argument("--physical-profile", type=Path)
+    executable_pinned_release.add_argument(
+        "--timeout-seconds", type=float, default=300.0
+    )
+    executable_pinned_release.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    executable_pinned_release.add_argument(
+        "--require-authorized",
+        action="store_true",
+        help="fail only after retaining a valid digest-pinned release that is not authorized",
+    )
+    executable_pinned_release_schema = sub.add_parser(
+        "executable-pinned-fabrication-release-report-schema",
+        help="write the closed executable-pinned fabrication-release JSON Schema",
+    )
+    executable_pinned_release_schema.add_argument("-o", "--output", type=Path)
     procurement_intent = sub.add_parser(
         "build-procurement-intent",
         help="bind one exact final BOM to fully replayed catalog SKU selections",
@@ -2733,6 +2846,109 @@ def main() -> None:
         ) as error:
             raise SystemExit(
                 f"routing/DRC/fabrication release schema failed: {error}"
+            ) from None
+    elif args.command == "replay-executable-pinned-fabrication-release":
+        try:
+            frozen_output = _preflight_routing_manufacturing_output(
+                args.output,
+                (
+                    args.input_board,
+                    args.routed_board,
+                    args.convergence_report,
+                    args.routing_verification_report,
+                    args.manufacturing_package,
+                    args.routing_manufacturing_handoff_report,
+                    args.native_drc_report,
+                    args.routing_drc_manufacturing_handoff_report,
+                    args.deterministic_pipeline_plan,
+                    args.deterministic_pipeline_report,
+                    args.routing_drc_fabrication_release_report,
+                    args.kicad_project,
+                    args.kicad_rules,
+                    args.fab_profile,
+                    args.physical_profile,
+                    *args.approval,
+                ),
+                label="executable-pinned fabrication release",
+            )
+            result = evaluate_executable_pinned_fabrication_release(
+                args.input_board,
+                args.routed_board,
+                args.convergence_report,
+                args.routing_verification_report,
+                args.manufacturing_package,
+                args.routing_manufacturing_handoff_report,
+                args.native_drc_report,
+                args.routing_drc_manufacturing_handoff_report,
+                args.deterministic_pipeline_plan,
+                args.deterministic_pipeline_report,
+                args.approval,
+                args.routing_drc_fabrication_release_report,
+                args.expected_policy_pack_canonical_sha256,
+                args.expected_routing_pcbex_sha256,
+                args.expected_authorization_pcbex_sha256,
+                args.expected_kicad_cli_sha256,
+                args.pcbex,
+                args.authorization_pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                grid_mm=args.grid_mm,
+                width_mm=args.width_mm,
+                clearance_mm=args.clearance_mm,
+                via_diameter_mm=args.via_diameter_mm,
+                via_drill_mm=args.via_drill_mm,
+                bend_cost=args.bend_cost,
+                via_cost=args.via_cost,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_executable_pinned_fabrication_release_report(result)
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_EXECUTABLE_PINNED_FABRICATION_RELEASE_REPORT_BYTES,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            ExecutablePinnedFabricationReleaseError,
+        ) as error:
+            raise SystemExit(
+                f"executable-pinned fabrication release replay failed: {error}"
+            ) from None
+        if args.require_authorized and not result["release_authorized"]:
+            raise SystemExit(
+                "executable-pinned fabrication release report was retained but is not authorized"
+            )
+    elif args.command == "executable-pinned-fabrication-release-report-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    executable_pinned_fabrication_release_report_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (
+            OSError,
+            BoundedIOError,
+            ExecutablePinnedFabricationReleaseError,
+        ) as error:
+            raise SystemExit(
+                f"executable-pinned fabrication release schema failed: {error}"
             ) from None
     elif args.command == "build-procurement-intent":
         try:

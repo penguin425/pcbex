@@ -67,6 +67,13 @@ from .routing_drc_fabrication_release import (
     render_routing_drc_fabrication_release_report,
     routing_drc_fabrication_release_report_json_schema,
 )
+from .executable_pinned_fabrication_release import (
+    MAXIMUM_EXECUTABLE_PINNED_FABRICATION_RELEASE_REPORT_BYTES,
+    ExecutablePinnedFabricationReleaseError,
+    evaluate_executable_pinned_fabrication_release,
+    executable_pinned_fabrication_release_report_json_schema,
+    render_executable_pinned_fabrication_release_report,
+)
 from .deterministic_pipeline_replay import (
     DeterministicPipelineReplayError,
     deterministic_pipeline_replay_result_json_schema,
@@ -161,6 +168,7 @@ __all__ = [
     "RoutingManufacturingHandoffError",
     "RoutingDrcManufacturingHandoffError",
     "RoutingDrcFabricationReleaseError",
+    "ExecutablePinnedFabricationReleaseError",
     "ProcurementIntentError",
     "AssemblyEvidenceError",
     "AssemblySupplierOfferEvidenceError",
@@ -171,6 +179,7 @@ __all__ = [
     "MAXIMUM_ROUTING_MANUFACTURING_HANDOFF_REPORT_BYTES",
     "MAXIMUM_ROUTING_DRC_MANUFACTURING_HANDOFF_REPORT_BYTES",
     "MAXIMUM_ROUTING_DRC_FABRICATION_RELEASE_REPORT_BYTES",
+    "MAXIMUM_EXECUTABLE_PINNED_FABRICATION_RELEASE_REPORT_BYTES",
     "MAXIMUM_PROCUREMENT_AUTHORIZATION_REPORT_BYTES",
     "MAXIMUM_PROCUREMENT_POLICY_PACK_BYTES",
     "MAXIMUM_SIGNED_PROCUREMENT_APPROVAL_BYTES",
@@ -193,6 +202,7 @@ __all__ = [
     "routing_manufacturing_handoff_report_json_schema",
     "routing_drc_manufacturing_handoff_report_json_schema",
     "routing_drc_fabrication_release_report_json_schema",
+    "executable_pinned_fabrication_release_report_json_schema",
     "provider_receipt_json_schema",
     "procurement_intent_json_schema",
     "assembly_evidence_json_schema",
@@ -225,6 +235,7 @@ __all__ = [
     "evaluate_routing_manufacturing_handoff",
     "evaluate_routing_drc_manufacturing_handoff",
     "evaluate_routing_drc_fabrication_release",
+    "evaluate_executable_pinned_fabrication_release",
     "evaluate_procurement_intent",
     "evaluate_assembly_evidence",
     "evaluate_assembly_supplier_offer_evidence",
@@ -251,6 +262,7 @@ __all__ = [
     "render_routing_manufacturing_handoff_report",
     "render_routing_drc_manufacturing_handoff_report",
     "render_routing_drc_fabrication_release_report",
+    "render_executable_pinned_fabrication_release_report",
     "sign_procurement_approval",
     "validate_circuit_handoff_archive",
     "validate_circuit_generation_bundle",

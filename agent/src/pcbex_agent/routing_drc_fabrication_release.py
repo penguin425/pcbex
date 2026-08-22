@@ -46,6 +46,9 @@ DEFAULT_TIMEOUT_SECONDS = 300.0
 _REPORT_BINDING_DOMAIN = (
     b"pcbex:fresh-exact-routing-drc-fabrication-release:v1\0"
 )
+_RETAINED_REPLAY_SUBJECT_DOMAIN = (
+    b"pcbex:routing-drc-fabrication-release:retained-replay-subject:v1\0"
+)
 _HEX = frozenset("0123456789abcdef")
 
 _REPORT_KEYS = (
@@ -1066,6 +1069,49 @@ def _normalize_report(value: Any) -> dict[str, Any]:
     return normalized
 
 
+def _retained_replay_subject(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the time-invariant subject shared by retained and fresh reports."""
+
+    normalized = _normalize_report(deepcopy(value))
+    fabrication = normalized["fabrication_authorization"]
+    return {
+        "schema_version": normalized["schema_version"],
+        "verification_scope": normalized["verification_scope"],
+        "sources": deepcopy(normalized["sources"]),
+        "routing_drc_manufacturing": deepcopy(
+            normalized["routing_drc_manufacturing"]
+        ),
+        "fabrication_authorization": {
+            key: deepcopy(fabrication[key])
+            for key in (
+                "schema_version",
+                "approvals",
+                "rejections",
+                "scope",
+                "pipeline",
+                "manufacturing_package",
+                "factory_receipt",
+                "policy_pack",
+                "quote_authenticity_verified",
+                "challenge_one_time_use_enforced",
+            )
+        },
+        "policy_pin": deepcopy(normalized["policy_pin"]),
+    }
+
+
+def _retained_replay_subject_sha256(value: Mapping[str, Any]) -> str:
+    try:
+        canonical = json.dumps(
+            _retained_replay_subject(value),
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        raise _fail("retained release replay subject is invalid") from None
+    return _sha256(_RETAINED_REPLAY_SUBJECT_DOMAIN + canonical)
+
+
 def _evaluate_impl(
     input_board: str | os.PathLike[str],
     routed_board: str | os.PathLike[str],
@@ -1098,12 +1144,24 @@ def _evaluate_impl(
     timeout_seconds: float,
     _clock: Callable[[], float],
     _root: str,
+    _retained_outer: str | os.PathLike[str] | None = None,
+    _command_observer: Callable[
+        [tuple[str, ...], tuple[str, ...], str],
+        tuple[tuple[str, ...], tuple[str, ...], str],
+    ]
+    | None = None,
+    _retained_outer_subject_only: bool = False,
+    _retained_outer_capture: list[tuple[str, bytes]] | None = None,
 ) -> dict[str, Any]:
     if sum(source is not None for source in (fab, fab_profile, physical_profile)) > 1:
         raise _fail("manufacturing profile selections are mutually exclusive")
     expected_policy_digest = _digest(
         expected_policy_pack_canonical_sha256, "expected policy pack digest"
     )
+    if _retained_outer_capture is not None and (
+        type(_retained_outer_capture) is not list or _retained_outer_capture
+    ):
+        raise _fail("retained outer capture sink is invalid")
 
     caller_sources: list[tuple[str | Path, bytes, int, str]] = []
     top_level_paths: list[tuple[str, str]] = []
@@ -1244,6 +1302,40 @@ def _evaluate_impl(
         approval_values_parsed.append(
             _strict_object(raw, f"signed fabrication approval {index}")
         )
+    retained_outer_raw: bytes | None = None
+    retained_outer_value: dict[str, Any] | None = None
+    retained_outer_source: str | None = None
+    if _retained_outer is not None:
+        retained_outer_source, retained_outer_raw = capture(
+            _retained_outer,
+            MAXIMUM_ROUTING_DRC_FABRICATION_RELEASE_REPORT_BYTES,
+            "retained routing/DRC/fabrication release report",
+        )
+        try:
+            retained_outer_value = _normalize_report(
+                _strict_object(
+                    retained_outer_raw,
+                    "retained routing/DRC/fabrication release report",
+                )
+            )
+            if (
+                render_routing_drc_fabrication_release_report(retained_outer_value)
+                != retained_outer_raw
+            ):
+                raise _fail(
+                    "retained routing/DRC/fabrication release report is not canonical"
+                )
+        except RoutingDrcFabricationReleaseError:
+            raise
+        except Exception:
+            raise _fail(
+                "retained routing/DRC/fabrication release report is invalid"
+            ) from None
+        if _retained_outer_capture is not None:
+            _retained_outer_capture.append(
+                (retained_outer_source, bytes(retained_outer_raw))
+            )
+
     _reject_aliases(top_level_paths)
     for approval_path, _raw in approval_sources:
         for internal_path, _expected, _maximum, _label in (
@@ -1278,7 +1370,10 @@ def _evaluate_impl(
             pipeline_capture.staged_sources
         )
     )
-    if total_input > MAXIMUM_TOTAL_INPUT_BYTES:
+    maximum_total_input = MAXIMUM_TOTAL_INPUT_BYTES
+    if retained_outer_raw is not None:
+        maximum_total_input += MAXIMUM_ROUTING_DRC_FABRICATION_RELEASE_REPORT_BYTES
+    if total_input > maximum_total_input:
         raise _fail("routing/DRC/fabrication release inputs exceed their aggregate bound")
 
     try:
@@ -1295,6 +1390,28 @@ def _evaluate_impl(
         raise
     except Exception:
         raise _fail("release verification command is invalid") from None
+    if _command_observer is not None:
+        observed = _guard_cwd(
+            _root,
+            _command_observer,
+            tuple(routing_command),
+            tuple(authorization_command),
+            kicad_argument,
+        )
+        if (
+            type(observed) is not tuple
+            or len(observed) != 3
+            or type(observed[0]) is not tuple
+            or type(observed[1]) is not tuple
+            or type(observed[2]) is not str
+            or not observed[0]
+            or not observed[1]
+            or any(type(item) is not str or not item for item in observed[0])
+            or any(type(item) is not str or not item for item in observed[1])
+            or not observed[2]
+        ):
+            raise _fail("release verification command observer returned invalid commands")
+        routing_command, authorization_command, kicad_argument = observed
     protected_paths = [path for _label, path in top_level_paths]
     protected_paths.extend(os.fspath(path) for path, _raw, _max, _label in pipeline_capture.caller_sources)
     for candidate in (
@@ -1659,7 +1776,33 @@ def _evaluate_impl(
         "binding_sha256": "",
     }
     result["binding_sha256"] = _binding(result)
-    return _normalize_report(result)
+    normalized_result = _normalize_report(result)
+    if retained_outer_raw is not None:
+        if _retained_outer_subject_only:
+            retained_outer_value = _normalize_report(
+                _strict_object(
+                    retained_outer_raw,
+                    "retained routing/DRC/fabrication release report",
+                )
+            )
+            if _retained_replay_subject_sha256(
+                normalized_result
+            ) != _retained_replay_subject_sha256(retained_outer_value):
+                raise _fail(
+                    "fresh routing/DRC/fabrication release does not match the retained replay subject"
+                )
+        elif (
+            render_routing_drc_fabrication_release_report(normalized_result)
+            != retained_outer_raw
+        ):
+            raise _fail(
+                "fresh routing/DRC/fabrication release did not reproduce the retained report"
+            )
+        if _retained_outer_capture is not None and _retained_outer_capture != [
+            (retained_outer_source, retained_outer_raw)
+        ]:
+            raise _fail("retained outer capture changed during release replay")
+    return normalized_result
 
 
 def evaluate_routing_drc_fabrication_release(

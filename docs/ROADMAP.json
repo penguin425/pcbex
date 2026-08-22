@@ -924,6 +924,11 @@
     {
       "id": "policy-pinned-routing-drc-fabrication-release",
       "release": "v1.478.0",
+      "status": "released"
+    },
+    {
+      "id": "externally-digest-pinned-release-entrypoints",
+      "release": "v1.479.0",
       "status": "current"
     }
   ]
