@@ -189,6 +189,7 @@ mod dfm_profile_binding;
 mod fabrication_authorization;
 mod fabrication_authorization_reservation;
 mod factory;
+mod factory_receipt_attestation;
 mod final_bom;
 mod final_cpl;
 mod firmware;
@@ -280,6 +281,13 @@ use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
     factory_submission_json_schema, run_factory_feedback_loop, submit_factory_package,
     validate_manufacturing_package,
+};
+use factory_receipt_attestation::{
+    FactoryReceiptAttestationWindow, MAX_FACTORY_RECEIPT_ATTESTATION_REPORT_BYTES,
+    MAX_SIGNED_FACTORY_RECEIPT_ATTESTATION_BYTES, capture_factory_receipt_attestation_evidence,
+    factory_receipt_attestation_report_json_schema, parse_signed_factory_receipt_attestation,
+    sign_factory_receipt_attestation, signed_factory_receipt_attestation_json_schema,
+    validate_factory_receipt_attestation_signing_inputs, verify_factory_receipt_attestation,
 };
 use final_bom::{final_bom_report_json_schema, render_final_bom_report, verify_final_bom_sources};
 use final_cpl::{final_cpl_report_json_schema, render_final_cpl_report, verify_final_cpl_sources};
@@ -998,6 +1006,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
+    /// Print the closed signed factory-receipt attestation JSON Schema.
+    SignedFactoryReceiptAttestationSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory-receipt attestation report JSON Schema.
+    FactoryReceiptAttestationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
     /// Print the closed local fabrication-authorization reservation JSON Schema.
     FabricationAuthorizationReservationSchema {
         #[arg(short, long)]
@@ -1262,6 +1280,57 @@ enum Command {
         /// Echo a path-free digest-bound report summary to stdout for the MCP subprocess bridge.
         #[arg(long, hide = true)]
         mcp_echo_report_summary: bool,
+    },
+    /// Sign one exact passing factory receipt with a policy-pinned factory key.
+    SignFactoryReceiptAttestation {
+        /// Exact manufacturing package referenced by the normalized receipt.
+        manufacturing_package: CompactPath,
+        /// Exact normalized passing factory receipt.
+        #[arg(long)]
+        factory_receipt: CompactPath,
+        /// Organization policy pack containing the dedicated factory key.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Expected canonical digest supplied by protected executor configuration.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_pack_canonical_sha256: String,
+        /// Dedicated Ed25519 private key for the selected factory identity.
+        #[arg(long)]
+        private_key: CompactPath,
+        /// Factory identity selected from the pinned organization policy.
+        #[arg(long)]
+        factory_id: String,
+        /// Caller-selected stable attestation identifier.
+        #[arg(long)]
+        attestation_id: String,
+        /// Caller-generated lowercase 32-byte challenge; one-time use is external.
+        #[arg(long)]
+        challenge: String,
+        #[arg(long)]
+        issued_at_unix: u64,
+        #[arg(long)]
+        expires_at_unix: u64,
+        /// New signed attestation path; existing or aliased destinations are refused.
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify one policy-pinned factory receipt signature at the current local time.
+    VerifyFactoryReceiptAttestation {
+        manufacturing_package: CompactPath,
+        #[arg(long)]
+        factory_receipt: CompactPath,
+        #[arg(long)]
+        policy_pack: CompactPath,
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_pack_canonical_sha256: String,
+        #[arg(long)]
+        signed_attestation: CompactPath,
+        /// New verification report path; valid inactive evidence is retained before gating.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Fail after retaining the report unless the exact receipt is authenticated.
+        #[arg(long)]
+        require_authenticated: bool,
     },
     /// Durably reserve one freshly authorized fabrication challenge in a trusted local ledger.
     ReserveFabricationAuthorization {
@@ -6941,6 +7010,20 @@ fn run_cli() -> Result<()> {
                 "fabrication authorization report schema output",
             )?;
         }
+        Command::SignedFactoryReceiptAttestationSchema { output } => {
+            write_closed_schema(
+                &signed_factory_receipt_attestation_json_schema(),
+                output.as_deref(),
+                "signed factory receipt attestation schema output",
+            )?;
+        }
+        Command::FactoryReceiptAttestationReportSchema { output } => {
+            write_closed_schema(
+                &factory_receipt_attestation_report_json_schema(),
+                output.as_deref(),
+                "factory receipt attestation report schema output",
+            )?;
+        }
         Command::FabricationAuthorizationReservationSchema { output } => {
             write_closed_schema(
                 &fabrication_authorization_reservation_json_schema(),
@@ -7677,6 +7760,247 @@ fn run_cli() -> Result<()> {
             );
             if require_authorized && !fresh.report.fabrication_authorized {
                 bail!("fabrication authorization quorum did not authorize the exact scope");
+            }
+        }
+        Command::SignFactoryReceiptAttestation {
+            manufacturing_package,
+            factory_receipt,
+            policy_pack,
+            expected_policy_pack_canonical_sha256,
+            private_key,
+            factory_id,
+            attestation_id,
+            challenge,
+            issued_at_unix,
+            expires_at_unix,
+            output,
+        } => {
+            let direct_inputs: [&Path; 4] = [
+                &manufacturing_package,
+                &factory_receipt,
+                &policy_pack,
+                &private_key,
+            ];
+            let prepared = prepare_pipeline_output(&output, &direct_inputs)?;
+            let public_inputs: [(&str, &Path); 3] = [
+                ("manufacturing package", &manufacturing_package),
+                ("factory receipt", &factory_receipt),
+                ("organization policy pack", &policy_pack),
+            ];
+            reject_procurement_input_aliases(&public_inputs)?;
+            let (package_source, package_identity) = read_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                "manufacturing package",
+            )?;
+            let (receipt_source, receipt_identity) = read_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                "factory receipt",
+            )?;
+            let (policy_source, policy_identity) = read_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let (evidence, policy) = capture_factory_receipt_attestation_evidence(
+                &package_source,
+                &receipt_source,
+                &policy_source,
+                &expected_policy_pack_canonical_sha256,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let attestation = FactoryReceiptAttestationWindow {
+                attestation_id,
+                challenge,
+                issued_at_unix,
+                expires_at_unix,
+            };
+            validate_factory_receipt_attestation_signing_inputs(
+                &evidence,
+                &policy,
+                &attestation,
+                &factory_id,
+            )
+            .map_err(anyhow::Error::msg)?;
+            // The dedicated key is opened only after every public source,
+            // policy pin, scope field, and output destination has passed.
+            let secret = read_factory_receipt_private_key(
+                &private_key,
+                &public_inputs,
+                &output,
+            )?;
+            let signed = sign_factory_receipt_attestation(
+                &evidence,
+                &policy,
+                &attestation,
+                &factory_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                &package_identity,
+                "manufacturing package",
+            )?;
+            require_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                &receipt_identity,
+                "factory receipt",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                &policy_identity,
+                "organization policy pack",
+            )?;
+            reject_procurement_input_aliases(&public_inputs)?;
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&signed)?);
+            if rendered.len() as u64 > MAX_SIGNED_FACTORY_RECEIPT_ATTESTATION_BYTES {
+                bail!(
+                    "signed factory receipt attestation exceeds {} bytes",
+                    MAX_SIGNED_FACTORY_RECEIPT_ATTESTATION_BYTES
+                );
+            }
+            persist_atomic_new_file_bytes(prepared, &output, rendered.as_bytes())?;
+            eprintln!(
+                "signed factory receipt: factory={}; provider={:?}; package_sha256={}",
+                signed.factory_id,
+                signed.evidence.provider,
+                signed.evidence.manufacturing_package.sha256
+            );
+        }
+        Command::VerifyFactoryReceiptAttestation {
+            manufacturing_package,
+            factory_receipt,
+            policy_pack,
+            expected_policy_pack_canonical_sha256,
+            signed_attestation,
+            output,
+            require_authenticated,
+        } => {
+            let direct_inputs: [&Path; 4] = [
+                &manufacturing_package,
+                &factory_receipt,
+                &policy_pack,
+                &signed_attestation,
+            ];
+            let prepared = prepare_pipeline_output(&output, &direct_inputs)?;
+            let named_inputs: [(&str, &Path); 4] = [
+                ("manufacturing package", &manufacturing_package),
+                ("factory receipt", &factory_receipt),
+                ("organization policy pack", &policy_pack),
+                ("signed factory receipt attestation", &signed_attestation),
+            ];
+            reject_procurement_input_aliases(&named_inputs)?;
+            let (package_source, package_identity) = read_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                "manufacturing package",
+            )?;
+            let (receipt_source, receipt_identity) = read_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                "factory receipt",
+            )?;
+            let (policy_source, policy_identity) = read_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let (signed_source, signed_identity) = read_exact_artifact(
+                &signed_attestation,
+                MAX_SIGNED_FACTORY_RECEIPT_ATTESTATION_BYTES,
+                "signed factory receipt attestation",
+            )?;
+            let (evidence, policy) = capture_factory_receipt_attestation_evidence(
+                &package_source,
+                &receipt_source,
+                &policy_source,
+                &expected_policy_pack_canonical_sha256,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let signed = parse_signed_factory_receipt_attestation(&signed_source)
+                .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                &package_identity,
+                "manufacturing package",
+            )?;
+            require_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                &receipt_identity,
+                "factory receipt",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                &policy_identity,
+                "organization policy pack",
+            )?;
+            require_exact_artifact(
+                &signed_attestation,
+                MAX_SIGNED_FACTORY_RECEIPT_ATTESTATION_BYTES,
+                &signed_identity,
+                "signed factory receipt attestation",
+            )?;
+            reject_procurement_input_aliases(&named_inputs)?;
+            let report = verify_factory_receipt_attestation(
+                &evidence,
+                &policy,
+                &signed,
+                current_unix_seconds()?,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&report)?);
+            if rendered.len() as u64 > MAX_FACTORY_RECEIPT_ATTESTATION_REPORT_BYTES {
+                bail!(
+                    "factory receipt attestation report exceeds {} bytes",
+                    MAX_FACTORY_RECEIPT_ATTESTATION_REPORT_BYTES
+                );
+            }
+            require_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                &package_identity,
+                "manufacturing package",
+            )?;
+            require_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                &receipt_identity,
+                "factory receipt",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                &policy_identity,
+                "organization policy pack",
+            )?;
+            require_exact_artifact(
+                &signed_attestation,
+                MAX_SIGNED_FACTORY_RECEIPT_ATTESTATION_BYTES,
+                &signed_identity,
+                "signed factory receipt attestation",
+            )?;
+            reject_procurement_input_aliases(&named_inputs)?;
+            persist_atomic_new_file_bytes(prepared, &output, rendered.as_bytes())?;
+            eprintln!(
+                "factory receipt attestation: {}; factory={}; package_sha256={}",
+                if report.factory_receipt_authenticity_verified {
+                    "authenticated"
+                } else {
+                    "not authenticated"
+                },
+                report.signer.factory_id,
+                report.evidence.manufacturing_package.sha256
+            );
+            if require_authenticated && !report.factory_receipt_authenticity_verified {
+                bail!("factory receipt attestation is not active under the pinned policy");
             }
         }
         Command::ReserveFabricationAuthorization {
@@ -21478,34 +21802,53 @@ fn read_procurement_private_key(
     public_inputs: &[(&str, &Path)],
     output: &Path,
 ) -> Result<[u8; 32]> {
-    reject_procurement_path_components(path, "procurement approval private key")?;
-    let initial = fs::symlink_metadata(path).with_context(|| {
-        format!(
-            "inspecting procurement approval private key {}",
-            path.display()
-        )
-    })?;
+    read_hardened_private_key(
+        path,
+        public_inputs,
+        output,
+        "procurement approval private key",
+        "internal procurement helper output",
+    )
+}
+
+fn read_factory_receipt_private_key(
+    path: &Path,
+    public_inputs: &[(&str, &Path)],
+    output: &Path,
+) -> Result<[u8; 32]> {
+    read_hardened_private_key(
+        path,
+        public_inputs,
+        output,
+        "factory receipt attestation private key",
+        "factory receipt attestation output",
+    )
+}
+
+fn read_hardened_private_key(
+    path: &Path,
+    public_inputs: &[(&str, &Path)],
+    output: &Path,
+    description: &str,
+    output_description: &str,
+) -> Result<[u8; 32]> {
+    reject_procurement_path_components(path, description)?;
+    let initial = fs::symlink_metadata(path)
+        .with_context(|| format!("inspecting {description} {}", path.display()))?;
     if initial.file_type().is_symlink()
         || !initial.file_type().is_file()
         || procurement_metadata_is_reparse_point(&initial)
     {
         bail!(
-            "procurement approval private key must be a regular non-link file: {}",
+            "{description} must be a regular non-link file: {}",
             path.display()
         );
     }
-    let mut file = open_procurement_input_nofollow(path).with_context(|| {
-        format!(
-            "opening procurement approval private key {}",
-            path.display()
-        )
-    })?;
-    let opened = file.metadata().with_context(|| {
-        format!(
-            "inspecting opened procurement approval private key {}",
-            path.display()
-        )
-    })?;
+    let mut file = open_procurement_input_nofollow(path)
+        .with_context(|| format!("opening {description} {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .with_context(|| format!("inspecting opened {description} {}", path.display()))?;
     if !opened.file_type().is_file()
         || procurement_metadata_is_reparse_point(&opened)
         || opened.len() > 65
@@ -21513,12 +21856,12 @@ fn read_procurement_private_key(
         || !procurement_opened_path_matches(&file, path)?
     {
         bail!(
-            "procurement approval private key changed while it was being opened: {}",
+            "{description} changed while it was being opened: {}",
             path.display()
         );
     }
     #[cfg(unix)]
-    validate_procurement_private_key_unix_metadata(&opened, path)?;
+    validate_hardened_private_key_unix_metadata(&opened, path, description)?;
 
     for (label, public_path) in public_inputs {
         reject_procurement_path_components(public_path, label)?;
@@ -21538,48 +21881,31 @@ fn read_procurement_private_key(
         }
         if procurement_file_handles_match(&file, &public_file)? {
             bail!(
-                "procurement approval private key {} must not alias {label} {}",
+                "{description} {} must not alias {label} {}",
                 path.display(),
                 public_path.display()
             );
         }
         reject_procurement_path_components(public_path, label)?;
     }
-    reject_procurement_private_key_output_alias(&file, path, output)?;
+    reject_hardened_private_key_output_alias(&file, path, output, description, output_description)?;
 
     let mut source = Vec::with_capacity(opened.len() as usize);
     Read::by_ref(&mut file)
         .take(66)
         .read_to_end(&mut source)
-        .with_context(|| {
-            format!(
-                "reading procurement approval private key {}",
-                path.display()
-            )
-        })?;
+        .with_context(|| format!("reading {description} {}", path.display()))?;
     invoke_after_procurement_private_key_first_read_hook();
-    file.seek(SeekFrom::Start(0)).with_context(|| {
-        format!(
-            "rewinding procurement approval private key {}",
-            path.display()
-        )
-    })?;
+    file.seek(SeekFrom::Start(0))
+        .with_context(|| format!("rewinding {description} {}", path.display()))?;
     let mut compared = Vec::with_capacity(source.len());
     Read::by_ref(&mut file)
         .take(66)
         .read_to_end(&mut compared)
-        .with_context(|| {
-            format!(
-                "re-reading procurement approval private key {}",
-                path.display()
-            )
-        })?;
-    let after = file.metadata().with_context(|| {
-        format!(
-            "rechecking opened procurement approval private key {}",
-            path.display()
-        )
-    })?;
+        .with_context(|| format!("re-reading {description} {}", path.display()))?;
+    let after = file
+        .metadata()
+        .with_context(|| format!("rechecking opened {description} {}", path.display()))?;
     if source != compared
         || source.len() as u64 != opened.len()
         || after.len() != opened.len()
@@ -21588,33 +21914,35 @@ fn read_procurement_private_key(
         || !procurement_opened_path_matches(&file, path)?
     {
         bail!(
-            "procurement approval private key identity or contents changed while it was being read: {}",
+            "{description} identity or contents changed while it was being read: {}",
             path.display()
         );
     }
     #[cfg(unix)]
-    validate_procurement_private_key_unix_metadata(&after, path)?;
-    reject_procurement_path_components(path, "procurement approval private key")?;
-    reject_procurement_private_key_output_alias(&file, path, output)?;
+    validate_hardened_private_key_unix_metadata(&after, path, description)?;
+    reject_procurement_path_components(path, description)?;
+    reject_hardened_private_key_output_alias(&file, path, output, description, output_description)?;
 
     let encoded = match source.as_slice() {
         value if value.len() == 64 => value,
         value if value.len() == 65 && value[64] == b'\n' => &value[..64],
         _ => bail!(
-            "procurement approval private key must contain exactly 64 lowercase hexadecimal digits and at most one trailing LF"
+            "{description} must contain exactly 64 lowercase hexadecimal digits and at most one trailing LF"
         ),
     };
-    let value = std::str::from_utf8(encoded)
-        .context("decoding procurement approval private key as UTF-8")?;
-    decode_hex_key(value, "procurement approval private key")
+    let value =
+        std::str::from_utf8(encoded).with_context(|| format!("decoding {description} as UTF-8"))?;
+    decode_hex_key(value, description)
 }
 
-fn reject_procurement_private_key_output_alias(
+fn reject_hardened_private_key_output_alias(
     private_key: &fs::File,
     private_key_path: &Path,
     output: &Path,
+    description: &str,
+    output_description: &str,
 ) -> Result<()> {
-    reject_procurement_path_components(output, "internal procurement helper output")?;
+    reject_procurement_path_components(output, output_description)?;
     match fs::symlink_metadata(output) {
         Ok(metadata) => {
             if metadata.file_type().is_symlink()
@@ -21622,7 +21950,7 @@ fn reject_procurement_private_key_output_alias(
                 || procurement_metadata_is_reparse_point(&metadata)
             {
                 bail!(
-                    "internal procurement helper output became a non-regular or linked path: {}",
+                    "{output_description} became a non-regular or linked path: {}",
                     output.display()
                 );
             }
@@ -21630,19 +21958,19 @@ fn reject_procurement_private_key_output_alias(
                 .with_context(|| format!("opening raced output {}", output.display()))?;
             if !procurement_opened_path_matches(&output_file, output)? {
                 bail!(
-                    "internal procurement helper output changed while checking private-key alias: {}",
+                    "{output_description} changed while checking private-key alias: {}",
                     output.display()
                 );
             }
             if procurement_file_handles_match(private_key, &output_file)? {
                 bail!(
-                    "procurement approval private key {} must not alias output {}",
+                    "{description} {} must not alias output {}",
                     private_key_path.display(),
                     output.display()
                 );
             }
             bail!(
-                "internal procurement helper output appeared before publication: {}",
+                "{output_description} appeared before publication: {}",
                 output.display()
             );
         }
@@ -21651,15 +21979,11 @@ fn reject_procurement_private_key_output_alias(
             return Err(error).with_context(|| format!("inspecting output {}", output.display()));
         }
     }
-    let canonical_key = fs::canonicalize(private_key_path).with_context(|| {
-        format!(
-            "resolving procurement approval private key {}",
-            private_key_path.display()
-        )
-    })?;
+    let canonical_key = fs::canonicalize(private_key_path)
+        .with_context(|| format!("resolving {description} {}", private_key_path.display()))?;
     if destinations_alias(&canonical_key, &normalize_destination(output)?) {
         bail!(
-            "procurement approval private key {} must not alias output {}",
+            "{description} {} must not alias output {}",
             private_key_path.display(),
             output.display()
         );
@@ -21668,9 +21992,10 @@ fn reject_procurement_private_key_output_alias(
 }
 
 #[cfg(unix)]
-fn validate_procurement_private_key_unix_metadata(
+fn validate_hardened_private_key_unix_metadata(
     metadata: &fs::Metadata,
     path: &Path,
+    description: &str,
 ) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
 
@@ -21678,14 +22003,14 @@ fn validate_procurement_private_key_unix_metadata(
     let effective_uid = unsafe { geteuid() };
     if metadata.uid() != effective_uid {
         bail!(
-            "procurement approval private key must be owned by effective user {effective_uid}: {}",
+            "{description} must be owned by effective user {effective_uid}: {}",
             path.display()
         );
     }
     let mode = metadata.mode() & 0o777;
     if !matches!(mode, 0o400 | 0o600) {
         bail!(
-            "procurement approval private key permissions must be 0400 or 0600, not {mode:04o}: {}",
+            "{description} permissions must be 0400 or 0600, not {mode:04o}: {}",
             path.display()
         );
     }
@@ -22714,6 +23039,68 @@ mod tests {
             .join()
             .unwrap();
         assert!(!help.contains("mcp-echo-report-summary"));
+    }
+
+    #[test]
+    fn parses_factory_receipt_attestation_commands() {
+        let digest = "a".repeat(64);
+        let challenge = "b".repeat(64);
+        let signed = parse_cli(&[
+            "pcbex",
+            "sign-factory-receipt-attestation",
+            "manufacturing.zip",
+            "--factory-receipt",
+            "receipt.json",
+            "--policy-pack",
+            "policy.json",
+            "--expected-policy-pack-canonical-sha256",
+            &digest,
+            "--private-key",
+            "factory.key",
+            "--factory-id",
+            "factory-a",
+            "--attestation-id",
+            "receipt-1",
+            "--challenge",
+            &challenge,
+            "--issued-at-unix",
+            "100",
+            "--expires-at-unix",
+            "200",
+            "--output",
+            "attestation.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *signed.command,
+            Command::SignFactoryReceiptAttestation { factory_id, .. }
+                if factory_id == "factory-a"
+        ));
+
+        let verified = parse_cli(&[
+            "pcbex",
+            "verify-factory-receipt-attestation",
+            "manufacturing.zip",
+            "--factory-receipt",
+            "receipt.json",
+            "--policy-pack",
+            "policy.json",
+            "--expected-policy-pack-canonical-sha256",
+            &digest,
+            "--signed-attestation",
+            "attestation.json",
+            "--output",
+            "report.json",
+            "--require-authenticated",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *verified.command,
+            Command::VerifyFactoryReceiptAttestation {
+                require_authenticated: true,
+                ..
+            }
+        ));
     }
 
     #[test]

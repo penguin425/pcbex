@@ -192,6 +192,7 @@ auditable release.
 | v1.477.0 | Fresh routing/native-DRC/manufacturing handoff | Freshly reproduce the exact retained v1.476 handoff, replay one retained normalized native KiCad DRC report against the same routed board and companions, and retain routing-incomplete or DRC-rejected evidence before a ready gate while keeping manufacturability, fabrication approval, and release authority false |
 | v1.478.0 | Policy-pinned routing/DRC fabrication release | Freshly reproduce one exact v1.477 handoff, require the same package in a factory-required pipeline, and cross-check a dedicated fabrication quorum against an externally expected canonical policy digest before a conjunctive offline release decision, without claiming tool, policy, receipt, or source authenticity, external submission, capacity, ordering, payment, or one-time use |
 | v1.479.0 | Externally digest-pinned release entrypoints | Freshly reassess the stable evidence, scope, policy, and approval subject of one canonical retained v1.478 release while requiring the resolved routing pcbex, authorization pcbex, and KiCad CLI native entrypoint bytes to match three independent deployment-supplied SHA-256 pins; retain the fresh point-in-time decision and path-free executable observations without claiming historical-decision reuse, binary origin, signatures, libraries, plugins, loader state, sandboxing, source authenticity, external submission, capacity, ordering, or payment |
+| v1.480.0 | Policy-pinned signed factory-receipt release | Bind one exact normalized accepted factory receipt and manufacturing package to a dedicated role-disjoint Ed25519 factory key selected by an externally pinned organization policy, then freshly replay the complete executable-pinned v1.479 subject around signature verification before retaining an authenticated or valid negative release snapshot without claiming legal identity, TLS or raw-response authenticity, trusted time, capacity reservation, ordering, or payment |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1609,7 +1610,7 @@ payment, and one-time challenge use remain false. The result is a sequential
 point-in-time offline snapshot, not an atomic filesystem transaction or an
 external factory action.
 
-The current v1.479.0 milestone adds a separate strict consumer for the v1.478
+The released v1.479.0 milestone adds a separate strict consumer for the v1.478
 boundary. It captures the complete v1.478 closure and retained outer
 report before selected tools run, resolves the routing pcbex, authorization
 pcbex, and KiCad CLI commands to absolute native entrypoints, and requires each
@@ -1644,3 +1645,29 @@ built or distributed them, attest signatures, libraries, loaders, plugins,
 environment or operating-system state, defeat an independently concurrent
 same-principal writer, provide a sandbox, prove manufacturability, contact a
 factory, reserve capacity, submit files, place an order, or perform payment.
+
+The current v1.480.0 milestone authenticates the exact normalized factory
+receipt already selected by that release. A dedicated optional organization
+policy role binds each factory ID to one provider and one non-weak Ed25519 key;
+the caller must independently pin the policy's canonical SHA-256. The signed
+payload covers the manufacturing-package and receipt identities, normalized
+receipt projection, raw and canonical policy identities, factory ID,
+attestation ID, 64-hex challenge, and bounded validity window.
+
+Rust owns public-evidence validation, hardened private-key access, strict
+signature verification, policy matching, and the point-in-time attestation
+report. Python captures the complete v1.479 closure, freshly replays its stable
+subject before and after the digest-pinned Rust verifier, cross-binds the same
+package, receipt, and policy, requires the receipt assessment instant to lie
+inside the fabrication-authorization window, and publishes one closed path-free outer report.
+An inactive signature or negative v1.479 decision remains inspectable before
+the optional final gate; malformed, mismatched, unpinned, invalidly signed,
+aliased, changed, or unreplayable evidence produces no outer report.
+
+Only `factory_receipt_authenticity_verified` and the conjunctive outer
+`release_authenticated` decision can become true. They authenticate the
+configured signing key over the exact normalized receipt—not a legal factory,
+TLS session, raw response, trusted clock, current capacity, source or toolchain
+provenance, external submission, inventory or capacity reservation, order,
+payment, or one-time challenge use. A side-effecting executor remains a later,
+separately credentialed and durably idempotent boundary.

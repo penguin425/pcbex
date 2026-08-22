@@ -40,6 +40,21 @@ pub struct ProcurementAuthorizationPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TrustedFactoryReceiptKey {
+    pub factory_id: String,
+    pub provider: String,
+    pub public_key: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactoryReceiptAttestationPolicy {
+    pub maximum_validity_seconds: u64,
+    pub trusted_keys: Vec<TrustedFactoryReceiptKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrganizationPolicyPack {
     pub schema_version: u32,
     pub id: String,
@@ -57,6 +72,8 @@ pub struct OrganizationPolicyPack {
     pub fabrication_authorization_policy: Option<FabricationAuthorizationPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub procurement_authorization_policy: Option<ProcurementAuthorizationPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_receipt_attestation_policy: Option<FactoryReceiptAttestationPolicy>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -325,6 +342,72 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
                         .into(),
                 );
             }
+            assigned_signers.insert(&trusted.signer_id);
+            assigned_keys.insert(&trusted.public_key);
+        }
+    }
+    if let Some(policy) = &pack.factory_receipt_attestation_policy {
+        if !(1..=604_800).contains(&policy.maximum_validity_seconds) {
+            return Err(
+                "factory receipt attestation maximum_validity_seconds must be between 1 and 604800"
+                    .into(),
+            );
+        }
+        if !(1..=100).contains(&policy.trusted_keys.len()) {
+            return Err(
+                "factory receipt attestation trusted_keys must contain 1 to 100 entries".into(),
+            );
+        }
+        let mut factory_ids = HashSet::new();
+        let mut factory_keys = HashSet::new();
+        for trusted in &policy.trusted_keys {
+            validate_slug("trusted factory receipt signer id", &trusted.factory_id)?;
+            if !matches!(trusted.provider.as_str(), "jlcpcb" | "pcbway" | "generic") {
+                return Err(
+                    "trusted factory receipt provider must be one of jlcpcb, pcbway, or generic"
+                        .into(),
+                );
+            }
+            validate_public_key(&trusted.public_key)?;
+            let public_key = hex_decode_array::<32>(
+                &trusted.public_key,
+                "trusted factory receipt attestation public key",
+            )?;
+            let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|error| {
+                format!(
+                    "invalid trusted factory receipt attestation public key for factory {:?}: {error}",
+                    trusted.factory_id
+                )
+            })?;
+            if verifying_key.is_weak() {
+                return Err(format!(
+                    "weak trusted factory receipt attestation public key for factory {:?}",
+                    trusted.factory_id
+                ));
+            }
+            if !factory_ids.insert(&trusted.factory_id) {
+                return Err(format!(
+                    "duplicate trusted factory receipt signer id {:?}",
+                    trusted.factory_id
+                ));
+            }
+            if assigned_signers.contains(&trusted.factory_id) {
+                return Err(format!(
+                    "signer {:?} cannot hold both factory receipt attestation and another trust role",
+                    trusted.factory_id
+                ));
+            }
+            if !factory_keys.insert(&trusted.public_key) {
+                return Err("duplicate trusted factory receipt attestation public key".into());
+            }
+            if assigned_keys.contains(&trusted.public_key) {
+                return Err(
+                    "a public key cannot hold factory receipt attestation and another trust role"
+                        .into(),
+                );
+            }
+            assigned_signers.insert(&trusted.factory_id);
+            assigned_keys.insert(&trusted.public_key);
         }
     }
     Ok(())
@@ -626,6 +709,27 @@ pub fn policy_pack_json_schema() -> Value {
                         }
                     }
                 }
+            },
+            "factory_receipt_attestation_policy": {
+                "type": "object", "additionalProperties": false,
+                "required": ["maximum_validity_seconds", "trusted_keys"],
+                "properties": {
+                    "maximum_validity_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 604800
+                    },
+                    "trusted_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["factory_id", "provider", "public_key"],
+                            "properties": {
+                                "factory_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                                "provider": {"enum": ["jlcpcb", "pcbway", "generic"]},
+                                "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                            }
+                        }
+                    }
+                }
             }
         }
     })
@@ -768,6 +872,7 @@ mod tests {
         assert!(pack.require_simulation_evidence);
         assert!(pack.fabrication_authorization_policy.is_none());
         assert!(pack.procurement_authorization_policy.is_none());
+        assert!(pack.factory_receipt_attestation_policy.is_none());
         assert!(
             !serde_json::to_string(&pack)
                 .unwrap()
@@ -777,6 +882,11 @@ mod tests {
             !serde_json::to_string(&pack)
                 .unwrap()
                 .contains("procurement_authorization_policy")
+        );
+        assert!(
+            !serde_json::to_string(&pack)
+                .unwrap()
+                .contains("factory_receipt_attestation_policy")
         );
     }
 
@@ -836,6 +946,15 @@ mod tests {
                 ["items"]["additionalProperties"],
             false
         );
+        assert_eq!(
+            schema["properties"]["factory_receipt_attestation_policy"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["factory_receipt_attestation_policy"]["properties"]["trusted_keys"]
+                ["items"]["additionalProperties"],
+            false
+        );
         assert!(
             !schema["required"]
                 .as_array()
@@ -849,6 +968,106 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|field| field == "procurement_authorization_policy")
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "factory_receipt_attestation_policy")
+        );
+    }
+
+    #[test]
+    fn validates_factory_receipt_attestation_policy_and_role_separation() {
+        let mut pack = sample();
+        pack.factory_receipt_attestation_policy = Some(FactoryReceiptAttestationPolicy {
+            maximum_validity_seconds: 3_600,
+            trusted_keys: vec![TrustedFactoryReceiptKey {
+                factory_id: "factory-a".into(),
+                provider: "generic".into(),
+                public_key: hex::encode(
+                    SigningKey::from_bytes(&[71; 32]).verifying_key().to_bytes(),
+                ),
+            }],
+        });
+        validate_policy_pack(&pack).unwrap();
+        assert_eq!(
+            parse_policy_pack(&serde_json::to_string(&pack).unwrap()).unwrap(),
+            pack
+        );
+
+        pack.factory_receipt_attestation_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .provider = "unknown".into();
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("provider must be one of")
+        );
+        let ai_signer = pack.trusted_approval_keys[0].signer_id.clone();
+        pack.factory_receipt_attestation_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .provider = "generic".into();
+        pack.factory_receipt_attestation_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .factory_id = ai_signer;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
+        );
+
+        let procurement_key =
+            hex::encode(SigningKey::from_bytes(&[72; 32]).verifying_key().to_bytes());
+        pack.procurement_authorization_policy = Some(ProcurementAuthorizationPolicy {
+            minimum_approvals: 2,
+            currency: "USD".into(),
+            maximum_validity_seconds: 3_600,
+            maximum_receipt_observation_age_seconds: 300,
+            maximum_component_subtotal_micros: 5_000_000,
+            trusted_keys: vec![
+                TrustedApprovalKey {
+                    signer_id: "procurement-factory-shared".into(),
+                    public_key: procurement_key.clone(),
+                },
+                TrustedApprovalKey {
+                    signer_id: "procurement-other".into(),
+                    public_key: hex::encode(
+                        SigningKey::from_bytes(&[73; 32]).verifying_key().to_bytes(),
+                    ),
+                },
+            ],
+        });
+        let trusted = &mut pack
+            .factory_receipt_attestation_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0];
+        trusted.factory_id = "factory-a".into();
+        trusted.public_key = procurement_key;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
+        );
+
+        pack.procurement_authorization_policy = None;
+        pack.factory_receipt_attestation_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .public_key = format!("01{}", "00".repeat(31));
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("weak trusted factory receipt attestation public key")
         );
     }
 

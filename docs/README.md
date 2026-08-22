@@ -58,6 +58,10 @@ boundary document for the artifact you plan to produce or trust.
   — freshly reassess that release subject while matching three selected native
   entrypoint files to deployment-owned SHA-256 pins.
 
+- [Signed Factory-receipt Release](SIGNED_FACTORY_RECEIPT_RELEASE.md) — bind the
+  exact normalized factory receipt to a dedicated policy-pinned Ed25519 key and
+  freshly replay the executable-pinned release before authentication.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

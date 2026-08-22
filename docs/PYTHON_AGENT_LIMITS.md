@@ -495,6 +495,7 @@ limit before network access.
 | Fresh routing/native-DRC/manufacturing handoff (`replay-routing-drc-manufacturing-handoff`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.476 replay receives half of the remaining budget, then native DRC preserves up to 15 seconds or half of its remaining interval | closed | 64 KiB for routing/native DRC; 1 MiB for manufacturing | 1 MiB per child |
 | Policy-pinned routing/DRC fabrication release (`replay-routing-drc-fabrication-release`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.477 replay receives half of the remaining budget, then fabrication authorization reserves up to 30 seconds or half of its remaining interval | closed | 64 KiB fabrication summary; nested routing/manufacturing limits remain unchanged | 1 MiB for fabrication; nested child limits remain unchanged |
 | Executable-pinned fabrication release (`replay-executable-pinned-fabrication-release`) | reuses the complete v1.478 aggregate deadline, finite `0 < seconds <= 600`; default 300; entrypoint capture occurs after the evidence closure and before its first selected child | closed | unchanged nested v1.478 stdout limits | unchanged nested v1.478 stderr limits |
+| Signed factory-receipt release (`replay-signed-factory-receipt-release`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both v1.479 replays, receipt-attestation verification, rereads, and cleanup remain inside it | closed | 1 MiB for the Rust verifier; nested v1.479 limits remain unchanged | 1 MiB for the Rust verifier; nested v1.479 limits remain unchanged |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Dual-control procurement signing/verification (`sign-procurement-approval`, `verify-procurement-authorization`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both complete v1.470 replays, trusted authorization child, cleanup, comparison, rendering, and final rereads remain nested inside it | closed | 1 MiB per child | 1 MiB per child |
@@ -644,6 +645,23 @@ also triggers an exact entrypoint reread before execution continues. This is
 callback-driven mutation detection, not an atomic observation-to-exec lock or
 full toolchain provenance. See
 [Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md).
+
+The v1.480 signed factory-receipt consumer adds the canonical retained v1.479
+report, one 64 MiB normalized receipt, one 64 MiB organization policy pack,
+and one 1 MiB signed attestation. The resulting direct-input ceiling is 1,994
+MiB and the closed outer report is capped at 16 MiB. Only built-in `str` and
+`pathlib.Path` file inputs are accepted; arbitrary PathLike and sequence hooks
+are rejected before they can redefine the capture baseline.
+
+Python freshly replays the complete v1.479 subject, privately stages the exact
+package, receipt, policy, and attestation, then invokes the resolved and
+digest-pinned authorization pcbex without a shell. The Rust child may emit a
+4 MiB report and at most 1 MiB on either output pipe. Python verifies the
+child's binding and exact identities, reruns v1.479, rereads every staged and
+caller-visible source, and only then publishes the outer result. The same
+1–600 second aggregate monotonic deadline covers both replays, child execution,
+rereads, and cleanup. See
+[Signed Factory-receipt Release](SIGNED_FACTORY_RECEIPT_RELEASE.md).
 
 The composed v1.457 replay uses the handoff command's single outer monotonic
 deadline rather than starting a second independent authority. It covers all

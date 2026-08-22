@@ -929,6 +929,11 @@
     {
       "id": "externally-digest-pinned-release-entrypoints",
       "release": "v1.479.0",
+      "status": "released"
+    },
+    {
+      "id": "policy-pinned-signed-factory-receipt-release",
+      "release": "v1.480.0",
       "status": "current"
     }
   ]
