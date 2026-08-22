@@ -125,6 +125,7 @@ def validate_roadmap(
 
     ids: set[str] = set()
     releases: list[str] = []
+    tagged_releases: list[str] = []
     current: list[str] = []
     for milestone in milestones:
         if deadline is not None:
@@ -144,18 +145,20 @@ def validate_roadmap(
             raise AuditError(f"duplicate milestone id: {identifier}")
         ids.add(identifier)
         parse_version(release)
-        if status not in {"released", "current"}:
+        if status not in {"released", "bundled", "current"}:
             raise AuditError(f"invalid milestone status: {status!r}")
         if status == "current":
             current.append(release)
         releases.append(release)
+        if status != "bundled":
+            tagged_releases.append(release)
 
     parsed = [parse_version(release) for release in releases]
     if parsed != sorted(parsed) or len(set(parsed)) != len(parsed):
         raise AuditError("roadmap releases must be unique and strictly increasing")
     if current != [f"v{version}"] or releases[-1] != f"v{version}":
         raise AuditError("the sole current roadmap milestone must match the workspace version")
-    return releases
+    return tagged_releases
 
 
 def validate_release(

@@ -53,6 +53,20 @@ class ReleaseAuditTests(unittest.TestCase):
             ["v1.0.0", "v1.1.0"],
         )
 
+    def test_accepts_an_explicitly_bundled_milestone_without_a_tag(self):
+        roadmap = {
+            "schema_version": 1,
+            "milestones": [
+                {"id": "first", "release": "v1.0.0", "status": "released"},
+                {"id": "bundled", "release": "v1.1.0", "status": "bundled"},
+                {"id": "audit", "release": "v1.2.0", "status": "current"},
+            ],
+        }
+        self.assertEqual(
+            release_audit.validate_roadmap(roadmap, "1.2.0"),
+            ["v1.0.0", "v1.2.0"],
+        )
+
     def test_rejects_duplicate_or_mismatched_roadmaps(self):
         roadmap = self.roadmap()
         roadmap["milestones"][1]["id"] = "first"

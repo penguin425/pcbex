@@ -4,7 +4,7 @@ Prove one complete local relationship.
 
 The routed KiCad board accepted by fresh routing replay must reproduce one
 exact manufacturing ZIP and one exact normalized native KiCad DRC report. The
-v1.477 boundary composes the released v1.476 handoff with the existing native
+v1.477 boundary composes the bundled v1.476 handoff with the existing native
 DRC verifier; it does not replace either authority.
 
 ## Quick start
