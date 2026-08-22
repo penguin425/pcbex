@@ -663,6 +663,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "python -m unittest\n"
             "          agent.tests.test_routing_drc_manufacturing_handoff_v1477 -v"
         )
+        routing_drc_fabrication_release_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_routing_drc_fabrication_release_v1478 -v"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -681,6 +685,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
             document.count(routing_drc_manufacturing_handoff_command), 1
         )
         self.assertIn(routing_drc_manufacturing_handoff_command, boundaries)
+        self.assertEqual(document.count(routing_drc_fabrication_release_command), 1)
+        self.assertIn(routing_drc_fabrication_release_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
@@ -688,6 +694,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(routing_convergence_verification_command, rust_windows)
         self.assertNotIn(routing_manufacturing_handoff_command, rust_windows)
         self.assertNotIn(routing_drc_manufacturing_handoff_command, rust_windows)
+        self.assertNotIn(routing_drc_fabrication_release_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -747,6 +754,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         routing_drc_manufacturing_handoff_step = boundaries.index(
             "- name: Run cross-platform v1.477 routing-DRC-manufacturing handoff boundaries"
+        )
+        routing_drc_fabrication_release_step = boundaries.index(
+            "- name: Run cross-platform v1.478 routing-DRC fabrication-release boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -832,7 +842,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             routing_manufacturing_handoff_block,
         )
         routing_drc_manufacturing_handoff_block = boundaries[
-            routing_drc_manufacturing_handoff_step:toolchain_step
+            routing_drc_manufacturing_handoff_step:routing_drc_fabrication_release_step
         ]
         self.assertIn(
             "PYTHONPATH: agent/src", routing_drc_manufacturing_handoff_block
@@ -840,6 +850,16 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             routing_drc_manufacturing_handoff_command,
             routing_drc_manufacturing_handoff_block,
+        )
+        routing_drc_fabrication_release_block = boundaries[
+            routing_drc_fabrication_release_step:toolchain_step
+        ]
+        self.assertIn(
+            "PYTHONPATH: agent/src", routing_drc_fabrication_release_block
+        )
+        self.assertIn(
+            routing_drc_fabrication_release_command,
+            routing_drc_fabrication_release_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -860,7 +880,11 @@ class CiExecutionPolicyTests(unittest.TestCase):
             routing_manufacturing_handoff_step,
             routing_drc_manufacturing_handoff_step,
         )
-        self.assertLess(routing_drc_manufacturing_handoff_step, toolchain_step)
+        self.assertLess(
+            routing_drc_manufacturing_handoff_step,
+            routing_drc_fabrication_release_step,
+        )
+        self.assertLess(routing_drc_fabrication_release_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

@@ -170,6 +170,14 @@ Only an exact clean normalized report yields `native_kicad_drc_verified`; all
 manufacturability and authorization claims remain false. See
 [Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
 
+The Python v1.478 composer keeps both authorities separate. It reproduces the
+complete v1.477 bytes, requires the pipeline-selected package to equal the
+routing package, then invokes the explicit trusted Rust fabrication verifier
+over the captured plan, receipt, policy, and approvals. Python cross-checks the
+canonical policy pin and exact submitted approval envelopes before it can set
+the conjunctive outer release decision. See
+[Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
+
 ## Public discovery
 
 Prefer runtime discovery over copied command lists:

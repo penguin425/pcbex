@@ -190,6 +190,7 @@ auditable release.
 | v1.475.0 | Fresh exact routing convergence verification | Capture the raw JSON or KiCad routing source closure, freshly reproduce one canonical retained v1.474 convergence decision with its producer version, regenerate the selected routed artifact byte for byte, and retain a closed hash-bound complete/partial verification before an optional complete gate without claiming source authenticity, native KiCad DRC, manufacturability, or release authority |
 | v1.476.0 | Fresh routing-to-manufacturing handoff (bundled) | Freshly reproduce one exact retained v1.475 KiCad routing verification, then use the same captured routed board and sidecars to reproduce one retained manufacturing ZIP; retain incomplete routing without invoking fabrication and keep authenticity, native DRC, manufacturability, and release authority false. This contract milestone first ships inside v1.477.0 and has no standalone tag |
 | v1.477.0 | Fresh routing/native-DRC/manufacturing handoff | Freshly reproduce the exact retained v1.476 handoff, replay one retained normalized native KiCad DRC report against the same routed board and companions, and retain routing-incomplete or DRC-rejected evidence before a ready gate while keeping manufacturability, fabrication approval, and release authority false |
+| v1.478.0 | Policy-pinned routing/DRC fabrication release | Freshly reproduce one exact v1.477 handoff, require the same package in a factory-required pipeline, and cross-check a dedicated fabrication quorum against an externally expected canonical policy digest before a conjunctive offline release decision, without claiming tool, policy, receipt, or source authenticity, external submission, capacity, ordering, payment, or one-time use |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1561,7 +1562,7 @@ KiCad DRC evidence, manufacturability, fabrication approval, external
 submission, ordering, payment, and release authority remain false or outside
 scope.
 
-The current v1.477.0 milestone consumes that complete retained v1.476 report
+The released v1.477.0 milestone consumes that complete retained v1.476 report
 and one retained normalized native KiCad DRC report. One Python-owned boundary
 captures their original routing/manufacturing closure plus the DRC report under
 a 724 MiB direct-input ceiling, rejects cross-role aliases, and validates both
@@ -1582,3 +1583,27 @@ direct source, bounded child projections, eight validation flags, at most one
 gate failure, and one domain-separated digest. Source/tool authenticity,
 manufacturability, fabrication approval, external submission, ordering,
 payment, and release authority remain false or outside scope.
+
+The current v1.478.0 milestone consumes the complete v1.477 closure plus one
+factory-required deterministic pipeline plan/report and 1–100 signed
+fabrication approvals. It captures every plan-selected role and exact firmware
+entry before consuming the approval sequence, rejects approval-to-pipeline
+aliases, caps the complete union at 1,469 MiB, and requires both closures to
+name byte-identical manufacturing packages before invoking selected tools.
+
+After v1.477 reproduces exactly, the explicit trusted Rust fabrication verifier
+checks the pipeline, normalized receipt, organization policy, Ed25519
+signatures, quorum, and authorization window. Python requires the complete
+child report and compact summary to bind the captured sources, exact submitted
+approval envelopes, and a caller-supplied expected canonical policy digest.
+Only positive routing readiness and fabrication authorization together yield
+`release_authorized`; either valid negative is retained before the optional
+gate.
+
+The closed 4 MiB report keeps path-free identities, bounded projections, eight
+validation flags, stable conjunctive failures, and one domain-separated
+binding. Source, tool, policy, factory-receipt, and time authenticity,
+manufacturability, external submission, capacity reservation, ordering,
+payment, and one-time challenge use remain false. The result is a sequential
+point-in-time offline snapshot, not an atomic filesystem transaction or an
+external factory action.

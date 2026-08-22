@@ -13,6 +13,7 @@ evidence your next consumer actually needs.
 | Clean KiCad PCB | Reproducible manufacturing archive | `fabricate` |
 | Converged KiCad PCB plus retained ZIP | Fresh board-to-package evidence | routing verification → routing/manufacturing handoff |
 | Converged KiCad PCB plus retained ZIP and native DRC | Fresh clean release evidence | routing/manufacturing handoff → routing/native-DRC/manufacturing handoff |
+| Fresh clean package plus factory pipeline and approvals | Policy-pinned offline fabrication release | routing/DRC handoff → fabrication authorization → release composition |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
 | Manufacturing package | Exact BOM/CPL and procurement intent | final verifiers → procurement intent |
@@ -201,6 +202,11 @@ pcbex-agent replay-routing-drc-manufacturing-handoff \
 This promotes only the native-DRC evidence claim. Manufacturability,
 fabrication authorization, and release authority remain separate; see
 [Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
+
+When a deployment also has a factory-required pipeline, an externally expected
+canonical policy digest, and dedicated fabrication approvals, compose the
+point-in-time decision with
+[Policy-pinned Routing, DRC, and Fabrication Release](ROUTING_DRC_FABRICATION_RELEASE.md).
 
 ### Firmware evidence
 
