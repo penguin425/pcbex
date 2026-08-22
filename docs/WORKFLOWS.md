@@ -11,6 +11,8 @@ evidence your next consumer actually needs.
 | Board JSON | Routed and internally checked board | `route` → `check` |
 | Placed KiCad PCB | Routed board and optional native DRC | `route-kicad` → native DRC |
 | Clean KiCad PCB | Reproducible manufacturing archive | `fabricate` |
+| Converged KiCad PCB plus retained ZIP | Fresh board-to-package evidence | routing verification → routing/manufacturing handoff |
+| Converged KiCad PCB plus retained ZIP and native DRC | Fresh clean release evidence | routing/manufacturing handoff → routing/native-DRC/manufacturing handoff |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
 | Manufacturing package | Exact BOM/CPL and procurement intent | final verifiers → procurement intent |
@@ -160,6 +162,45 @@ The ZIP becomes meaningful only with its manifest and exact source identity.
 Review [Manufacturing Package](MANUFACTURING_PACKAGE.md), then use
 [Final CPL Verification](FINAL_CPL.md) when board placement must match the
 package exactly.
+
+When a downstream consumer must prove that the converged routed board is also
+the board that reproduces the retained ZIP, compose both fresh checks:
+
+```sh
+pcbex-agent replay-routing-manufacturing-handoff \
+  hardware/controller.kicad_pcb build/controller.routed.kicad_pcb \
+  --convergence-report build/controller.convergence.json \
+  --routing-verification-report build/controller.routing-verification.json \
+  --manufacturing-package build/manufacturing/manufacturing.zip \
+  --output build/controller.routing-manufacturing.json \
+  --require-ready
+```
+
+This is artifact-consistency evidence, not fabrication approval. Read
+[Fresh Routing-to-Manufacturing Handoff](ROUTING_MANUFACTURING_HANDOFF.md) for
+the exact closure and nonclaims.
+
+When the same handoff must also carry independently replayable normalized
+native DRC evidence, retain the DRC report and compose one more boundary:
+
+```sh
+pcbex run-native-kicad-drc build/controller.routed.kicad_pcb \
+  --output build/controller.native-drc.json --require-approved
+
+pcbex-agent replay-routing-drc-manufacturing-handoff \
+  hardware/controller.kicad_pcb build/controller.routed.kicad_pcb \
+  --convergence-report build/controller.convergence.json \
+  --routing-verification-report build/controller.routing-verification.json \
+  --manufacturing-package build/manufacturing/manufacturing.zip \
+  --routing-manufacturing-handoff-report build/controller.routing-manufacturing.json \
+  --native-drc-report build/controller.native-drc.json \
+  --output build/controller.routing-drc-manufacturing.json \
+  --require-ready
+```
+
+This promotes only the native-DRC evidence claim. Manufacturability,
+fabrication authorization, and release authority remain separate; see
+[Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
 
 ### Firmware evidence
 

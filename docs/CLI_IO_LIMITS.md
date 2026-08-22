@@ -68,6 +68,28 @@ malformed, substituted, changed, unsafe, or cross-bound input produces no
 verification report. See
 [Fresh Routing Convergence Verification](ROUTING_CONVERGENCE_VERIFICATION.md).
 
+The v1.476 Python-agent handoff publishes a separate 4 MiB no-clobber report.
+CLI preflight rejects an occupied destination and destination overlap with the
+original board, routed board, retained convergence/verification reports,
+manufacturing ZIP, and explicit sidecars. The Python core then rejects aliases
+among all source roles, freshly invokes the existing Rust routing verifier and
+manufacturing producer in private stages, and rereads the union before
+publication. `--require-ready` runs only after a truthful incomplete result is
+retained. This composition does not change either Rust child schema or output
+contract. See
+[Fresh Routing-to-Manufacturing Handoff](ROUTING_MANUFACTURING_HANDOFF.md).
+
+The v1.477 Python-agent handoff publishes a separate 1 MiB no-clobber report.
+CLI preflight adds the retained v1.476 handoff and 32 MiB normalized native DRC
+report to the complete source/output alias set. The Python core rejects aliases
+among all eleven file roles, caps their direct union at 724 MiB, freshly
+reproduces the retained v1.476 bytes, and only then invokes the read-only Rust
+native DRC verifier against the same routed board and explicit companions. A
+valid routing-incomplete or DRC-rejected decision is retained before
+`--require-ready` fails. Invalid bindings, source substitutions, mutations, or
+child-summary mismatches produce no outer report. See
+[Fresh Routing, Native DRC, and Manufacturing Handoff](ROUTING_DRC_MANUFACTURING_HANDOFF.md).
+
 The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
 contract. Circuit-spec input remains capped at 16 MiB, schematic input at
 64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,

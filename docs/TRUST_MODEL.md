@@ -22,6 +22,8 @@ consumer must not promote one result into another kind of claim.
 | --- | --- | --- |
 | Internal board check | Deterministic findings for one validated board model | KiCad parity, manufacturability at a selected factory, or electrical correctness |
 | Routing convergence verification | Fresh reproduction of one retained bounded decision plus exact routed JSON/KiCad bytes and captured source identities | Source authenticity, native KiCad DRC, manufacturability, global optimality, or release authority |
+| Routing/manufacturing handoff | The freshly verified routed KiCad board and shared sidecars reproduce one exact retained manufacturing ZIP | Source or tool authenticity, separate native DRC evidence, manufacturability, fabrication approval, or release authority |
+| Routing/native-DRC/manufacturing handoff | The exact v1.476 handoff and normalized native DRC report freshly replay against one routed board and companion set | Source/tool authenticity, manufacturability, fabrication approval, external submission, or release authority |
 | Native KiCad ERC/DRC report | Normalized output from the selected staged KiCad invocation | Authenticity or safety of the KiCad executable, plugins, or host |
 | Manufacturing package | Canonical staged outputs and source/profile identity after the package gates pass | Factory acceptance, assembly success, or order placement |
 | Provider or factory receipt | Bounded response bytes plus declared transport observations | Truth, currentness, endpoint identity beyond the adapter contract, or future availability |
@@ -148,6 +150,7 @@ Your deployment must decide and enforce:
 | --- | --- |
 | Native schematic ERC | [Native KiCad ERC](NATIVE_KICAD_ERC.md) |
 | Native board DRC | [Native KiCad DRC](NATIVE_KICAD_DRC.md) |
+| Routed board to manufacturing ZIP | [Fresh Routing-to-Manufacturing Handoff](ROUTING_MANUFACTURING_HANDOFF.md) |
 | AI review | [AI Review Artifact Binding](AI_REVIEW_ARTIFACT_BINDING.md) |
 | Manufacturing | [Manufacturing Package](MANUFACTURING_PACKAGE.md) |
 | Factory submission | [Factory Connector](FACTORY_CONNECTOR.md) |

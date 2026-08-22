@@ -188,6 +188,8 @@ auditable release.
 | v1.473.0 | Deterministic multi-unit KiCad handoff | Add an opt-in closed circuit-spec v3 whose physical parts contain explicit symbol units and whose connections bind reference, unit, and package pin; generate and freshly verify real KiCad multi-unit schematics, then collapse only globally unique physical pins into the unchanged board/BOM/manufacturing model while keeping existing circuit-spec v2 documents and workflows migration-free |
 | v1.474.0 | Bounded deterministic routing convergence | Opt into validity-first multi-round JSON/KiCad routing under one deterministic aggregate A* allocation, accept only strict improvements with no checker finding beyond explicit unrouted nets, retain every bounded strategy and decision in a closed Board-bound report, and preserve unchanged single-pass behavior and design rules |
 | v1.475.0 | Fresh exact routing convergence verification | Capture the raw JSON or KiCad routing source closure, freshly reproduce one canonical retained v1.474 convergence decision with its producer version, regenerate the selected routed artifact byte for byte, and retain a closed hash-bound complete/partial verification before an optional complete gate without claiming source authenticity, native KiCad DRC, manufacturability, or release authority |
+| v1.476.0 | Fresh routing-to-manufacturing handoff | Freshly reproduce one exact retained v1.475 KiCad routing verification, then use the same captured routed board and sidecars to reproduce one retained manufacturing ZIP; retain incomplete routing without invoking fabrication and keep authenticity, native DRC, manufacturability, and release authority false |
+| v1.477.0 | Fresh routing/native-DRC/manufacturing handoff | Freshly reproduce the exact retained v1.476 handoff, replay one retained normalized native KiCad DRC report against the same routed board and companions, and retain routing-incomplete or DRC-rejected evidence before a ready gate while keeping manufacturability, fabrication approval, and release authority false |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1505,7 +1507,7 @@ raw-source authenticity; run native KiCad DRC; establish manufacturability; or
 grant release authority. Omitting `--convergence-report` preserves the existing
 single-pass APIs and CLI behavior.
 
-The current v1.475.0 milestone adds a separate fresh consumer for that retained
+The released v1.475.0 milestone adds a separate fresh consumer for that retained
 evidence. `verify-routing-convergence` captures Board JSON, the exact routed
 Board, the canonical v1.474 report, and an optional physical profile.
 `verify-kicad-routing-convergence` captures the equivalent KiCad board pair,
@@ -1531,3 +1533,49 @@ This verification snapshot is not an atomic filesystem transaction. It does
 not authenticate sources or policy origins, rerun native KiCad DRC, establish
 manufacturability or global routing optimality, approve fabrication, or grant
 release authority. Those remain focused downstream boundaries.
+
+The released v1.476.0 milestone composes the KiCad half of v1.475 with the
+existing fresh manufacturing-package replay. One Python-owned boundary captures
+the original board, routed board, retained convergence and v1.475 reports,
+retained manufacturing ZIP, optional project/rules, and exactly one built-in
+DFM, external DFM, or physical-profile selection. It rejects cross-role aliases
+and runs both children under one finite aggregate deadline.
+
+The first private stage invokes `verify-kicad-routing-convergence` and requires
+the resulting bytes to equal the retained v1.475 report. The composer strictly
+validates its binding, status, false claims, and raw-source projection. When
+routing is complete, the already captured routed board and shared sidecars pass
+to the v1.455 replay; only a byte-identical freshly generated
+`manufacturing.zip` yields `verified_ready`. A valid incomplete routing result
+skips fabrication and is retained as `not_ready` before the optional gate.
+
+The closed path-free outer report binds source identities, the routing
+projection, the full normalized manufacturing replay when present, validation
+flags, and one domain-separated digest. Its sequential capture and rereads do
+not form an atomic filesystem snapshot. The selected pcbex and KiCad tools
+remain unauthenticated and unsandboxed. Source authenticity, separate native
+KiCad DRC evidence, manufacturability, fabrication approval, external
+submission, ordering, payment, and release authority remain false or outside
+scope.
+
+The current v1.477.0 milestone consumes that complete retained v1.476 report
+and one retained normalized native KiCad DRC report. One Python-owned boundary
+captures their original routing/manufacturing closure plus the DRC report under
+a 724 MiB direct-input ceiling, rejects cross-role aliases, and validates both
+retained bindings before starting native work.
+
+The first private stage reruns v1.476 and requires its rendered bytes to equal
+the retained report. A valid routing-incomplete decision skips native DRC and
+remains `not_ready`. For a ready handoff, the existing Rust
+`verify-native-kicad-drc-report` command reruns the fixed KiCad invocation
+against the same staged routed board, project, and custom rules. Its compact
+summary must match the captured canonical report, whose source identities,
+counts, approval decision, and run digest are independently cross-checked.
+
+Only a ready v1.476 handoff plus an approved exact DRC replay yields
+`verified_ready` and `native_kicad_drc_verified:true`. A valid DRC rejection is
+retained before the optional ready gate. The closed 1 MiB report binds every
+direct source, bounded child projections, eight validation flags, at most one
+gate failure, and one domain-separated digest. Source/tool authenticity,
+manufacturability, fabrication approval, external submission, ordering,
+payment, and release authority remain false or outside scope.

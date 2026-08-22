@@ -373,6 +373,386 @@ while pending:
         pending.extend(value)
 PY
 
+# v1.476 composes the two fresh boundaries without trusting either retained
+# report by itself. The exact routed board accepted by v1.475 must also
+# reproduce the retained manufacturing ZIP. An incomplete routing result is a
+# retained negative and never invokes fabrication.
+routing_manufacturing_directory="$output_directory/routing-manufacturing.package"
+routing_manufacturing_package="$routing_manufacturing_directory/manufacturing.zip"
+routing_manufacturing_input="$output_directory/routing-manufacturing.input.kicad_pcb"
+routing_manufacturing_board="$output_directory/routing-manufacturing.routed.kicad_pcb"
+routing_manufacturing_convergence="$output_directory/routing-manufacturing.convergence.json"
+routing_manufacturing_verification="$output_directory/routing-manufacturing.verification.json"
+routing_manufacturing_positive="$output_directory/routing-manufacturing.handoff.json"
+routing_manufacturing_partial="$output_directory/routing-manufacturing.partial.json"
+routing_manufacturing_partial_error="$output_directory/routing-manufacturing.partial.stderr"
+routing_manufacturing_schema="$output_directory/routing-manufacturing.schema.json"
+routing_manufacturing_tampered_verification="$output_directory/routing-manufacturing.tampered-verification.json"
+routing_manufacturing_tampered_package="$output_directory/routing-manufacturing.tampered.zip"
+routing_manufacturing_tampered_output="$output_directory/routing-manufacturing.tampered-output.json"
+
+"$pcbex_binary" route-kicad examples/multilayer.kicad_pcb \
+  --output "$routing_manufacturing_input" --drc
+"$pcbex_binary" route-kicad "$routing_manufacturing_input" \
+  --output "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --convergence-rounds 2 \
+  --convergence-candidates 3 \
+  --convergence-workers 2 \
+  --convergence-router-workers 1 \
+  --drc
+"$pcbex_binary" verify-kicad-routing-convergence \
+  "$routing_manufacturing_input" \
+  --routed "$routing_manufacturing_board" \
+  --report "$routing_manufacturing_convergence" \
+  --output "$routing_manufacturing_verification" \
+  --require-complete
+mkdir -p "$routing_manufacturing_directory"
+"$pcbex_binary" fabricate "$routing_manufacturing_board" \
+  --output-dir "$routing_manufacturing_directory"
+test -s "$routing_manufacturing_package"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  routing-manufacturing-handoff-report-schema \
+  --output "$routing_manufacturing_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-manufacturing-handoff \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --routing-verification-report "$routing_manufacturing_verification" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_manufacturing_positive" \
+  --require-ready
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-manufacturing-handoff \
+  examples/simple.kicad_pcb "$convergence_partial_board" \
+  --convergence-report "$convergence_partial_report" \
+  --routing-verification-report "$convergence_verification_partial" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_manufacturing_partial" \
+  --require-ready 2>"$routing_manufacturing_partial_error"; then
+  echo "expected incomplete routing/manufacturing handoff to fail its final gate" >&2
+  exit 1
+fi
+test -s "$routing_manufacturing_partial"
+grep -Fxq \
+  'routing/manufacturing handoff report was retained but is not ready' \
+  "$routing_manufacturing_partial_error"
+
+python3 - \
+  "$routing_manufacturing_verification" \
+  "$routing_manufacturing_tampered_verification" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, target = map(Path, sys.argv[1:])
+value = json.loads(source.read_bytes())
+value["engine_version"] += "-substituted"
+target.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+PY
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-manufacturing-handoff \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --routing-verification-report "$routing_manufacturing_tampered_verification" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_manufacturing_tampered_output"; then
+  echo "expected retained routing-verification substitution to fail" >&2
+  exit 1
+fi
+test ! -e "$routing_manufacturing_tampered_output"
+
+cp "$routing_manufacturing_package" "$routing_manufacturing_tampered_package"
+printf 'substitution' >>"$routing_manufacturing_tampered_package"
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-manufacturing-handoff \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --routing-verification-report "$routing_manufacturing_verification" \
+  --manufacturing-package "$routing_manufacturing_tampered_package" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_manufacturing_tampered_output"; then
+  echo "expected retained manufacturing-package substitution to fail" >&2
+  exit 1
+fi
+test ! -e "$routing_manufacturing_tampered_output"
+
+python3 - \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  "$routing_manufacturing_convergence" "$routing_manufacturing_verification" \
+  "$routing_manufacturing_package" "$routing_manufacturing_positive" \
+  "$routing_manufacturing_partial" "$routing_manufacturing_schema" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+(
+    input_board,
+    routed_board,
+    convergence_report,
+    routing_verification,
+    manufacturing_package,
+    positive_report,
+    partial_report,
+    schema_path,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+positive = json.loads(positive_report.read_bytes())
+partial = json.loads(partial_report.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+assert positive["schema_version"] == 1
+assert positive["verification_scope"] == \
+    "fresh-exact-routing-to-manufacturing-handoff-v1"
+assert positive["status"] == "verified_ready" and positive["ready"] is True
+assert positive["gate_failures"] == []
+assert positive["sources"]["input_board"] == identity(input_board)
+assert positive["sources"]["routed_board"] == identity(routed_board)
+assert positive["sources"]["convergence_report"] == identity(convergence_report)
+assert positive["sources"]["routing_verification_report"] == \
+    identity(routing_verification)
+assert positive["sources"]["manufacturing_package"] == \
+    identity(manufacturing_package)
+assert positive["routing_verification"]["routing_complete"] is True
+assert positive["routing_verification"]["sources"]["routed_output"] == \
+    positive["sources"]["routed_board"]
+assert {
+    key: positive["manufacturing_replay"]["board"][key]
+    for key in ("bytes", "sha256")
+} == positive["sources"]["routed_board"]
+assert positive["manufacturing_replay"]["package"]["fresh"] == \
+    positive["sources"]["manufacturing_package"]
+assert set(positive["validation"].values()) == {True}
+for claim in (
+    "source_authenticity_verified",
+    "native_kicad_drc_verified",
+    "manufacturability_verified",
+    "release_authorized",
+):
+    assert positive[claim] is False
+
+assert partial["status"] == "not_ready" and partial["ready"] is False
+assert partial["gate_failures"] == ["routing_incomplete"]
+assert partial["manufacturing_replay"] is None
+assert partial["validation"]["manufacturing_package_replayed"] is False
+
+pending = [schema]
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+PY
+
+# v1.477 binds one additional, independent boundary: the retained
+# normalized native KiCad DRC report must freshly replay against the same
+# routed board and companions already bound to the exact manufacturing ZIP.
+routing_drc_native="$output_directory/routing-drc-manufacturing.native-drc.json"
+routing_drc_partial_native="$output_directory/routing-drc-manufacturing.partial-native-drc.json"
+routing_drc_positive="$output_directory/routing-drc-manufacturing.handoff.json"
+routing_drc_partial="$output_directory/routing-drc-manufacturing.partial.json"
+routing_drc_partial_error="$output_directory/routing-drc-manufacturing.partial.stderr"
+routing_drc_schema="$output_directory/routing-drc-manufacturing.schema.json"
+routing_drc_tampered_native="$output_directory/routing-drc-manufacturing.tampered-native-drc.json"
+routing_drc_tampered_handoff="$output_directory/routing-drc-manufacturing.tampered-handoff.json"
+routing_drc_tampered_output="$output_directory/routing-drc-manufacturing.tampered-output.json"
+
+"$pcbex_binary" run-native-kicad-drc "$routing_manufacturing_board" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_drc_native" \
+  --require-approved
+"$pcbex_binary" run-native-kicad-drc "$convergence_partial_board" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_drc_partial_native"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  routing-drc-manufacturing-handoff-report-schema \
+  --output "$routing_drc_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-manufacturing-handoff \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --routing-verification-report "$routing_manufacturing_verification" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --routing-manufacturing-handoff-report "$routing_manufacturing_positive" \
+  --native-drc-report "$routing_drc_native" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_drc_positive" \
+  --require-ready
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-manufacturing-handoff \
+  examples/simple.kicad_pcb "$convergence_partial_board" \
+  --convergence-report "$convergence_partial_report" \
+  --routing-verification-report "$convergence_verification_partial" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --routing-manufacturing-handoff-report "$routing_manufacturing_partial" \
+  --native-drc-report "$routing_drc_partial_native" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_drc_partial" \
+  --require-ready 2>"$routing_drc_partial_error"; then
+  echo "expected incomplete routing/DRC/manufacturing handoff to fail its final gate" >&2
+  exit 1
+fi
+test -s "$routing_drc_partial"
+grep -Fxq \
+  'routing/DRC/manufacturing handoff report was retained but is not ready' \
+  "$routing_drc_partial_error"
+
+python3 - "$routing_drc_native" "$routing_drc_tampered_native" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, target = map(Path, sys.argv[1:])
+value = json.loads(source.read_bytes())
+value["engine_version"] += "-substituted"
+target.write_text(
+    json.dumps(value, separators=(",", ":")) + "\n", encoding="utf-8"
+)
+PY
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-manufacturing-handoff \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --routing-verification-report "$routing_manufacturing_verification" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --routing-manufacturing-handoff-report "$routing_manufacturing_positive" \
+  --native-drc-report "$routing_drc_tampered_native" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_drc_tampered_output"; then
+  echo "expected retained native DRC substitution to fail" >&2
+  exit 1
+fi
+test ! -e "$routing_drc_tampered_output"
+
+python3 - \
+  "$routing_manufacturing_positive" "$routing_drc_tampered_handoff" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, target = map(Path, sys.argv[1:])
+value = json.loads(source.read_bytes())
+value["binding_sha256"] = "0" * 64
+target.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+PY
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-routing-drc-manufacturing-handoff \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  --convergence-report "$routing_manufacturing_convergence" \
+  --routing-verification-report "$routing_manufacturing_verification" \
+  --manufacturing-package "$routing_manufacturing_package" \
+  --routing-manufacturing-handoff-report "$routing_drc_tampered_handoff" \
+  --native-drc-report "$routing_drc_native" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --output "$routing_drc_tampered_output"; then
+  echo "expected retained routing/manufacturing handoff substitution to fail" >&2
+  exit 1
+fi
+test ! -e "$routing_drc_tampered_output"
+
+python3 - \
+  "$routing_manufacturing_input" "$routing_manufacturing_board" \
+  "$routing_manufacturing_convergence" "$routing_manufacturing_verification" \
+  "$routing_manufacturing_package" "$routing_manufacturing_positive" \
+  "$routing_drc_native" "$routing_drc_positive" "$routing_drc_partial" \
+  "$routing_drc_schema" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+(
+    input_board,
+    routed_board,
+    convergence_report,
+    routing_verification,
+    manufacturing_package,
+    routing_manufacturing_handoff,
+    native_drc,
+    positive_report,
+    partial_report,
+    schema_path,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+positive = json.loads(positive_report.read_bytes())
+partial = json.loads(partial_report.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+assert positive["schema_version"] == 1
+assert positive["verification_scope"] == \
+    "fresh-exact-routing-native-drc-manufacturing-handoff-v1"
+assert positive["status"] == "verified_ready" and positive["ready"] is True
+assert positive["native_kicad_drc_verified"] is True
+assert positive["gate_failures"] == []
+assert positive["sources"]["input_board"] == identity(input_board)
+assert positive["sources"]["routed_board"] == identity(routed_board)
+assert positive["sources"]["convergence_report"] == identity(convergence_report)
+assert positive["sources"]["routing_verification_report"] == \
+    identity(routing_verification)
+assert positive["sources"]["manufacturing_package"] == \
+    identity(manufacturing_package)
+assert positive["sources"]["routing_manufacturing_handoff_report"] == \
+    identity(routing_manufacturing_handoff)
+assert positive["sources"]["native_kicad_drc_report"] == identity(native_drc)
+assert positive["routing_manufacturing_handoff"]["ready"] is True
+assert positive["native_kicad_drc"]["approved"] is True
+assert positive["native_kicad_drc"]["source"] == \
+    positive["sources"]["routed_board"]
+assert set(positive["validation"].values()) == {True}
+for claim in (
+    "source_authenticity_verified",
+    "manufacturability_verified",
+    "fabrication_authorized",
+    "release_authorized",
+):
+    assert positive[claim] is False
+
+assert partial["status"] == "not_ready" and partial["ready"] is False
+assert partial["native_kicad_drc_verified"] is False
+assert partial["gate_failures"] == ["routing_incomplete"]
+assert partial["native_kicad_drc"] is None
+assert partial["validation"]["native_kicad_drc_replayed"] is False
+
+pending = [schema]
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the
