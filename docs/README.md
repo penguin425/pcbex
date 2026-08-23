@@ -78,6 +78,10 @@ boundary document for the artifact you plan to produce or trust.
   — bind each signed response to the retained local head and reject rollback,
   equivocation, gaps, forks, or mutation after acceptance or rejection.
 
+- [Factory-release State Transparency](FACTORY_RELEASE_STATE_TRANSPARENCY.md) —
+  verify the exact current v1.484 head in one separately policy-pinned signed
+  Merkle view without claiming global non-equivocation or trusted time.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

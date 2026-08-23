@@ -1937,6 +1937,10 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
+      - name: Run cross-platform v1.485 factory-state transparency boundaries
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --release --locked
+          factory_release_state_transparency
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

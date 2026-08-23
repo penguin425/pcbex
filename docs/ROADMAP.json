@@ -954,6 +954,11 @@
     {
       "id": "authenticated-monotonic-factory-release-adapter-state",
       "release": "v1.484.0",
+      "status": "released"
+    },
+    {
+      "id": "policy-pinned-factory-release-state-transparency",
+      "release": "v1.485.0",
       "status": "current"
     }
   ]

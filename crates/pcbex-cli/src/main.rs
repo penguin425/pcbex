@@ -192,6 +192,7 @@ mod factory;
 mod factory_receipt_attestation;
 mod factory_release_adapter_monotonic_state;
 mod factory_release_adapter_response_authentication;
+mod factory_release_state_transparency;
 mod final_bom;
 mod final_cpl;
 mod firmware;
@@ -330,6 +331,22 @@ use factory_release_adapter_response_authentication::{
 use factory_release_adapter_response_authentication::{
     factory_release_adapter_http_message_signature_json_schema,
     factory_release_adapter_response_authentication_report_json_schema,
+};
+#[cfg(unix)]
+use factory_release_state_transparency::{
+    FactoryReleaseStateTransparencyVerificationReport,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_RECEIPT_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_REPORT_BYTES,
+    factory_release_state_transparency_filename,
+    parse_factory_release_state_transparency_verification_report,
+    render_factory_release_state_transparency_verification_report,
+    verify_factory_release_state_transparency_receipt,
+};
+use factory_release_state_transparency::{
+    factory_release_state_transparency_policy_json_schema,
+    factory_release_state_transparency_receipt_json_schema,
+    factory_release_state_transparency_verification_report_json_schema,
 };
 use final_bom::{final_bom_report_json_schema, render_final_bom_report, verify_final_bom_sources};
 use final_cpl::{final_cpl_report_json_schema, render_final_cpl_report, verify_final_cpl_sources};
@@ -1161,6 +1178,21 @@ enum Command {
     },
     /// Print the closed authenticated monotonic observation-report schema.
     FactoryReleaseAdapterMonotonicObservationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed standalone factory-release state transparency trust-policy schema.
+    FactoryReleaseStateTransparencyPolicySchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory-release state transparency receipt schema.
+    FactoryReleaseStateTransparencyReceiptSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory-release state transparency verification-report schema.
+    FactoryReleaseStateTransparencyVerificationReportSchema {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
@@ -5975,6 +6007,42 @@ enum Command {
         #[arg(long)]
         require_accepted: bool,
     },
+    /// Verify and durably retain a policy-pinned transparency receipt for the current state head.
+    VerifyFactoryReleaseStateTransparencyReceipt {
+        /// Existing absolute 0700 ledger containing the complete v1.484 state chain.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Deterministic idempotency key selecting the durable monotonic state chain.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        idempotency_key: String,
+        /// Exact v1.484 organization policy pack used to verify the complete state chain.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// Exact standalone policy pinning trusted transparency-log keys and freshness.
+        #[arg(long)]
+        transparency_policy: CompactPath,
+        /// Independently configured canonical SHA-256 of the transparency trust policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_transparency_policy_sha256: String,
+        /// Canonical signed Merkle inclusion receipt returned by the transparency log.
+        #[arg(long)]
+        receipt: CompactPath,
+        /// New verification-report path; the durable ledger copy survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only deterministic evaluation time; production uses the current clock.
+        #[arg(long, hide = true)]
+        evaluated_at_unix: Option<u64>,
+        /// Fail after retaining verified inclusion unless the current factory state is accepted.
+        #[arg(long)]
+        require_accepted: bool,
+    },
     /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
     FactorySubmit {
         package: PathBuf,
@@ -9342,6 +9410,267 @@ fn reconcile_monotonic_authenticated_signed_factory_receipt_release_local(
     Ok(report)
 }
 
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_factory_release_state_transparency_receipt_local(
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    idempotency_key: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    transparency_policy_path: &Path,
+    expected_transparency_policy_sha256: &str,
+    receipt_path: &Path,
+    output: &Path,
+    evaluated_at_unix: Option<u64>,
+) -> Result<FactoryReleaseStateTransparencyVerificationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("factory release transparency ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    reject_pipeline_output_aliases(
+        output,
+        &[policy_path, transparency_policy_path, receipt_path],
+        "factory release state transparency verification output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(
+        &ledger,
+        &[policy_path, transparency_policy_path, receipt_path],
+    )?;
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory release state transparency organization policy pack",
+    )?;
+    let (_, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+    let (transparency_policy_source, transparency_policy_identity) = read_exact_artifact(
+        transparency_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+        "factory release state transparency trust policy",
+    )?;
+    let (receipt_source, receipt_identity) = read_exact_artifact(
+        receipt_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_RECEIPT_BYTES,
+        "factory release state transparency receipt",
+    )?;
+    let receipt =
+        factory_release_state_transparency::parse_factory_release_state_transparency_receipt(
+            &receipt_source,
+        )
+        .map_err(anyhow::Error::msg)?;
+    let intent_name = signed_factory_release_submission_intent_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let intent_source = ledger
+        .read_regular_file_with_limit(
+            &intent_name,
+            MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        )
+        .context("reading durable signed release submission intent")?;
+    let intent = parse_signed_factory_release_submission_intent(&intent_source)
+        .map_err(anyhow::Error::msg)?;
+    if intent.ledger_id != expected_ledger_id || intent.idempotency_key != idempotency_key {
+        bail!("durable signed release submission intent does not match the selected ledger key");
+    }
+    let (state, observation_report) = load_monotonic_factory_release_state_chain(
+        &ledger,
+        idempotency_key,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!("factory release transparency requires a monotonic state head")
+    })?;
+    let state_entry_name =
+        monotonic_factory_release_state_filename(idempotency_key, state.sequence)
+            .map_err(anyhow::Error::msg)?;
+    let state_entry_source = ledger
+        .read_regular_file_with_limit(
+            &state_entry_name,
+            MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
+        )
+        .context("reading current monotonic factory state entry")?;
+    let state_entry = parse_factory_release_adapter_monotonic_state_entry(&state_entry_source)
+        .map_err(anyhow::Error::msg)?;
+    if state_entry.state != state {
+        bail!("current monotonic factory state entry differs from its verified chain head");
+    }
+    let observation_name =
+        expected_monotonic_factory_release_observation_filename(&observation_report)?;
+    if observation_name != state_entry.observation_filename {
+        bail!("current monotonic state entry names a different authenticated observation");
+    }
+    let observation_source = ledger
+        .read_regular_file_with_limit(
+            &observation_name,
+            MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+        )
+        .context("reading current monotonic factory observation")?;
+    if exact_artifact_identity(&observation_source) != state_entry.observation {
+        bail!("current monotonic state observation identity changed after chain verification");
+    }
+    let report_name = factory_release_state_transparency_filename(
+        idempotency_key,
+        state.sequence,
+        &receipt.tree_head.log_id,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        let retained_entry = ledger
+            .read_regular_file_with_limit(
+                &state_entry_name,
+                MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
+            )
+            .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        let retained_observation = ledger
+            .read_regular_file_with_limit(
+                &observation_name,
+                MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+            )
+            .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_entry != state_entry_source || retained_observation != observation_source {
+            return Err(io::Error::other(
+                "factory release transparency state sources changed during verification",
+            ));
+        }
+        let retained_head = load_monotonic_factory_release_state_chain(
+            &ledger,
+            idempotency_key,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_head.as_ref().map(|(candidate, _)| candidate) != Some(&state) {
+            return Err(io::Error::other(
+                "factory release transparency state is no longer the selected ledger head",
+            ));
+        }
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory release state transparency organization policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            transparency_policy_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+            &transparency_policy_identity,
+            "factory release state transparency trust policy",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            receipt_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_RECEIPT_BYTES,
+            &receipt_identity,
+            "factory release state transparency receipt",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+    };
+
+    if let Some(existing_source) = read_optional_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_REPORT_BYTES,
+        "durable factory release state transparency verification",
+    )? {
+        let existing = parse_factory_release_state_transparency_verification_report(
+            &existing_source,
+            &state_entry_source,
+            &state_entry,
+            &observation_source,
+            &policy,
+            expected_policy_sha256,
+            &transparency_policy_source,
+            expected_transparency_policy_sha256,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if existing.receipt_artifact != receipt_identity || existing.transparency_receipt != receipt
+        {
+            bail!("durable factory release transparency record conflicts with this receipt");
+        }
+        guard().map_err(anyhow::Error::from)?;
+        persist_atomic_new_file_bytes(prepared_output, output, &existing_source)?;
+        return Ok(existing);
+    }
+
+    let report = verify_factory_release_state_transparency_receipt(
+        &state_entry_source,
+        &state_entry,
+        &observation_source,
+        true,
+        &receipt_source,
+        &policy,
+        expected_policy_sha256,
+        &transparency_policy_source,
+        expected_transparency_policy_sha256,
+        evaluated_at_unix.unwrap_or(current_unix_seconds()?),
+    )
+    .map_err(anyhow::Error::msg)?;
+    let report_source = render_factory_release_state_transparency_verification_report(
+        &report,
+        &state_entry_source,
+        &state_entry,
+        &observation_source,
+        &policy,
+        expected_policy_sha256,
+        &transparency_policy_source,
+        expected_transparency_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    guard().map_err(anyhow::Error::from)?;
+    let outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        &report_source,
+        ".pcbex-factory-release-state-transparency-",
+        "factory release state transparency verification",
+        &guard,
+    )?;
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            let existing_source = ledger
+                .read_regular_file_with_limit(
+                    &report_name,
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_REPORT_BYTES,
+                )
+                .context("reading concurrently committed factory release transparency report")?;
+            if existing_source != report_source {
+                bail!("concurrently committed factory release transparency report conflicts");
+            }
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "factory release transparency report may have committed, but durable completion failed; retry the same receipt: {error}"
+            )
+        }
+    }
+    guard().map_err(anyhow::Error::from)?;
+    persist_atomic_new_file_bytes(prepared_output, output, &report_source)?;
+    Ok(report)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -9488,6 +9817,9 @@ fn capabilities_report() -> CapabilitiesReport {
             "Factory release adapter monotonic HTTP Message Signature v1",
             "Factory release adapter monotonic state entry v1",
             "Factory release adapter monotonic observation report v1",
+            "Factory release state transparency trust policy v1",
+            "Factory release state transparency receipt v1",
+            "Factory release state transparency verification report v1",
             "Firmware bundle manifest v2",
             "Fresh firmware bundle build report v1",
             "C11 firmware source bundle",
@@ -9795,6 +10127,27 @@ fn run_cli() -> Result<()> {
                 &factory_release_adapter_monotonic_observation_report_json_schema(),
                 output.as_deref(),
                 "factory release adapter monotonic observation report schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyPolicySchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_policy_json_schema(),
+                output.as_deref(),
+                "factory release state transparency policy schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyReceiptSchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_receipt_json_schema(),
+                output.as_deref(),
+                "factory release state transparency receipt schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyVerificationReportSchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_verification_report_json_schema(),
+                output.as_deref(),
+                "factory release state transparency verification report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -22488,6 +22841,67 @@ fn run_cli() -> Result<()> {
                 }
                 if require_accepted && !report.accepted {
                     bail!("continuous authenticated factory state has not accepted the release");
+                }
+            }
+        }
+        Command::VerifyFactoryReleaseStateTransparencyReceipt {
+            reservation_ledger,
+            expected_ledger_id,
+            idempotency_key,
+            policy_pack,
+            expected_policy_sha256,
+            transparency_policy,
+            expected_transparency_policy_sha256,
+            receipt,
+            output,
+            evaluated_at_unix,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    reservation_ledger,
+                    expected_ledger_id,
+                    idempotency_key,
+                    policy_pack,
+                    expected_policy_sha256,
+                    transparency_policy,
+                    expected_transparency_policy_sha256,
+                    receipt,
+                    output,
+                    evaluated_at_unix,
+                    require_accepted,
+                );
+                bail!(
+                    "durable factory release state transparency verification is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report = verify_factory_release_state_transparency_receipt_local(
+                    &reservation_ledger,
+                    &expected_ledger_id,
+                    &idempotency_key,
+                    &policy_pack,
+                    &expected_policy_sha256,
+                    &transparency_policy,
+                    &expected_transparency_policy_sha256,
+                    &receipt,
+                    &output,
+                    evaluated_at_unix,
+                )?;
+                eprintln!(
+                    "factory release state transparency: included={}; log={}; tree_size={}; state_sequence={}; report={}",
+                    report.transparency_inclusion_verified,
+                    report.transparency_receipt.tree_head.log_id,
+                    report.transparency_receipt.tree_head.tree_size,
+                    report.state_sequence,
+                    output.display()
+                );
+                if require_accepted
+                    && report.state_status != FactoryReleaseAdapterStatus::AdapterAccepted
+                {
+                    bail!("transparent current factory state has not accepted the release");
                 }
             }
         }

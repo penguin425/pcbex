@@ -790,8 +790,11 @@ factory_response_secret_directory="$(mktemp -d)"
 factory_response_private_key="$factory_response_secret_directory/factory-response.pem"
 factory_response_public_der="$factory_response_secret_directory/factory-response.der"
 factory_response_public_key="$output_directory/factory-response.pub"
+factory_transparency_private_key="$factory_response_secret_directory/factory-transparency.pem"
+factory_transparency_public_der="$factory_response_secret_directory/factory-transparency.der"
+factory_transparency_public_key="$output_directory/factory-transparency.pub"
 factory_receipt_policy_template="$output_directory/factory-receipt-policy-template.json"
-trap 'rm -f -- "$factory_receipt_private_key" "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_receipt_secret_directory" "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'rm -f -- "$factory_receipt_private_key" "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_receipt_secret_directory" "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
 "$pcbex_binary" approval-keygen \
   --private-key "$factory_receipt_private_key" \
@@ -799,14 +802,21 @@ trap 'rm -f -- "$factory_receipt_private_key" "$factory_response_private_key" "$
 openssl genpkey -algorithm ED25519 -out "$factory_response_private_key"
 openssl pkey -in "$factory_response_private_key" -pubout -outform DER \
   -out "$factory_response_public_der"
-python3 - "$factory_response_public_der" "$factory_response_public_key" <<'PY'
+openssl genpkey -algorithm ED25519 -out "$factory_transparency_private_key"
+openssl pkey -in "$factory_transparency_private_key" -pubout -outform DER \
+  -out "$factory_transparency_public_der"
+python3 - \
+  "$factory_response_public_der" "$factory_response_public_key" \
+  "$factory_transparency_public_der" "$factory_transparency_public_key" <<'PY'
 from pathlib import Path
 import sys
 
-source, output = map(Path, sys.argv[1:])
-encoded = source.read_bytes()
-assert len(encoded) >= 32
-output.write_text(encoded[-32:].hex() + "\n", encoding="ascii")
+arguments = list(map(Path, sys.argv[1:]))
+assert len(arguments) == 4
+for source, output in zip(arguments[::2], arguments[1::2]):
+    encoded = source.read_bytes()
+    assert len(encoded) >= 32
+    output.write_text(encoded[-32:].hex() + "\n", encoding="ascii")
 PY
 python3 - \
   examples/acme-policy-pack.json \
@@ -1419,7 +1429,7 @@ factory_receipt_expires="$((factory_receipt_now + 1800))"
 
 rm -f -- "$factory_receipt_private_key"
 rmdir -- "$factory_receipt_secret_directory"
-trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
 "$pcbex_binary" verify-factory-receipt-attestation \
   "$fabrication_release_package" \
@@ -1934,7 +1944,7 @@ python3 "$signed_release_adapter_server" \
   "$signed_release_adapter_token" \
   "$factory_response_private_key" &
 signed_release_adapter_server_pid=$!
-trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do
   test -s "$signed_release_adapter_submit_ready" && break
   if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
@@ -1958,7 +1968,7 @@ signed_release_adapter_submit_endpoint="$(tr -d '\r\n' < "$signed_release_adapte
   --allow-http-loopback \
   --output "$signed_release_adapter_submit"
 wait "$signed_release_adapter_server_pid"
-trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
 signed_release_adapter_key="$(jq -r .adapter_receipt.idempotency_key "$signed_release_adapter_submit")"
 if "$pcbex_binary" submit-authenticated-signed-factory-receipt-release \
@@ -1990,7 +2000,7 @@ python3 "$signed_release_adapter_server" \
   "$signed_release_adapter_token" \
   "$factory_response_private_key" &
 signed_release_adapter_server_pid=$!
-trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do
   test -s "$signed_release_adapter_reconcile_ready" && break
   if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
@@ -2014,7 +2024,7 @@ signed_release_adapter_reconcile_endpoint="$(tr -d '\r\n' < "$signed_release_ada
   --require-accepted \
   --output "$signed_release_adapter_reconcile"
 wait "$signed_release_adapter_server_pid"
-trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
 "$pcbex_binary" reconcile-authenticated-signed-factory-receipt-release \
   --reservation-ledger "$signed_release_reservation_ledger" \
@@ -2409,7 +2419,7 @@ python3 "$signed_release_adapter_server" \
   "$monotonic_submit_ready" "$monotonic_submit_request" \
   "$signed_release_adapter_token" "$factory_response_private_key" &
 signed_release_adapter_server_pid=$!
-trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do
   test -s "$monotonic_submit_ready" && break
   if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
@@ -2580,8 +2590,279 @@ for schema_path in schema_paths:
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.485 binds the exact verified v1.484 head into one policy-pinned signed
+# Merkle view. The receipt is retained immutably, while global log consistency
+# and trusted timestamping remain explicit nonclaims.
+factory_transparency_policy_schema="$output_directory/factory-release-transparency-policy.schema.json"
+factory_transparency_policy="$output_directory/factory-release-transparency.policy.json"
+factory_transparency_policy_digest_file="$output_directory/factory-release-transparency.policy.sha256"
+factory_transparency_receipt_schema="$output_directory/factory-release-transparency-receipt.schema.json"
+factory_transparency_report_schema="$output_directory/factory-release-transparency-report.schema.json"
+factory_transparency_receipt="$output_directory/factory-release-transparency.receipt.json"
+factory_transparency_tampered_receipt="$output_directory/factory-release-transparency.tampered.json"
+factory_transparency_tampered_output="$output_directory/factory-release-transparency.tampered-output.json"
+factory_transparency_tampered_error="$output_directory/factory-release-transparency.tampered.stderr"
+factory_transparency_report="$output_directory/factory-release-transparency.report.json"
+factory_transparency_replay="$output_directory/factory-release-transparency.replay.json"
+factory_transparency_evaluated_at="$output_directory/factory-release-transparency.evaluated-at"
+
+"$pcbex_binary" factory-release-state-transparency-policy-schema \
+  --output "$factory_transparency_policy_schema"
+"$pcbex_binary" factory-release-state-transparency-receipt-schema \
+  --output "$factory_transparency_receipt_schema"
+"$pcbex_binary" factory-release-state-transparency-verification-report-schema \
+  --output "$factory_transparency_report_schema"
+
+python3 - \
+  "$factory_transparency_public_key" "$factory_transparency_policy" \
+  "$factory_transparency_policy_digest_file" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+public_key_path, policy_path, digest_path = map(Path, sys.argv[1:])
+policy = {
+    "schema_version": 1,
+    "policy_scope": "factory-release-state-transparency-trust-policy-v1",
+    "maximum_checkpoint_age_seconds": 300,
+    "trusted_logs": [
+        {
+            "log_id": "kicad-e2e-factory-release-log",
+            "public_key": public_key_path.read_text(encoding="ascii").strip(),
+        }
+    ],
+}
+policy_path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+digest = hashlib.sha256(
+    json.dumps(policy, separators=(",", ":")).encode("ascii")
+).hexdigest()
+digest_path.write_text(digest + "\n", encoding="ascii")
+PY
+factory_transparency_policy_digest="$(tr -d '\r\n' < "$factory_transparency_policy_digest_file")"
+
+python3 - \
+  "$monotonic_release_ledger" "$monotonic_key" \
+  "$factory_transparency_private_key" "$factory_transparency_public_key" \
+  "$factory_transparency_receipt" "$factory_transparency_tampered_receipt" \
+  "$factory_transparency_evaluated_at" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+ledger, key, private_key, public_key, receipt_path, tampered_path, evaluated_path = \
+    sys.argv[1:]
+ledger = Path(ledger)
+entry_path = ledger / f"monotonic-factory-release-state-v1-{key}-0001.json"
+entry_source = entry_path.read_bytes()
+entry = json.loads(entry_source)
+state = entry["state"]
+assert state["sequence"] == 1
+assert state["status"] == "adapter_accepted"
+state_entry_sha256 = hashlib.sha256(entry_source).hexdigest()
+leaf_material = {
+    "state_entry_sha256": state_entry_sha256,
+    "observation_sha256": entry["observation"]["sha256"],
+    "state_sequence": state["sequence"],
+    "state_sha256": state["state_sha256"],
+    "state_status": state["status"],
+    "idempotency_key": state["idempotency_key"],
+    "factory_id": state["factory_id"],
+    "provider": state["provider"],
+    "release_subject_sha256": state["release_subject_sha256"],
+    "manufacturing_package_sha256": state["manufacturing_package_sha256"],
+}
+leaf_sha256 = hashlib.sha256(
+    b"pcbex:factory-release-state-transparency-leaf:v1\0"
+    + json.dumps(leaf_material, separators=(",", ":")).encode("ascii")
+).hexdigest()
+root_sha256 = hashlib.sha256(
+    b"\x00pcbex:factory-release-state-transparency-merkle-leaf:v1\0"
+    + bytes.fromhex(leaf_sha256)
+).hexdigest()
+observed_at_unix = int(time.time())
+tree_head = {
+    "schema_version": 1,
+    "tree_head_scope": "signed-factory-release-state-transparency-tree-head-v1",
+    "log_id": "kicad-e2e-factory-release-log",
+    "tree_size": 1,
+    "root_sha256": root_sha256,
+    "observed_at_unix": observed_at_unix,
+    "algorithm": "ed25519",
+    "public_key": Path(public_key).read_text(encoding="ascii").strip(),
+    "signature": "",
+}
+signature_payload = {
+    "domain": "pcbex-factory-release-state-transparency-tree-head-v1",
+    "tree_head_scope": tree_head["tree_head_scope"],
+    "log_id": tree_head["log_id"],
+    "tree_size": tree_head["tree_size"],
+    "root_sha256": tree_head["root_sha256"],
+    "observed_at_unix": tree_head["observed_at_unix"],
+}
+with tempfile.NamedTemporaryFile() as payload:
+    payload.write(json.dumps(signature_payload, separators=(",", ":")).encode("ascii"))
+    payload.flush()
+    signature = subprocess.run(
+        [
+            "openssl", "pkeyutl", "-sign", "-rawin", "-inkey", private_key,
+            "-in", payload.name,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+tree_head["signature"] = signature.hex()
+receipt = {
+    "schema_version": 1,
+    "receipt_scope": "policy-pinned-factory-release-state-transparency-receipt-v1",
+    "state_entry_sha256": state_entry_sha256,
+    "leaf_sha256": leaf_sha256,
+    "leaf_index": 0,
+    "audit_path": [],
+    "tree_head": tree_head,
+}
+receipt_path = Path(receipt_path)
+receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+tampered = copy.deepcopy(receipt)
+first = tampered["tree_head"]["signature"][0]
+tampered["tree_head"]["signature"] = ("1" if first == "0" else "0") + \
+    tampered["tree_head"]["signature"][1:]
+Path(tampered_path).write_text(json.dumps(tampered, indent=2) + "\n", encoding="utf-8")
+Path(evaluated_path).write_text(str(observed_at_unix + 1) + "\n", encoding="ascii")
+PY
+
+factory_transparency_time="$(tr -d '\r\n' < "$factory_transparency_evaluated_at")"
+if "$pcbex_binary" verify-factory-release-state-transparency-receipt \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_tampered_receipt" \
+  --evaluated-at-unix "$factory_transparency_time" \
+  --output "$factory_transparency_tampered_output" \
+  2>"$factory_transparency_tampered_error"; then
+  echo "expected a forged factory transparency receipt to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_tampered_output"
+grep -Fq 'tree-head signature' "$factory_transparency_tampered_error"
+
+"$pcbex_binary" verify-factory-release-state-transparency-receipt \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_receipt" \
+  --evaluated-at-unix "$factory_transparency_time" \
+  --output "$factory_transparency_report" \
+  --require-accepted
+"$pcbex_binary" verify-factory-release-state-transparency-receipt \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_receipt" \
+  --evaluated-at-unix "$((factory_transparency_time + 10000))" \
+  --output "$factory_transparency_replay" \
+  --require-accepted
+cmp "$factory_transparency_report" "$factory_transparency_replay"
+
+python3 - \
+  "$factory_transparency_report" "$factory_transparency_policy" \
+  "$factory_transparency_receipt" "$factory_transparency_policy_schema" \
+  "$factory_transparency_receipt_schema" "$factory_transparency_report_schema" \
+  "$monotonic_release_ledger" "$monotonic_key" \
+  "$signed_release_adapter_token" "$factory_transparency_policy_digest" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+report_path, policy_path, receipt_path, policy_schema_path, receipt_schema_path, \
+    report_schema_path, ledger_path = map(Path, sys.argv[1:8])
+key, token, policy_digest = sys.argv[8:]
+report = json.loads(report_path.read_bytes())
+policy = json.loads(policy_path.read_bytes())
+receipt = json.loads(receipt_path.read_bytes())
+assert report["status"] == "verified"
+for claim in (
+    "monotonic_state_chain_verified",
+    "state_entry_identity_verified",
+    "observation_identity_verified",
+    "policy_pack_pin_matched",
+    "transparency_policy_pin_matched",
+    "transparency_log_policy_matched",
+    "tree_head_signature_verified",
+    "inclusion_proof_verified",
+    "transparency_inclusion_verified",
+    "checkpoint_fresh_at_evaluation",
+):
+    assert report[claim] is True, claim
+for claim in (
+    "selected_ledger_transparency_report_committed",
+    "global_non_equivocation_verified",
+    "selected_ledger_rollback_resistance_verified",
+    "trusted_time_verified",
+    "endpoint_transport_authenticity_verified",
+    "factory_legal_identity_verified",
+    "server_side_idempotency_enforced",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "exactly_once_execution_verified",
+):
+    assert report[claim] is False, claim
+assert report["state_sequence"] == 1
+assert report["state_status"] == "adapter_accepted"
+assert report["transparency_policy_sha256"] == policy_digest
+assert policy["policy_scope"] == \
+    "factory-release-state-transparency-trust-policy-v1"
+assert report["transparency_receipt"] == receipt
+assert report["receipt_artifact"] == {
+    "bytes": len(receipt_path.read_bytes()),
+    "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+}
+ledger_name = (
+    f"factory-release-state-transparency-v1-{key}-0001-"
+    "kicad-e2e-factory-release-log.json"
+)
+assert (ledger_path / ledger_name).read_bytes() == report_path.read_bytes()
+for path in [report_path, receipt_path, *ledger_path.iterdir()]:
+    assert token.encode() not in path.read_bytes(), path
+for schema_path in (policy_schema_path, receipt_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
-rm -f -- "$factory_response_private_key" "$factory_response_public_der"
+rm -f -- \
+  "$factory_response_private_key" "$factory_response_public_der" \
+  "$factory_transparency_private_key" "$factory_transparency_public_der"
 rmdir -- "$factory_response_secret_directory"
 trap - EXIT
 
