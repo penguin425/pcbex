@@ -193,6 +193,7 @@ auditable release.
 | v1.478.0 | Policy-pinned routing/DRC fabrication release | Freshly reproduce one exact v1.477 handoff, require the same package in a factory-required pipeline, and cross-check a dedicated fabrication quorum against an externally expected canonical policy digest before a conjunctive offline release decision, without claiming tool, policy, receipt, or source authenticity, external submission, capacity, ordering, payment, or one-time use |
 | v1.479.0 | Externally digest-pinned release entrypoints | Freshly reassess the stable evidence, scope, policy, and approval subject of one canonical retained v1.478 release while requiring the resolved routing pcbex, authorization pcbex, and KiCad CLI native entrypoint bytes to match three independent deployment-supplied SHA-256 pins; retain the fresh point-in-time decision and path-free executable observations without claiming historical-decision reuse, binary origin, signatures, libraries, plugins, loader state, sandboxing, source authenticity, external submission, capacity, ordering, or payment |
 | v1.480.0 | Policy-pinned signed factory-receipt release | Bind one exact normalized accepted factory receipt and manufacturing package to a dedicated role-disjoint Ed25519 factory key selected by an externally pinned organization policy, then freshly replay the complete executable-pinned v1.479 subject around signature verification before retaining an authenticated or valid negative release snapshot without claiming legal identity, TLS or raw-response authenticity, trusted time, capacity reservation, ordering, or payment |
+| v1.481.0 | Local signed factory-receipt release reservation | Freshly replay one exact retained v1.480 subject, require a currently authenticated receipt and active fabrication/attestation windows, then durably admit its signed challenge to one externally identified Unix 0700 local ledger through descriptor-pinned no-replace publication without claiming global one-time use, capacity, submission, ordering, or payment |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1646,7 +1647,7 @@ environment or operating-system state, defeat an independently concurrent
 same-principal writer, provide a sandbox, prove manufacturability, contact a
 factory, reserve capacity, submit files, place an order, or perform payment.
 
-The current v1.480.0 milestone authenticates the exact normalized factory
+The released v1.480.0 milestone authenticates the exact normalized factory
 receipt already selected by that release. A dedicated optional organization
 policy role binds each factory ID to one provider and one non-weak Ed25519 key;
 the caller must independently pin the policy's canonical SHA-256. The signed
@@ -1671,3 +1672,28 @@ TLS session, raw response, trusted clock, current capacity, source or toolchain
 provenance, external submission, inventory or capacity reservation, order,
 payment, or one-time challenge use. A side-effecting executor remains a later,
 separately credentialed and durably idempotent boundary.
+
+The current v1.481.0 milestone consumes one canonical retained v1.480 report
+and freshly replays the same time-invariant signed-release subject. A positive
+replay must retain the exact manufacturing package, normalized receipt,
+policy, signed attestation, and digest-pinned verifier while both the receipt
+attestation and fabrication-authorization windows remain active.
+
+The public agent reduces the retained and fresh reports to one closed compact
+marker. It binds both report identities and bindings, the stable release
+subject, package, receipt, policy, signer, verifier, authorization window, and
+signed receipt challenge. A hidden Rust helper accepts that marker only into a
+pre-created absolute Unix ledger whose fixed manifest matches an independently
+supplied ledger ID. The ledger must be local, owned by the effective user, and
+mode `0700`; every replay input stays outside it.
+
+The helper installs the challenge-derived marker name through pinned-directory
+durable no-replace publication. It rechecks the manifest, input separation,
+marker bytes, and both active windows around commit. An existing destination
+burns the challenge in that ledger regardless of its contents.
+
+This is at-most-once admission within one selected local ledger. It does not
+prove global challenge uniqueness, trusted time, legal factory identity,
+current capacity, external submission, order placement, payment, or exactly
+once execution. The bounded adapter call and reconciliation boundary remains
+the next milestone.

@@ -230,6 +230,7 @@ mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
 mod remote_policy_lifecycle_witness;
 mod remote_witness;
 mod routing_convergence_verification;
+mod signed_factory_receipt_release_reservation;
 
 use bounded_io as fs;
 use physical_profile::{MAX_PHYSICAL_PROFILE_BYTES, PhysicalProfileBinding, load_physical_profile};
@@ -594,6 +595,20 @@ use remote_policy_lifecycle_witness::{
     remote_policy_lifecycle_witness_receipt_json_schema, request_remote_policy_lifecycle_witness,
 };
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
+#[cfg(unix)]
+use signed_factory_receipt_release_reservation::{
+    MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_BYTES,
+    MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_LEDGER_MANIFEST_BYTES,
+    SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_LEDGER_MANIFEST_FILENAME,
+    SignedFactoryReceiptReleaseReservation, parse_signed_factory_receipt_release_reservation,
+    signed_factory_receipt_release_reservation_filename,
+    validate_signed_factory_receipt_release_reservation_ledger_manifest,
+    validate_signed_factory_receipt_release_reservation_time,
+};
+use signed_factory_receipt_release_reservation::{
+    signed_factory_receipt_release_reservation_json_schema,
+    signed_factory_receipt_release_reservation_ledger_manifest_json_schema,
+};
 
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
@@ -1036,6 +1051,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
+    /// Print the closed local signed-receipt release reservation JSON Schema.
+    SignedFactoryReceiptReleaseReservationSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed signed-receipt release reservation-ledger manifest schema.
+    SignedFactoryReceiptReleaseReservationLedgerSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
     /// Print the closed normalized native KiCad schematic ERC report JSON Schema.
     NativeKicadErcReportSchema {
         #[arg(short, long)]
@@ -1199,6 +1224,20 @@ enum Command {
     #[command(name = "internal-reserve-procurement-authorization", hide = true)]
     InternalReserveProcurementAuthorization {
         /// Canonical marker staged by the public fresh-replay orchestrator.
+        marker: CompactPath,
+        /// Existing absolute 0700 local directory containing the fixed manifest.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Expected lowercase SHA-256 ledger identity from the fixed manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Fresh-replay inputs that must remain outside the selected ledger.
+        #[arg(long = "protected-input")]
+        protected_inputs: Vec<CompactPath>,
+    },
+    #[command(name = "internal-reserve-signed-factory-receipt-release", hide = true)]
+    InternalReserveSignedFactoryReceiptRelease {
+        /// Canonical compact marker staged by the public fresh-replay orchestrator.
         marker: CompactPath,
         /// Existing absolute 0700 local directory containing the fixed manifest.
         #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
@@ -6680,6 +6719,227 @@ fn reserve_procurement_authorization_local(
     finish_procurement_authorization_reservation(&marker, outcome)
 }
 
+#[cfg(unix)]
+fn validate_pinned_signed_factory_receipt_release_reservation_ledger(
+    ledger: &anchored_io::PinnedDirectory,
+    expected_ledger_id: &str,
+) -> Result<()> {
+    ledger
+        .revalidate()
+        .context("revalidating pinned local signed release reservation ledger")?;
+    ledger
+        .require_secure_directory()
+        .context("validating trusted local signed release reservation ledger")?;
+    ledger
+        .require_local_filesystem()
+        .context("rejecting a non-local signed release reservation ledger")?;
+    let manifest = ledger
+        .read_regular_file_with_limit(
+            SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_LEDGER_MANIFEST_FILENAME,
+            MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_LEDGER_MANIFEST_BYTES,
+        )
+        .context("reading fixed manifest from trusted local signed release reservation ledger")?;
+    validate_signed_factory_receipt_release_reservation_ledger_manifest(
+        &manifest,
+        expected_ledger_id,
+    )
+    .map_err(anyhow::Error::msg)?;
+    ledger
+        .require_local_filesystem()
+        .context("revalidating local signed release reservation filesystem")?;
+    ledger
+        .require_secure_directory()
+        .context("revalidating trusted local signed release reservation ledger")?;
+    ledger
+        .revalidate()
+        .context("revalidating pinned local signed release reservation ledger")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn reject_signed_release_reservation_ledger_input_overlap(
+    ledger: &anchored_io::PinnedDirectory,
+    inputs: &[&Path],
+) -> Result<()> {
+    let ledger_visible = lexical_absolute_reservation_path(ledger.path())?;
+    let ledger_path =
+        canonical_reservation_path(ledger.path(), "signed release reservation ledger")?;
+    for input in inputs {
+        let input_visible = lexical_absolute_reservation_path(input)?;
+        let input_path = canonical_reservation_path(input, "signed release reservation input")?;
+        if reservation_paths_overlap(&ledger_visible, &input_visible)
+            || reservation_paths_overlap(&ledger_path, &input_path)
+        {
+            bail!(
+                "trusted local signed release reservation ledger must not contain or alias input {}",
+                input.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_signed_release_reservation_time_now(
+    marker: &SignedFactoryReceiptReleaseReservation,
+) -> io::Result<()> {
+    let now = current_unix_seconds().map_err(|error| {
+        io::Error::other(format!(
+            "sampling signed release reservation commit time: {error:#}"
+        ))
+    })?;
+    validate_signed_factory_receipt_release_reservation_time(marker, now).map_err(io::Error::other)
+}
+
+#[cfg(unix)]
+fn validate_signed_release_reservation_commit_guard(
+    ledger: &anchored_io::PinnedDirectory,
+    expected_ledger_id: &str,
+    marker: &SignedFactoryReceiptReleaseReservation,
+    marker_source_path: &Path,
+    marker_identity: &ExactArtifactIdentity,
+    protected_inputs: &[&Path],
+) -> io::Result<()> {
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(ledger, expected_ledger_id)
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+    require_exact_artifact(
+        marker_source_path,
+        MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_BYTES,
+        marker_identity,
+        "signed factory receipt release reservation marker source",
+    )
+    .map_err(|error| io::Error::other(format!("{error:#}")))?;
+    reject_signed_release_reservation_ledger_input_overlap(ledger, protected_inputs)
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+    validate_signed_release_reservation_time_now(marker)
+}
+
+#[cfg(unix)]
+fn finish_signed_factory_receipt_release_reservation(
+    marker: &SignedFactoryReceiptReleaseReservation,
+    outcome: anchored_io::NoReplacePublicationOutcome,
+) -> Result<()> {
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {
+            validate_signed_factory_receipt_release_reservation_time(
+                marker,
+                current_unix_seconds().context(
+                    "signed release reservation was committed durably, but completion time could not be sampled; the challenge remains reserved",
+                )?,
+            )
+            .map_err(anyhow::Error::msg)
+            .context(
+                "signed release reservation was committed durably, but its windows were not active when completion was confirmed; the challenge remains reserved",
+            )?;
+            Ok(())
+        }
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            bail!(
+                "signed factory receipt release challenge is already reserved in the local ledger"
+            )
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "signed factory receipt release reservation marker was committed, but post-install completion failed; the challenge remains reserved: {error}"
+            )
+        }
+    }
+}
+
+#[cfg(unix)]
+fn reserve_signed_factory_receipt_release_local(
+    marker_source_path: &Path,
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    protected_inputs: &[CompactPath],
+) -> Result<()> {
+    if protected_inputs.len() > 128 {
+        bail!("signed release reservation cannot protect more than 128 input paths");
+    }
+    if !reservation_ledger.is_absolute() {
+        bail!("signed factory receipt release reservation ledger path must be absolute");
+    }
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+
+    let protected: Vec<&Path> = std::iter::once(marker_source_path)
+        .chain(protected_inputs.iter().map(|path| &**path as &Path))
+        .collect();
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &protected)?;
+    let (marker_source, marker_identity) = read_exact_artifact(
+        marker_source_path,
+        MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_BYTES,
+        "signed factory receipt release reservation marker source",
+    )?;
+    let marker =
+        parse_signed_factory_receipt_release_reservation(&marker_source, expected_ledger_id)
+            .map_err(anyhow::Error::msg)?;
+    validate_signed_factory_receipt_release_reservation_time(&marker, current_unix_seconds()?)
+        .map_err(anyhow::Error::msg)?;
+
+    let marker_name = signed_factory_receipt_release_reservation_filename(
+        &marker.release_report_summary.challenge,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let marker_path = ledger.path().join(marker_name);
+    reject_pipeline_output_aliases(
+        &marker_path,
+        &protected,
+        "signed factory receipt release reservation marker",
+    )?;
+
+    let mut temporary = ledger
+        .create_temp(".pcbex-signed-factory-receipt-release-reservation-")
+        .context("staging local signed factory receipt release reservation marker")?;
+    temporary
+        .write_all(&marker_source)
+        .context("writing local signed factory receipt release reservation marker")?;
+    temporary
+        .flush()
+        .context("flushing local signed factory receipt release reservation marker")?;
+
+    validate_signed_release_reservation_commit_guard(
+        &ledger,
+        expected_ledger_id,
+        &marker,
+        marker_source_path,
+        &marker_identity,
+        &protected,
+    )?;
+    let outcome = ledger
+        .persist_no_replace_with_guards(
+            temporary,
+            &marker_path,
+            || {
+                validate_signed_release_reservation_commit_guard(
+                    &ledger,
+                    expected_ledger_id,
+                    &marker,
+                    marker_source_path,
+                    &marker_identity,
+                    &protected,
+                )
+            },
+            || {
+                validate_signed_release_reservation_commit_guard(
+                    &ledger,
+                    expected_ledger_id,
+                    &marker,
+                    marker_source_path,
+                    &marker_identity,
+                    &protected,
+                )
+            },
+        )
+        .context("committing local signed factory receipt release reservation marker")?;
+    finish_signed_factory_receipt_release_reservation(&marker, outcome)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -7050,6 +7310,20 @@ fn run_cli() -> Result<()> {
                 &procurement_authorization_reservation_ledger_manifest_json_schema(),
                 output.as_deref(),
                 "procurement authorization reservation ledger manifest schema output",
+            )?;
+        }
+        Command::SignedFactoryReceiptReleaseReservationSchema { output } => {
+            write_closed_schema(
+                &signed_factory_receipt_release_reservation_json_schema(),
+                output.as_deref(),
+                "signed factory receipt release reservation schema output",
+            )?;
+        }
+        Command::SignedFactoryReceiptReleaseReservationLedgerSchema { output } => {
+            write_closed_schema(
+                &signed_factory_receipt_release_reservation_ledger_manifest_json_schema(),
+                output.as_deref(),
+                "signed factory receipt release reservation ledger manifest schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -7557,6 +7831,30 @@ fn run_cli() -> Result<()> {
             }
             #[cfg(unix)]
             reserve_procurement_authorization_local(
+                &marker,
+                &reservation_ledger,
+                &expected_ledger_id,
+                &protected_inputs,
+            )?;
+        }
+        Command::InternalReserveSignedFactoryReceiptRelease {
+            marker,
+            reservation_ledger,
+            expected_ledger_id,
+            protected_inputs,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    marker,
+                    reservation_ledger,
+                    expected_ledger_id,
+                    protected_inputs,
+                );
+                bail!("local signed factory receipt release reservation is supported only on Unix");
+            }
+            #[cfg(unix)]
+            reserve_signed_factory_receipt_release_local(
                 &marker,
                 &reservation_ledger,
                 &expected_ledger_id,

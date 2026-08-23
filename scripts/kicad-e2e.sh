@@ -1588,6 +1588,124 @@ while pending:
 assert objects > 20 and arrays > 5
 PY
 
+# v1.481 freshly replays the same signed-release subject, then consumes its
+# attestation challenge once inside one descriptor-pinned local ledger. This
+# is a local admission marker only: capacity, submission, order, payment, and
+# global one-time use remain false.
+signed_release_reservation_ledger="$output_directory/signed-release-reservation-ledger"
+signed_release_reservation_id="$(printf 'e%.0s' {1..64})"
+signed_release_reservation_schema="$output_directory/signed-release-reservation.schema.json"
+signed_release_reservation_ledger_schema="$output_directory/signed-release-reservation-ledger.schema.json"
+signed_release_reservation_error="$output_directory/signed-release-reservation.second.stderr"
+signed_release_reservation_negative_error="$output_directory/signed-release-reservation.negative.stderr"
+mkdir -m 0700 "$signed_release_reservation_ledger"
+printf '%s\n' \
+  "{\"schema_version\":1,\"ledger_scope\":\"pinned-local-signed-factory-receipt-release-ledger-at-most-once-v1\",\"ledger_id\":\"$signed_release_reservation_id\"}" \
+  > "$signed_release_reservation_ledger/.pcbex-signed-factory-receipt-release-reservation-ledger-v1.json"
+chmod 0600 "$signed_release_reservation_ledger/.pcbex-signed-factory-receipt-release-reservation-ledger-v1.json"
+
+"$pcbex_binary" signed-factory-receipt-release-reservation-schema \
+  --output "$signed_release_reservation_schema"
+"$pcbex_binary" signed-factory-receipt-release-reservation-ledger-schema \
+  --output "$signed_release_reservation_ledger_schema"
+
+signed_release_reservation_common=(
+  "$signed_receipt_release_positive"
+  "${signed_receipt_release_common[@]}"
+  --signed-factory-receipt-attestation "$factory_receipt_signed"
+  --reservation-ledger "$signed_release_reservation_ledger"
+  --expected-ledger-id "$signed_release_reservation_id"
+)
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  reserve-signed-factory-receipt-release \
+  "${signed_release_reservation_common[@]}"
+
+signed_release_reservation_marker="$signed_release_reservation_ledger/signed-factory-receipt-release-reservation-v1-$(printf 'c%.0s' {1..64}).json"
+test -s "$signed_release_reservation_marker"
+signed_release_reservation_marker_sha="$(sha256sum "$signed_release_reservation_marker" | cut -d' ' -f1)"
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  reserve-signed-factory-receipt-release \
+  "${signed_release_reservation_common[@]}" \
+  2>"$signed_release_reservation_error"; then
+  echo "expected the signed release challenge to be burned after one local commit" >&2
+  exit 1
+fi
+grep -Fq 'signed factory receipt release challenge is already reserved' \
+  "$signed_release_reservation_error"
+test "$signed_release_reservation_marker_sha" = \
+  "$(sha256sum "$signed_release_reservation_marker" | cut -d' ' -f1)"
+
+signed_release_reservation_negative_marker="$signed_release_reservation_ledger/signed-factory-receipt-release-reservation-v1-$(printf 'd%.0s' {1..64}).json"
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  reserve-signed-factory-receipt-release \
+  "$signed_receipt_release_negative" \
+  "${signed_receipt_release_common[@]}" \
+  --signed-factory-receipt-attestation "$factory_receipt_signed_expired" \
+  --reservation-ledger "$signed_release_reservation_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  2>"$signed_release_reservation_negative_error"; then
+  echo "expected a negative signed receipt release to create no reservation" >&2
+  exit 1
+fi
+grep -Fq 'only a freshly authenticated signed receipt release may be reserved' \
+  "$signed_release_reservation_negative_error"
+test ! -e "$signed_release_reservation_negative_marker"
+
+PYTHONPATH=agent/src python3 - \
+  "$signed_release_reservation_marker" \
+  "$signed_release_reservation_schema" \
+  "$signed_release_reservation_ledger_schema" \
+  "$signed_receipt_release_positive" \
+  "$signed_release_reservation_id" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from pcbex_agent import (
+    render_signed_factory_receipt_release_reservation,
+    signed_factory_receipt_release_subject_sha256,
+)
+
+marker_path, schema_path, ledger_schema_path, report_path = map(Path, sys.argv[1:5])
+ledger_id = sys.argv[5]
+marker = json.loads(marker_path.read_bytes())
+report = json.loads(report_path.read_bytes())
+assert marker_path.read_bytes() == render_signed_factory_receipt_release_reservation(marker)
+assert marker["status"] == "local_reservation_committed"
+assert marker["local_challenge_reserved"] is True
+assert marker["ledger_id"] == ledger_id
+assert marker["release_report_summary"]["release_authenticated"] is True
+assert marker["release_report_summary"]["challenge"] == "c" * 64
+assert marker["release_report_summary"]["release_subject_sha256"] == \
+    signed_factory_receipt_release_subject_sha256(report)
+assert marker["release_report_summary"]["retained_report_sha256"] == \
+    hashlib.sha256(report_path.read_bytes()).hexdigest()
+for claim in (
+    "adapter_network_performed",
+    "global_challenge_one_time_use_enforced",
+    "external_submission_performed",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+):
+    assert marker[claim] is False, claim
+
+for schema_file in (schema_path, ledger_schema_path):
+    schema = json.loads(schema_file.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

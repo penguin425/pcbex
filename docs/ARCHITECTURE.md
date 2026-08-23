@@ -188,6 +188,18 @@ origin, dependency/plugin provenance, OS state, isolation, or an external
 factory effect. See
 [Executable-pinned Fabrication Release](EXECUTABLE_PINNED_FABRICATION_RELEASE.md).
 
+The Python v1.480 consumer adds a dedicated receipt-signature trust boundary.
+Rust binds the exact normalized receipt, package, policy, signer, and window;
+Python replays the stable v1.479 subject around that verifier and keeps every
+real-world side-effect claim false. See
+[Signed Factory-receipt Release](SIGNED_FACTORY_RECEIPT_RELEASE.md).
+
+The v1.481 admission boundary adds the first stateful consumer in this chain.
+Python freshly requires the same authenticated subject; Rust pins one trusted
+Unix ledger and durably installs the signed challenge without replacement.
+The compact marker is local replay protection, not factory capacity or an
+order. See [Signed Release Reservation](SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION.md).
+
 ## Public discovery
 
 Prefer runtime discovery over copied command lists:

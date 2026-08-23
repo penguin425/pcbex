@@ -496,6 +496,7 @@ limit before network access.
 | Policy-pinned routing/DRC fabrication release (`replay-routing-drc-fabrication-release`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 300; v1.477 replay receives half of the remaining budget, then fabrication authorization reserves up to 30 seconds or half of its remaining interval | closed | 64 KiB fabrication summary; nested routing/manufacturing limits remain unchanged | 1 MiB for fabrication; nested child limits remain unchanged |
 | Executable-pinned fabrication release (`replay-executable-pinned-fabrication-release`) | reuses the complete v1.478 aggregate deadline, finite `0 < seconds <= 600`; default 300; entrypoint capture occurs after the evidence closure and before its first selected child | closed | unchanged nested v1.478 stdout limits | unchanged nested v1.478 stderr limits |
 | Signed factory-receipt release (`replay-signed-factory-receipt-release`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both v1.479 replays, receipt-attestation verification, rereads, and cleanup remain inside it | closed | 1 MiB for the Rust verifier; nested v1.479 limits remain unchanged | 1 MiB for the Rust verifier; nested v1.479 limits remain unchanged |
+| Signed release reservation (`reserve-signed-factory-receipt-release`) | one aggregate `--timeout-seconds`, finite `3 <= seconds <= 600`; default 300; the fresh v1.480 replay receives all but a commit reserve of at most 15 seconds or one third of the total | closed | 64 KiB for the hidden ledger helper | 64 KiB for the hidden ledger helper |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Dual-control procurement signing/verification (`sign-procurement-approval`, `verify-procurement-authorization`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both complete v1.470 replays, trusted authorization child, cleanup, comparison, rendering, and final rereads remain nested inside it | closed | 1 MiB per child | 1 MiB per child |
@@ -662,6 +663,19 @@ caller-visible source, and only then publishes the outer result. The same
 1–600 second aggregate monotonic deadline covers both replays, child execution,
 rereads, and cleanup. See
 [Signed Factory-receipt Release](SIGNED_FACTORY_RECEIPT_RELEASE.md).
+
+The v1.481 reservation consumer first captures one canonical retained v1.480
+report, then spends a bounded subdeadline on one fresh replay. The retained and
+fresh reports must share the same time-invariant signed-release subject, and
+the fresh decision must be authenticated. Python renders a compact marker,
+rereads the retained report, and gives the remaining deadline plus every
+protected path to the hidden Rust ledger helper.
+
+Python does not open the ledger or publish the final marker. The helper owns
+the Unix-only pinned-directory, manifest, local-filesystem, active-window, and
+durable no-replace checks. The 16 KiB marker is local admission evidence only;
+it does not start an adapter, submit files, reserve capacity, order, or pay.
+See [Signed Release Reservation](SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION.md).
 
 The composed v1.457 replay uses the handoff command's single outer monotonic
 deadline rather than starting a second independent authority. It covers all

@@ -15,6 +15,8 @@ evidence your next consumer actually needs.
 | Converged KiCad PCB plus retained ZIP and native DRC | Fresh clean release evidence | routing/manufacturing handoff → routing/native-DRC/manufacturing handoff |
 | Fresh clean package plus factory pipeline and approvals | Policy-pinned offline fabrication release | routing/DRC handoff → fabrication authorization → release composition |
 | Retained fabrication release plus protected binary pins | Digest-pinned point-in-time release | stable v1.478 subject → three native entrypoint pin checks → fresh assessment and outer binding |
+| Digest-pinned release plus signed factory receipt | Authenticated receipt release | stable v1.479 subject → policy-pinned receipt signature → fresh outer authentication |
+| Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
 | Manufacturing package | Exact BOM/CPL and procurement intent | final verifiers → procurement intent |

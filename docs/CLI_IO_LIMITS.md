@@ -436,6 +436,19 @@ supplier inventory, order execution, payment, and global one-time use remain
 outside the contract. See
 [`PROCUREMENT_AUTHORIZATION_RESERVATION.md`](PROCUREMENT_AUTHORIZATION_RESERVATION.md).
 
+The v1.481 signed-release reservation reuses the same descriptor-pinned Unix
+ledger boundary with a distinct manifest, scope, and challenge-derived name.
+Its canonical marker and fixed manifest remain capped at 16 KiB and 4 KiB;
+the helper accepts at most 128 protected replay paths. It requires the signed
+receipt attestation and underlying fabrication authorization to remain active
+before, around, and after durable no-replace installation.
+
+The marker binds the retained and fresh v1.480 report identities, stable
+release subject, package, receipt, policy, signed attestation, verifier, signer,
+and both windows. It keeps network, global one-time use, submission, capacity,
+order, and payment false. See
+[Signed Release Reservation](SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each
