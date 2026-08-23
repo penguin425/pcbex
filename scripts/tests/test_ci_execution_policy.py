@@ -741,9 +741,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(signed_release_submission_command, boundaries)
         self.assertEqual(document.count(authenticated_factory_response_command), 1)
         self.assertIn(authenticated_factory_response_command, boundaries)
-        self.assertEqual(document.count(monotonic_factory_state_command), 1)
+        self.assertEqual(document.count(monotonic_factory_state_command), 2)
         self.assertIn(monotonic_factory_state_command, boundaries)
-        self.assertEqual(document.count(factory_state_transparency_command), 1)
+        self.assertEqual(document.count(factory_state_transparency_command), 2)
         self.assertIn(factory_state_transparency_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
@@ -760,8 +760,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(signed_release_reservation_rust_command, rust_windows)
         self.assertNotIn(signed_release_submission_command, rust_windows)
         self.assertNotIn(authenticated_factory_response_command, rust_windows)
-        self.assertNotIn(monotonic_factory_state_command, rust_windows)
-        self.assertNotIn(factory_state_transparency_command, rust_windows)
+        self.assertIn(monotonic_factory_state_command, rust_windows)
+        self.assertIn(factory_state_transparency_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -784,6 +784,22 @@ class CiExecutionPolicyTests(unittest.TestCase):
             ),
             rust_windows.index(
                 "- name: Run Windows factory-receipt cryptographic boundaries"
+            ),
+        )
+        self.assertLess(
+            rust_windows.index(
+                "- name: Run Windows factory-receipt cryptographic boundaries"
+            ),
+            rust_windows.index(
+                "- name: Run Windows monotonic factory-state boundaries"
+            ),
+        )
+        self.assertLess(
+            rust_windows.index(
+                "- name: Run Windows monotonic factory-state boundaries"
+            ),
+            rust_windows.index(
+                "- name: Run Windows factory-state transparency boundaries"
             ),
         )
         self.assertIn("runs-on: windows-latest", rust_windows)
@@ -1030,11 +1046,19 @@ class CiExecutionPolicyTests(unittest.TestCase):
             monotonic_factory_state_command,
             monotonic_factory_state_block,
         )
+        self.assertIn(
+            "if: ${{ runner.os != 'Windows' }}",
+            monotonic_factory_state_block,
+        )
         factory_state_transparency_block = boundaries[
             factory_state_transparency_step:toolchain_step
         ]
         self.assertIn(
             factory_state_transparency_command,
+            factory_state_transparency_block,
+        )
+        self.assertIn(
+            "if: ${{ runner.os != 'Windows' }}",
             factory_state_transparency_block,
         )
         self.assertLess(

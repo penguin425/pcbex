@@ -1934,10 +1934,14 @@ jobs:
           cargo +stable test --package pcbex
           --test factory_release_adapter_response_authentication --release --locked
       - name: Run cross-platform v1.484 monotonic factory-state boundaries
+        # Windows reuses the already-linked bin test harness in the dedicated
+        # Rust boundary job, keeping this 45-minute matrix below its ceiling.
+        if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
       - name: Run cross-platform v1.485 factory-state transparency boundaries
+        if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_state_transparency
@@ -2049,3 +2053,11 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_receipt_attestation
+      - name: Run Windows monotonic factory-state boundaries
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --release --locked
+          factory_release_adapter_monotonic_state
+      - name: Run Windows factory-state transparency boundaries
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --release --locked
+          factory_release_state_transparency
