@@ -144,6 +144,12 @@ from .signed_factory_receipt_release import (
     render_signed_factory_receipt_release_report,
     signed_factory_receipt_release_report_json_schema,
 )
+from .signed_factory_receipt_release_reservation import (
+    SignedFactoryReceiptReleaseReservationError,
+    build_signed_factory_receipt_release_reservation,
+    commit_signed_factory_receipt_release_reservation,
+    normalize_retained_signed_factory_receipt_release,
+)
 from .deterministic_pipeline_replay import (
     DeterministicPipelineReplayError,
     deterministic_pipeline_replay_result_json_schema,
@@ -1451,6 +1457,117 @@ def main() -> None:
         help="write the closed signed factory-receipt release JSON Schema",
     )
     signed_receipt_release_schema.add_argument("-o", "--output", type=Path)
+    signed_receipt_reservation = sub.add_parser(
+        "reserve-signed-factory-receipt-release",
+        help=(
+            "freshly replay one v1.480 release and reserve its signed challenge "
+            "in a trusted local ledger"
+        ),
+    )
+    signed_receipt_reservation.add_argument(
+        "report", type=Path, help="canonical retained v1.480 release report"
+    )
+    signed_receipt_reservation.add_argument("input_board", type=Path)
+    signed_receipt_reservation.add_argument("routed_board", type=Path)
+    signed_receipt_reservation.add_argument(
+        "--convergence-report", type=Path, required=True, metavar="REPORT"
+    )
+    signed_receipt_reservation.add_argument(
+        "--routing-verification-report", type=Path, required=True, metavar="REPORT"
+    )
+    signed_receipt_reservation.add_argument(
+        "--manufacturing-package", type=Path, required=True, metavar="ZIP"
+    )
+    signed_receipt_reservation.add_argument(
+        "--routing-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_reservation.add_argument(
+        "--native-drc-report", type=Path, required=True, metavar="REPORT"
+    )
+    signed_receipt_reservation.add_argument(
+        "--routing-drc-manufacturing-handoff-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_reservation.add_argument(
+        "--deterministic-pipeline-plan", type=Path, required=True, metavar="PLAN"
+    )
+    signed_receipt_reservation.add_argument(
+        "--deterministic-pipeline-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_reservation.add_argument(
+        "--approval", type=Path, required=True, action="append", metavar="APPROVAL"
+    )
+    signed_receipt_reservation.add_argument(
+        "--routing-drc-fabrication-release-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_reservation.add_argument(
+        "--executable-pinned-fabrication-release-report",
+        type=Path,
+        required=True,
+        metavar="REPORT",
+    )
+    signed_receipt_reservation.add_argument(
+        "--factory-receipt", type=Path, required=True, metavar="RECEIPT"
+    )
+    signed_receipt_reservation.add_argument(
+        "--policy-pack", type=Path, required=True, metavar="POLICY"
+    )
+    signed_receipt_reservation.add_argument(
+        "--signed-factory-receipt-attestation",
+        type=Path,
+        required=True,
+        metavar="ATTESTATION",
+    )
+    signed_receipt_reservation.add_argument(
+        "--expected-policy-pack-canonical-sha256", required=True
+    )
+    signed_receipt_reservation.add_argument(
+        "--expected-routing-pcbex-sha256", required=True
+    )
+    signed_receipt_reservation.add_argument(
+        "--expected-authorization-pcbex-sha256", required=True
+    )
+    signed_receipt_reservation.add_argument(
+        "--expected-kicad-cli-sha256", required=True
+    )
+    signed_receipt_reservation.add_argument("--pcbex", default="pcbex")
+    signed_receipt_reservation.add_argument("--authorization-pcbex", default="pcbex")
+    signed_receipt_reservation.add_argument("--kicad-cli", default="kicad-cli")
+    signed_receipt_reservation.add_argument("--kicad-project", type=Path)
+    signed_receipt_reservation.add_argument("--kicad-rules", type=Path)
+    signed_receipt_reservation.add_argument("--grid-mm", type=float, default=0.25)
+    signed_receipt_reservation.add_argument("--width-mm", type=float, default=0.25)
+    signed_receipt_reservation.add_argument("--clearance-mm", type=float, default=0.20)
+    signed_receipt_reservation.add_argument("--via-diameter-mm", type=float, default=0.60)
+    signed_receipt_reservation.add_argument("--via-drill-mm", type=float, default=0.30)
+    signed_receipt_reservation.add_argument("--bend-cost", type=int, default=5)
+    signed_receipt_reservation.add_argument("--via-cost", type=int, default=20)
+    signed_receipt_reservation_profiles = (
+        signed_receipt_reservation.add_mutually_exclusive_group()
+    )
+    signed_receipt_reservation_profiles.add_argument("--fab")
+    signed_receipt_reservation_profiles.add_argument("--fab-profile", type=Path)
+    signed_receipt_reservation_profiles.add_argument("--physical-profile", type=Path)
+    signed_receipt_reservation.add_argument(
+        "--reservation-ledger", type=Path, required=True, metavar="ABSOLUTE_DIRECTORY"
+    )
+    signed_receipt_reservation.add_argument(
+        "--expected-ledger-id", required=True, metavar="HEX"
+    )
+    signed_receipt_reservation.add_argument(
+        "--timeout-seconds", type=float, default=300.0
+    )
     procurement_intent = sub.add_parser(
         "build-procurement-intent",
         help="bind one exact final BOM to fully replayed catalog SKU selections",
@@ -3190,6 +3307,141 @@ def main() -> None:
             raise SystemExit(
                 f"signed factory receipt release schema failed: {error}"
             ) from None
+    elif args.command == "reserve-signed-factory-receipt-release":
+        if os.name != "posix":
+            raise SystemExit(
+                "signed factory receipt release reservation failed: local "
+                "reservation is supported only on Unix"
+            )
+        timeout = args.timeout_seconds
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(float(timeout))
+            or not 3.0 <= float(timeout) <= 600.0
+        ):
+            raise SystemExit(
+                "signed factory receipt release reservation failed: timeout "
+                "must be between 3 and 600 seconds"
+            )
+        deadline = time.monotonic() + float(timeout)
+        commit_reserve = min(15.0, float(timeout) / 3.0)
+        replay_budget = float(timeout) - commit_reserve
+        try:
+            retained_raw = read_bytes(
+                args.report,
+                max_bytes=MAXIMUM_SIGNED_FACTORY_RECEIPT_RELEASE_REPORT_BYTES,
+            )
+            retained = normalize_retained_signed_factory_receipt_release(
+                retained_raw
+            )
+            fresh = evaluate_signed_factory_receipt_release(
+                args.input_board,
+                args.routed_board,
+                args.convergence_report,
+                args.routing_verification_report,
+                args.manufacturing_package,
+                args.routing_manufacturing_handoff_report,
+                args.native_drc_report,
+                args.routing_drc_manufacturing_handoff_report,
+                args.deterministic_pipeline_plan,
+                args.deterministic_pipeline_report,
+                args.approval,
+                args.routing_drc_fabrication_release_report,
+                args.executable_pinned_fabrication_release_report,
+                args.factory_receipt,
+                args.policy_pack,
+                args.signed_factory_receipt_attestation,
+                args.expected_policy_pack_canonical_sha256,
+                args.expected_routing_pcbex_sha256,
+                args.expected_authorization_pcbex_sha256,
+                args.expected_kicad_cli_sha256,
+                args.pcbex,
+                args.authorization_pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                grid_mm=args.grid_mm,
+                width_mm=args.width_mm,
+                clearance_mm=args.clearance_mm,
+                via_diameter_mm=args.via_diameter_mm,
+                via_drill_mm=args.via_drill_mm,
+                bend_cost=args.bend_cost,
+                via_cost=args.via_cost,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=replay_budget,
+            )
+            if read_bytes(
+                args.report,
+                max_bytes=MAXIMUM_SIGNED_FACTORY_RECEIPT_RELEASE_REPORT_BYTES,
+            ) != retained_raw:
+                raise SignedFactoryReceiptReleaseReservationError(
+                    "retained signed factory receipt release report changed"
+                )
+            marker = build_signed_factory_receipt_release_reservation(
+                retained,
+                fresh,
+                args.expected_ledger_id,
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise SignedFactoryReceiptReleaseReservationError(
+                    "whole-operation deadline expired before ledger commit"
+                )
+            protected = tuple(
+                path
+                for path in (
+                    args.report,
+                    args.input_board,
+                    args.routed_board,
+                    args.convergence_report,
+                    args.routing_verification_report,
+                    args.manufacturing_package,
+                    args.routing_manufacturing_handoff_report,
+                    args.native_drc_report,
+                    args.routing_drc_manufacturing_handoff_report,
+                    args.deterministic_pipeline_plan,
+                    args.deterministic_pipeline_report,
+                    *args.approval,
+                    args.routing_drc_fabrication_release_report,
+                    args.executable_pinned_fabrication_release_report,
+                    args.factory_receipt,
+                    args.policy_pack,
+                    args.signed_factory_receipt_attestation,
+                    args.kicad_project,
+                    args.kicad_rules,
+                    args.fab_profile,
+                    args.physical_profile,
+                    _procurement_authorization_command_path(args.pcbex),
+                    _procurement_authorization_command_path(
+                        args.authorization_pcbex
+                    ),
+                    _procurement_authorization_command_path(args.kicad_cli),
+                )
+                if path is not None
+            )
+            commit_signed_factory_receipt_release_reservation(
+                marker,
+                args.reservation_ledger,
+                args.expected_ledger_id,
+                args.authorization_pcbex,
+                protected,
+                timeout_seconds=remaining,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            SignedFactoryReceiptReleaseError,
+            SignedFactoryReceiptReleaseReservationError,
+        ) as error:
+            raise SystemExit(
+                f"signed factory receipt release reservation failed: {error}"
+            ) from None
+        print(
+            "signed factory receipt release reserved durably in trusted local ledger"
+        )
     elif args.command == "build-procurement-intent":
         try:
             validate_no_clobber_path(args.output)

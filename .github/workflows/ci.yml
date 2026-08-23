@@ -1912,6 +1912,16 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_receipt_attestation
+      - name: Run cross-platform v1.481 signed-release reservation boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_signed_factory_receipt_release_reservation_v1481 -v
+      - name: Run cross-platform v1.481 local-ledger helper boundaries
+        run: >-
+          cargo +stable test --package pcbex
+          --test signed_factory_receipt_release_reservation --release --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

@@ -934,6 +934,11 @@
     {
       "id": "policy-pinned-signed-factory-receipt-release",
       "release": "v1.480.0",
+      "status": "released"
+    },
+    {
+      "id": "local-signed-factory-receipt-release-reservation",
+      "release": "v1.481.0",
       "status": "current"
     }
   ]

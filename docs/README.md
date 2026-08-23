@@ -62,6 +62,10 @@ boundary document for the artifact you plan to produce or trust.
   exact normalized factory receipt to a dedicated policy-pinned Ed25519 key and
   freshly replay the executable-pinned release before authentication.
 
+- [Signed Release Reservation](SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION.md) —
+  freshly replay that authenticated release and durably consume its challenge
+  once inside one pinned local Unix ledger.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

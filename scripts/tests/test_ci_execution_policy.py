@@ -679,6 +679,14 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
             "          factory_receipt_attestation"
         )
+        signed_release_reservation_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_signed_factory_receipt_release_reservation_v1481 -v"
+        )
+        signed_release_reservation_rust_command = (
+            "cargo +stable test --package pcbex\n"
+            "          --test signed_factory_receipt_release_reservation --release --locked"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -709,6 +717,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(signed_factory_receipt_release_command, boundaries)
         self.assertEqual(document.count(factory_receipt_attestation_command), 1)
         self.assertIn(factory_receipt_attestation_command, boundaries)
+        self.assertEqual(document.count(signed_release_reservation_command), 1)
+        self.assertIn(signed_release_reservation_command, boundaries)
+        self.assertEqual(document.count(signed_release_reservation_rust_command), 1)
+        self.assertIn(signed_release_reservation_rust_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
@@ -720,6 +732,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(executable_pinned_fabrication_release_command, rust_windows)
         self.assertNotIn(signed_factory_receipt_release_command, rust_windows)
         self.assertNotIn(factory_receipt_attestation_command, rust_windows)
+        self.assertNotIn(signed_release_reservation_command, rust_windows)
+        self.assertNotIn(signed_release_reservation_rust_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -791,6 +805,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         factory_receipt_attestation_step = boundaries.index(
             "- name: Run cross-platform v1.480 factory-receipt cryptographic boundaries"
+        )
+        signed_release_reservation_step = boundaries.index(
+            "- name: Run cross-platform v1.481 signed-release reservation boundaries"
+        )
+        signed_release_reservation_rust_step = boundaries.index(
+            "- name: Run cross-platform v1.481 local-ledger helper boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -916,11 +936,26 @@ class CiExecutionPolicyTests(unittest.TestCase):
             signed_factory_receipt_release_block,
         )
         factory_receipt_attestation_block = boundaries[
-            factory_receipt_attestation_step:toolchain_step
+            factory_receipt_attestation_step:signed_release_reservation_step
         ]
         self.assertIn(
             factory_receipt_attestation_command,
             factory_receipt_attestation_block,
+        )
+        signed_release_reservation_block = boundaries[
+            signed_release_reservation_step:signed_release_reservation_rust_step
+        ]
+        self.assertIn("PYTHONPATH: agent/src", signed_release_reservation_block)
+        self.assertIn(
+            signed_release_reservation_command,
+            signed_release_reservation_block,
+        )
+        signed_release_reservation_rust_block = boundaries[
+            signed_release_reservation_rust_step:toolchain_step
+        ]
+        self.assertIn(
+            signed_release_reservation_rust_command,
+            signed_release_reservation_rust_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -957,7 +992,15 @@ class CiExecutionPolicyTests(unittest.TestCase):
             signed_factory_receipt_release_step,
             factory_receipt_attestation_step,
         )
-        self.assertLess(factory_receipt_attestation_step, toolchain_step)
+        self.assertLess(
+            factory_receipt_attestation_step,
+            signed_release_reservation_step,
+        )
+        self.assertLess(
+            signed_release_reservation_step,
+            signed_release_reservation_rust_step,
+        )
+        self.assertLess(signed_release_reservation_rust_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(
