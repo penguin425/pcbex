@@ -2167,6 +2167,419 @@ for schema_path in schema_paths:
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.484 signs the accepted local head and a semantic state chain. The real
+# production ZIP moves from pending generation zero to accepted generation one;
+# replay repairs locally and a terminal head suppresses every later GET.
+monotonic_release_ledger="$output_directory/monotonic-signed-release-ledger"
+mkdir -m 0700 "$monotonic_release_ledger"
+cp -- \
+  "$signed_release_reservation_ledger/.pcbex-signed-factory-receipt-release-reservation-ledger-v1.json" \
+  "$monotonic_release_ledger/.pcbex-signed-factory-receipt-release-reservation-ledger-v1.json"
+cp -- "$signed_release_reservation_marker" "$monotonic_release_ledger/"
+chmod 0600 "$monotonic_release_ledger"/* "$monotonic_release_ledger"/.pcbex-*.json
+monotonic_release_ledger="$(cd "$monotonic_release_ledger" && pwd -P)"
+monotonic_state_schema="$output_directory/monotonic-factory-state.schema.json"
+monotonic_signature_schema="$output_directory/monotonic-factory-signature.schema.json"
+monotonic_entry_schema="$output_directory/monotonic-factory-entry.schema.json"
+monotonic_report_schema="$output_directory/monotonic-factory-report.schema.json"
+monotonic_submit="$output_directory/monotonic-factory.submit.json"
+monotonic_submit_replay="$output_directory/monotonic-factory.submit-replay.json"
+monotonic_submit_replay_error="$output_directory/monotonic-factory.submit-replay.stderr"
+monotonic_reconcile="$output_directory/monotonic-factory.reconcile.json"
+monotonic_terminal_replay="$output_directory/monotonic-factory.terminal-replay.json"
+monotonic_submit_ready="$output_directory/monotonic-factory-submit.ready"
+monotonic_submit_request="$output_directory/monotonic-factory-submit.request.json"
+monotonic_reconcile_ready="$output_directory/monotonic-factory-reconcile.ready"
+monotonic_reconcile_request="$output_directory/monotonic-factory-reconcile.request.json"
+monotonic_nonce="$(printf 'd%.0s' {1..64})"
+monotonic_reconciliation_id="$(printf 'f%.0s' {1..64})"
+
+"$pcbex_binary" factory-release-adapter-monotonic-state-schema \
+  --output "$monotonic_state_schema"
+"$pcbex_binary" factory-release-adapter-monotonic-http-message-signature-schema \
+  --output "$monotonic_signature_schema"
+"$pcbex_binary" factory-release-adapter-monotonic-state-entry-schema \
+  --output "$monotonic_entry_schema"
+"$pcbex_binary" factory-release-adapter-monotonic-observation-report-schema \
+  --output "$monotonic_report_schema"
+
+cat >"$signed_release_adapter_server" <<'PY'
+import base64
+import hashlib
+import http.server
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+
+(
+    mode,
+    status,
+    reconciliation_id,
+    sequence_text,
+    ready_path,
+    request_path,
+    token,
+    private_key,
+) = sys.argv[1:]
+sequence = int(sequence_text)
+
+class Server(http.server.HTTPServer):
+    allow_reuse_address = True
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_arguments):
+        pass
+
+    def _handle(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        request_body = self.rfile.read(length)
+        expected_method = "POST" if mode == "submit" else "GET"
+        assert self.command == expected_method
+        if mode == "reconcile":
+            assert request_body == b""
+            assert self.headers.get("X-PCBEX-Reconciliation-ID") == reconciliation_id
+        accepted_sequence = self.headers["X-PCBEX-Accepted-State-Sequence"]
+        accepted_sha256 = self.headers["X-PCBEX-Accepted-State-SHA256"]
+        if sequence == 0:
+            assert accepted_sequence == "none"
+            assert accepted_sha256 == "none"
+            previous_sha256 = None
+            previous_header = "none"
+        else:
+            assert accepted_sequence == str(sequence - 1)
+            assert len(accepted_sha256) == 64
+            previous_sha256 = accepted_sha256
+            previous_header = accepted_sha256
+        assert self.headers.get("X-PCBEX-Response-Signature-Profile") == \
+            "rfc9421-ed25519-content-digest-monotonic-state-v1"
+        observed = {
+            "method": self.command,
+            "path": self.path,
+            "body_bytes": len(request_body),
+            "body_sha256": hashlib.sha256(request_body).hexdigest(),
+            "authorization_ok": self.headers.get("Authorization") == f"Bearer {token}",
+            "accepted_sequence": accepted_sequence,
+            "accepted_sha256": accepted_sha256,
+            "idempotency_key": self.headers["Idempotency-Key"],
+        }
+        Path(request_path).write_text(
+            json.dumps(observed, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        acknowledgement = {
+            "schema_version": 1,
+            "acknowledgement_scope": "pcbex-signed-factory-release-adapter-acknowledgement-v1",
+            "operation": mode,
+            "idempotency_key": self.headers["Idempotency-Key"],
+            "request_nonce": self.headers["X-PCBEX-Request-Nonce"],
+            "reconciliation_id": reconciliation_id if mode == "reconcile" else None,
+            "release_subject_sha256": self.headers["X-PCBEX-Release-Subject-SHA256"],
+            "manufacturing_package_sha256": self.headers["X-PCBEX-Package-SHA256"],
+            "factory_id": self.headers["X-PCBEX-Factory-ID"],
+            "provider": "generic",
+            "status": status,
+            "submission_id": "kicad-e2e-v1484",
+        }
+        response = json.dumps(
+            acknowledgement, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        state_material = {
+            "schema_version": 1,
+            "state_scope": "authenticated-monotonic-factory-release-adapter-state-v1",
+            "sequence": sequence,
+            "previous_state_sha256": previous_sha256,
+            "idempotency_key": acknowledgement["idempotency_key"],
+            "submission_id": acknowledgement["submission_id"],
+            "factory_id": acknowledgement["factory_id"],
+            "provider": acknowledgement["provider"],
+            "release_subject_sha256": acknowledgement["release_subject_sha256"],
+            "manufacturing_package_sha256": acknowledgement["manufacturing_package_sha256"],
+            "status": acknowledgement["status"],
+        }
+        state_source = json.dumps(
+            state_material, separators=(",", ":")
+        ).encode("ascii")
+        state_sha256 = hashlib.sha256(
+            b"pcbex:factory-release-adapter-monotonic-state:v1\0" + state_source
+        ).hexdigest()
+        digest = "sha-256=:" + base64.b64encode(
+            hashlib.sha256(response).digest()
+        ).decode("ascii") + ":"
+        created = int(time.time())
+        expires = created + 120
+        common = (
+            '("@status" "content-digest" "content-type" '
+            '"x-pcbex-state-sequence" "x-pcbex-state-previous-sha256" '
+            '"x-pcbex-state-sha256" "x-pcbex-adapter";req '
+            '"x-pcbex-schema-version";req '
+            '"x-pcbex-response-signature-profile";req '
+            '"x-pcbex-accepted-state-sequence";req '
+            '"x-pcbex-accepted-state-sha256";req '
+            '"idempotency-key";req "x-pcbex-request-nonce";req '
+        )
+        if mode == "reconcile":
+            common += '"x-pcbex-reconciliation-id";req '
+        common += (
+            '"x-pcbex-release-subject-sha256";req '
+            '"x-pcbex-package-sha256";req "x-pcbex-factory-id";req '
+            '"@method";req "@target-uri";req)'
+        )
+        parameters = (
+            f'{common};created={created};expires={expires};'
+            'keyid="kicad-e2e-factory-response";alg="ed25519";'
+            'tag="pcbex-signed-factory-release-monotonic-state-response-v1"'
+        )
+        signature_input = "pcbex-state=" + parameters
+        signature_base = [
+            '"@status": 200',
+            f'"content-digest": {digest}',
+            '"content-type": application/json',
+            f'"x-pcbex-state-sequence": {sequence}',
+            f'"x-pcbex-state-previous-sha256": {previous_header}',
+            f'"x-pcbex-state-sha256": {state_sha256}',
+            '"x-pcbex-adapter";req: signed-factory-release-http-v1',
+            '"x-pcbex-schema-version";req: 1',
+            '"x-pcbex-response-signature-profile";req: '
+            'rfc9421-ed25519-content-digest-monotonic-state-v1',
+            f'"x-pcbex-accepted-state-sequence";req: {accepted_sequence}',
+            f'"x-pcbex-accepted-state-sha256";req: {accepted_sha256}',
+            f'"idempotency-key";req: {self.headers["Idempotency-Key"]}',
+            f'"x-pcbex-request-nonce";req: {self.headers["X-PCBEX-Request-Nonce"]}',
+        ]
+        if mode == "reconcile":
+            signature_base.append(
+                f'"x-pcbex-reconciliation-id";req: {reconciliation_id}'
+            )
+        signature_base.extend([
+            '"x-pcbex-release-subject-sha256";req: '
+            + self.headers["X-PCBEX-Release-Subject-SHA256"],
+            '"x-pcbex-package-sha256";req: '
+            + self.headers["X-PCBEX-Package-SHA256"],
+            f'"x-pcbex-factory-id";req: {self.headers["X-PCBEX-Factory-ID"]}',
+            f'"@method";req: {expected_method}',
+            f'"@target-uri";req: http://127.0.0.1:{self.server.server_port}/release',
+            f'"@signature-params": {parameters}',
+        ])
+        with tempfile.NamedTemporaryFile() as signature_base_file:
+            signature_base_file.write("\n".join(signature_base).encode("ascii"))
+            signature_base_file.flush()
+            signed = subprocess.run(
+                [
+                    "openssl", "pkeyutl", "-sign", "-rawin",
+                    "-inkey", private_key, "-in", signature_base_file.name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            ).stdout
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Digest", digest)
+        self.send_header("X-PCBEX-State-Sequence", str(sequence))
+        self.send_header("X-PCBEX-State-Previous-SHA256", previous_header)
+        self.send_header("X-PCBEX-State-SHA256", state_sha256)
+        self.send_header("Signature-Input", signature_input)
+        self.send_header(
+            "Signature", "pcbex-state=:" + base64.b64encode(signed).decode("ascii") + ":"
+        )
+        self.send_header("Content-Length", str(len(response)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(response)
+
+    do_POST = _handle
+    do_GET = _handle
+
+server = Server(("127.0.0.1", 0), Handler)
+Path(ready_path).write_text(
+    f"http://127.0.0.1:{server.server_port}/release\n", encoding="utf-8"
+)
+server.handle_request()
+server.server_close()
+PY
+
+python3 "$signed_release_adapter_server" \
+  submit adapter_pending '' 0 \
+  "$monotonic_submit_ready" "$monotonic_submit_request" \
+  "$signed_release_adapter_token" "$factory_response_private_key" &
+signed_release_adapter_server_pid=$!
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
+for _ in $(seq 1 100); do
+  test -s "$monotonic_submit_ready" && break
+  if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
+    wait "$signed_release_adapter_server_pid"
+  fi
+  sleep 0.05
+done
+test -s "$monotonic_submit_ready"
+monotonic_submit_endpoint="$(tr -d '\r\n' < "$monotonic_submit_ready")"
+"$pcbex_binary" submit-monotonic-authenticated-signed-factory-receipt-release \
+  "$fabrication_release_package" \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --challenge "$(printf 'c%.0s' {1..64})" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --endpoint "$monotonic_submit_endpoint" \
+  --request-nonce "$monotonic_nonce" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 --allow-http-loopback \
+  --output "$monotonic_submit"
+wait "$signed_release_adapter_server_pid"
+
+monotonic_key="$(jq -r .adapter_receipt.idempotency_key "$monotonic_submit")"
+if "$pcbex_binary" submit-monotonic-authenticated-signed-factory-receipt-release \
+  "$fabrication_release_package" \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --challenge "$(printf 'c%.0s' {1..64})" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --endpoint "$monotonic_submit_endpoint" \
+  --request-nonce "$monotonic_nonce" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 --allow-http-loopback --require-accepted \
+  --output "$monotonic_submit_replay" \
+  2>"$monotonic_submit_replay_error"; then
+  echo "expected retained pending monotonic state to fail its final gate" >&2
+  exit 1
+fi
+cmp "$monotonic_submit" "$monotonic_submit_replay"
+grep -Fq 'state has not accepted the release' "$monotonic_submit_replay_error"
+
+python3 "$signed_release_adapter_server" \
+  reconcile adapter_accepted "$monotonic_reconciliation_id" 1 \
+  "$monotonic_reconcile_ready" "$monotonic_reconcile_request" \
+  "$signed_release_adapter_token" "$factory_response_private_key" &
+signed_release_adapter_server_pid=$!
+for _ in $(seq 1 100); do
+  test -s "$monotonic_reconcile_ready" && break
+  if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
+    wait "$signed_release_adapter_server_pid"
+  fi
+  sleep 0.05
+done
+test -s "$monotonic_reconcile_ready"
+monotonic_reconcile_endpoint="$(tr -d '\r\n' < "$monotonic_reconcile_ready")"
+"$pcbex_binary" reconcile-monotonic-authenticated-signed-factory-receipt-release \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --endpoint "$monotonic_reconcile_endpoint" \
+  --reconciliation-id "$monotonic_reconciliation_id" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 --allow-http-loopback --require-accepted \
+  --output "$monotonic_reconcile"
+wait "$signed_release_adapter_server_pid"
+
+"$pcbex_binary" reconcile-monotonic-authenticated-signed-factory-receipt-release \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --endpoint "$monotonic_reconcile_endpoint" \
+  --reconciliation-id "$(printf '1%.0s' {1..64})" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 --allow-http-loopback --require-accepted \
+  --output "$monotonic_terminal_replay"
+cmp "$monotonic_reconcile" "$monotonic_terminal_replay"
+
+python3 - \
+  "$monotonic_submit" "$monotonic_reconcile" \
+  "$monotonic_submit_request" "$monotonic_reconcile_request" \
+  "$fabrication_release_package" "$monotonic_release_ledger" \
+  "$signed_release_adapter_token" \
+  "$monotonic_state_schema" "$monotonic_signature_schema" \
+  "$monotonic_entry_schema" "$monotonic_report_schema" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+submit_path, reconcile_path, submit_request_path, reconcile_request_path, package_path, ledger_path = \
+    map(Path, sys.argv[1:7])
+token = sys.argv[7]
+schema_paths = list(map(Path, sys.argv[8:]))
+submit = json.loads(submit_path.read_bytes())
+reconcile = json.loads(reconcile_path.read_bytes())
+submit_request = json.loads(submit_request_path.read_bytes())
+reconcile_request = json.loads(reconcile_request_path.read_bytes())
+package = package_path.read_bytes()
+
+assert submit["response_authenticated"] is True
+assert submit["state_continuity_verified"] is True
+assert submit["requested_state"] is None
+assert submit["observed_state"]["sequence"] == 0
+assert submit["observed_state"]["status"] == "adapter_pending"
+assert submit["accepted"] is False
+assert reconcile["response_authenticated"] is True
+assert reconcile["state_continuity_verified"] is True
+assert reconcile["requested_state"] == submit["observed_state"]
+assert reconcile["observed_state"]["sequence"] == 1
+assert reconcile["observed_state"]["previous_state_sha256"] == \
+    submit["observed_state"]["state_sha256"]
+assert reconcile["observed_state"]["status"] == "adapter_accepted"
+assert reconcile["accepted"] is True
+for report in (submit, reconcile):
+    assert report["state_headers_authenticated"] is True
+    assert report["state_digest_verified"] is True
+    assert report["request_head_bound"] is True
+    assert report["transition_verified"] is True
+    assert report["requested_head_continuity_verified"] is True
+    assert report["global_non_equivocation_verified"] is False
+    for claim in (
+        "selected_ledger_state_committed",
+        "endpoint_transport_authenticity_verified",
+        "factory_legal_identity_verified",
+        "trusted_time_verified",
+        "server_side_idempotency_enforced",
+        "capacity_reserved",
+        "order_placed",
+        "payment_performed",
+        "exactly_once_execution_verified",
+    ):
+        assert report[claim] is False, claim
+
+assert submit_request["body_bytes"] == len(package)
+assert submit_request["body_sha256"] == hashlib.sha256(package).hexdigest()
+assert submit_request["accepted_sequence"] == "none"
+assert submit_request["accepted_sha256"] == "none"
+assert reconcile_request["body_bytes"] == 0
+assert reconcile_request["body_sha256"] == hashlib.sha256(b"").hexdigest()
+assert reconcile_request["accepted_sequence"] == "0"
+assert reconcile_request["accepted_sha256"] == submit["observed_state"]["state_sha256"]
+
+ledger_names = {path.name for path in ledger_path.iterdir()}
+key = submit["adapter_receipt"]["idempotency_key"]
+assert f"monotonic-factory-release-state-v1-{key}-0000.json" in ledger_names
+assert f"monotonic-factory-release-state-v1-{key}-0001.json" in ledger_names
+assert any(name.startswith("monotonic-factory-release-submission-v1-")
+           for name in ledger_names)
+assert any(name.startswith("monotonic-factory-release-reconciliation-v1-")
+           for name in ledger_names)
+for path in [submit_path, reconcile_path, *ledger_path.iterdir()]:
+    assert token.encode() not in path.read_bytes(), path
+for schema_path in schema_paths:
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
 rm -f -- "$factory_response_private_key" "$factory_response_public_der"
 rmdir -- "$factory_response_secret_directory"

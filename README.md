@@ -59,6 +59,9 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Authenticate adapter responses:** Verify RFC 9421 Ed25519 signatures and
   RFC 9530 content digests against exact policy-pinned factory keys.
 
+- **Reject factory-state rollback:** Chain authenticated adapter states to one
+  retained ledger and detect rollback, equivocation, gaps, forks, and terminal mutation.
+
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
 
@@ -234,6 +237,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Signed release reservation v1 | Durably admit one freshly authenticated receipt challenge to a pinned local ledger | `pcbex signed-factory-receipt-release-reservation-schema` |
 | Durable signed-release submission v1 | Commit one idempotency-keyed adapter intent, retain its result, and reconcile by GET without retransmitting the ZIP | `pcbex signed-factory-release-adapter-receipt-schema` |
 | Authenticated factory response v1 | Verify the exact adapter acknowledgement, status, request binding, and body digest under a policy-pinned Ed25519 key | `pcbex factory-release-adapter-response-authentication-report-schema` |
+| Monotonic factory state v1 | Bind signed adapter states to the accepted local head and reject rollback, equivocation, gaps, forks, or terminal mutation | `pcbex factory-release-adapter-monotonic-observation-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -282,6 +286,7 @@ the security model for each adapter.
 | [Architecture](docs/ARCHITECTURE.md) | Understand crates, data flow, and boundary ownership |
 | [Integrations](docs/INTEGRATIONS.md) | Configure GitHub Actions, MCP, KiCad, or the Python agent |
 | [Trust Model](docs/TRUST_MODEL.md) | Distinguish deterministic evidence from external authority |
+| [Monotonic Factory State](docs/MONOTONIC_FACTORY_RELEASE_ADAPTER_STATE.md) | Integrate the signed state-chain profile and its durable retry rules |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the

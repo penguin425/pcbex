@@ -196,6 +196,7 @@ auditable release.
 | v1.481.0 | Local signed factory-receipt release reservation | Freshly replay one exact retained v1.480 subject, require a currently authenticated receipt and active fabrication/attestation windows, then durably admit its signed challenge to one externally identified Unix 0700 local ledger through descriptor-pinned no-replace publication without claiming global one-time use, capacity, submission, ordering, or payment |
 | v1.482.0 | Durable idempotency-keyed signed factory-release submission and reconciliation | Consume one exact v1.481 ledger marker and manufacturing ZIP, durably commit a deterministic adapter intent before one POST, retain the bounded result, and reconcile pending or uncertain outcomes through GET without retransmitting the ZIP or claiming server-side idempotency, legal identity, capacity, order, payment, or exactly-once execution |
 | v1.483.0 | Policy-pinned signed factory-release adapter responses | Preserve the exact v1.482 intent and receipt while authenticating each bounded POST or GET response with a strict RFC 9421 Ed25519 profile, RFC 9530 content digest, covered request context, and role-disjoint factory key from an externally pinned policy; retain positive or closed negative evidence before gating without claiming trusted time, TLS, legal identity, capacity, order, payment, or exactly-once execution |
+| v1.484.0 | Authenticated monotonic factory-release adapter state | Preserve every v1.482/v1.483 wire contract while adding a separate signed sequence/predecessor/state profile that binds the client's accepted head, admits only genesis, exact replay, or one linked successor, rejects rollback/equivocation/gaps/forks/terminal mutation, and durably repairs a bounded local chain without claiming global non-equivocation, ledger rollback resistance, trusted time, capacity, order, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1728,7 +1729,7 @@ or capacity, authenticate when the server processed the request, place an
 order, authorize payment, or verify globally exactly-once execution. Those
 claims stay false in every receipt.
 
-The current v1.483.0 milestone authenticates the application response without
+The released v1.483.0 milestone authenticates the application response without
 changing a byte of the v1.482 intent, acknowledgement, or receipt contracts.
 The adapter opts into one strict RFC 9421 Ed25519 profile and returns an RFC
 9530 `Content-Digest`, `Signature-Input`, and `Signature`. The signature covers
@@ -1748,3 +1749,32 @@ Only application-response authenticity can become true. The local clock is not
 a trusted timestamp, the HTTP signature does not authenticate legal identity or
 TLS, and server-side idempotency, capacity, order placement, payment, and global
 exactly-once execution remain false.
+
+The current v1.484.0 milestone authenticates state history without changing a
+byte of the v1.482 intent, acknowledgement, or receipt formats or the v1.483
+signature profile. A separate RFC 9421 profile signs response sequence,
+predecessor, and semantic state digests together with the client's exact
+accepted head. An initial request accepts only generation zero; reconciliation
+accepts only an exact replay or one successor linked to the retained digest.
+
+The closed transition verifier distinguishes rollback, same-generation
+equivocation, skipped generations, predecessor forks, submission-identity
+changes, and mutation after accepted or rejected terminal state. An invalid
+transition may remain cryptographically authenticated, but cannot set state
+continuity or acceptance. The adapter must return the earliest unseen event so
+a new client receives genesis rather than trusting an unprovable recent
+snapshot.
+
+Each authenticated observation commits before its sequence-keyed state entry,
+and that entry commits before the unchanged compatible receipt. A replay repairs
+either later record locally without another POST or GET. Complete chain loading
+re-verifies every referenced observation, signature, policy binding, transition,
+and no-replace state entry under a fixed 10,000-state ceiling. Terminal heads
+make all later reconciliation local.
+
+This is continuity relative to one selected, retained Unix ledger. It does not
+prove global non-equivocation or protect against rollback of the ledger itself.
+Legal identity, TLS authenticity, trusted time, server-side idempotency,
+capacity, order placement, payment, and exactly-once execution remain false.
+Transparency receipts, trusted timestamps, transport identity, and actual order
+authority remain later independent milestones.
