@@ -1599,6 +1599,10 @@ signed_release_reservation_ledger_schema="$output_directory/signed-release-reser
 signed_release_reservation_error="$output_directory/signed-release-reservation.second.stderr"
 signed_release_reservation_negative_error="$output_directory/signed-release-reservation.negative.stderr"
 mkdir -m 0700 "$signed_release_reservation_ledger"
+signed_release_reservation_ledger="$(
+  cd "$signed_release_reservation_ledger"
+  pwd -P
+)"
 printf '%s\n' \
   "{\"schema_version\":1,\"ledger_scope\":\"pinned-local-signed-factory-receipt-release-ledger-at-most-once-v1\",\"ledger_id\":\"$signed_release_reservation_id\"}" \
   > "$signed_release_reservation_ledger/.pcbex-signed-factory-receipt-release-reservation-ledger-v1.json"
