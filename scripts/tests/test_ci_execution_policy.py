@@ -687,6 +687,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex\n"
             "          --test signed_factory_receipt_release_reservation --release --locked"
         )
+        signed_release_submission_command = (
+            "cargo +stable test --package pcbex\n"
+            "          --test signed_factory_receipt_release_submission --release --locked"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -721,6 +725,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(signed_release_reservation_command, boundaries)
         self.assertEqual(document.count(signed_release_reservation_rust_command), 1)
         self.assertIn(signed_release_reservation_rust_command, boundaries)
+        self.assertEqual(document.count(signed_release_submission_command), 1)
+        self.assertIn(signed_release_submission_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
@@ -734,6 +740,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(factory_receipt_attestation_command, rust_windows)
         self.assertNotIn(signed_release_reservation_command, rust_windows)
         self.assertNotIn(signed_release_reservation_rust_command, rust_windows)
+        self.assertNotIn(signed_release_submission_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -811,6 +818,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         signed_release_reservation_rust_step = boundaries.index(
             "- name: Run cross-platform v1.481 local-ledger helper boundaries"
+        )
+        signed_release_submission_step = boundaries.index(
+            "- name: Run cross-platform v1.482 durable factory-release submission boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -951,11 +961,18 @@ class CiExecutionPolicyTests(unittest.TestCase):
             signed_release_reservation_block,
         )
         signed_release_reservation_rust_block = boundaries[
-            signed_release_reservation_rust_step:toolchain_step
+            signed_release_reservation_rust_step:signed_release_submission_step
         ]
         self.assertIn(
             signed_release_reservation_rust_command,
             signed_release_reservation_rust_block,
+        )
+        signed_release_submission_block = boundaries[
+            signed_release_submission_step:toolchain_step
+        ]
+        self.assertIn(
+            signed_release_submission_command,
+            signed_release_submission_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -1000,7 +1017,11 @@ class CiExecutionPolicyTests(unittest.TestCase):
             signed_release_reservation_step,
             signed_release_reservation_rust_step,
         )
-        self.assertLess(signed_release_reservation_rust_step, toolchain_step)
+        self.assertLess(
+            signed_release_reservation_rust_step,
+            signed_release_submission_step,
+        )
+        self.assertLess(signed_release_submission_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

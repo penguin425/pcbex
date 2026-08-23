@@ -939,6 +939,11 @@
     {
       "id": "local-signed-factory-receipt-release-reservation",
       "release": "v1.481.0",
+      "status": "released"
+    },
+    {
+      "id": "durable-idempotency-keyed-signed-factory-release-submission-reconciliation",
+      "release": "v1.482.0",
       "status": "current"
     }
   ]

@@ -89,6 +89,7 @@ writer.
 | Composition | Handoff replay, routing/manufacturing binding, assembly evidence, supplier coverage | Python agent |
 | Authorization | Signed review, fabrication release, procurement release | Rust cryptography plus owning orchestrator |
 | Local admission | Fabrication and procurement challenge reservation markers | Owning verifier plus Rust pinned-ledger boundary |
+| Factory-release adapter | Durable signed-release intent, one POST attempt, GET reconciliation, and closed receipts | Rust pinned-ledger and bounded HTTP boundary |
 
 Later layers should retain or bind earlier identities instead of copying a
 boolean result. Fresh replay is required wherever the focused contract says a

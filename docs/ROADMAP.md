@@ -194,6 +194,7 @@ auditable release.
 | v1.479.0 | Externally digest-pinned release entrypoints | Freshly reassess the stable evidence, scope, policy, and approval subject of one canonical retained v1.478 release while requiring the resolved routing pcbex, authorization pcbex, and KiCad CLI native entrypoint bytes to match three independent deployment-supplied SHA-256 pins; retain the fresh point-in-time decision and path-free executable observations without claiming historical-decision reuse, binary origin, signatures, libraries, plugins, loader state, sandboxing, source authenticity, external submission, capacity, ordering, or payment |
 | v1.480.0 | Policy-pinned signed factory-receipt release | Bind one exact normalized accepted factory receipt and manufacturing package to a dedicated role-disjoint Ed25519 factory key selected by an externally pinned organization policy, then freshly replay the complete executable-pinned v1.479 subject around signature verification before retaining an authenticated or valid negative release snapshot without claiming legal identity, TLS or raw-response authenticity, trusted time, capacity reservation, ordering, or payment |
 | v1.481.0 | Local signed factory-receipt release reservation | Freshly replay one exact retained v1.480 subject, require a currently authenticated receipt and active fabrication/attestation windows, then durably admit its signed challenge to one externally identified Unix 0700 local ledger through descriptor-pinned no-replace publication without claiming global one-time use, capacity, submission, ordering, or payment |
+| v1.482.0 | Durable idempotency-keyed signed factory-release submission and reconciliation | Consume one exact v1.481 ledger marker and manufacturing ZIP, durably commit a deterministic adapter intent before one POST, retain the bounded result, and reconcile pending or uncertain outcomes through GET without retransmitting the ZIP or claiming server-side idempotency, legal identity, capacity, order, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1673,7 +1674,7 @@ provenance, external submission, inventory or capacity reservation, order,
 payment, or one-time challenge use. A side-effecting executor remains a later,
 separately credentialed and durably idempotent boundary.
 
-The current v1.481.0 milestone consumes one canonical retained v1.480 report
+The released v1.481.0 milestone consumes one canonical retained v1.480 report
 and freshly replays the same time-invariant signed-release subject. A positive
 replay must retain the exact manufacturing package, normalized receipt,
 policy, signed attestation, and digest-pinned verifier while both the receipt
@@ -1696,4 +1697,32 @@ This is at-most-once admission within one selected local ledger. It does not
 prove global challenge uniqueness, trusted time, legal factory identity,
 current capacity, external submission, order placement, payment, or exactly
 once execution. The bounded adapter call and reconciliation boundary remains
-the next milestone.
+separate.
+
+The current v1.482.0 milestone adds that adapter boundary without weakening the
+v1.481 ledger contract. It reads the exact challenge marker through the pinned
+ledger, revalidates the bound manufacturing ZIP, derives one deterministic
+idempotency key from the ledger, signed release, marker, factory, and package
+identities, then durably installs a closed intent before network I/O. The
+intent separately binds the nonce and endpoint, so changing either cannot mint
+a second key for the same reservation.
+
+Submit performs one bounded no-redirect POST. A completed result is replayed
+locally, while an intent without a result blocks retransmission and directs the
+operator to reconciliation. GET reconciliation sends only bound request
+headers, writes one durable observation per caller-selected reconciliation ID,
+and never includes manufacturing ZIP bytes.
+
+The adapter accepts only a duplicate-free closed acknowledgement that echoes
+the complete request binding and a bounded accepted, rejected, or pending
+status. Transport, response-size, content-type, JSON, credential-reflection,
+and binding failures become a retained `outcome_unknown` receipt. Each receipt
+binds the local attempt-start instant while keeping trusted time false. The
+Bearer credential never enters the intent, receipt, filename, or normal error.
+
+This milestone records a local intent and one adapter observation. It does not
+authenticate the endpoint or raw response beyond the host TLS stack, prove
+that the server enforced its idempotency key, establish legal factory identity
+or capacity, authenticate when the server processed the request, place an
+order, authorize payment, or verify globally exactly-once execution. Those
+claims stay false in every receipt.

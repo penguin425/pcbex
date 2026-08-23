@@ -2996,7 +2996,7 @@ pub fn validate_factory_submission_receipt(
     Ok(())
 }
 
-fn response_contains_bearer_token(response: &[u8], value: &Value, token: &str) -> bool {
+pub(crate) fn response_contains_bearer_token(response: &[u8], value: &Value, token: &str) -> bool {
     if token.is_empty() {
         return false;
     }
@@ -3030,7 +3030,7 @@ pub fn factory_feedback_passed(receipt: &FactorySubmissionReceipt) -> bool {
         })
 }
 
-fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), String> {
+pub(crate) fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), String> {
     // `http::Uri` deliberately discards URI fragments. Reject them before
     // parsing so the transported endpoint and the audited receipt stay equal.
     if endpoint.contains('#') {
@@ -3069,7 +3069,7 @@ fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), St
     }
 }
 
-fn validate_env_name(value: &str) -> Result<(), String> {
+pub(crate) fn validate_env_name(value: &str) -> Result<(), String> {
     let mut bytes = value.bytes();
     let first = bytes.next();
     if !matches!(first, Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
@@ -3080,7 +3080,7 @@ fn validate_env_name(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_bearer_token(value: &str) -> Result<(), String> {
+pub(crate) fn validate_bearer_token(value: &str) -> Result<(), String> {
     // RFC 6750 tokens are ASCII.  Accept the broader visible-ASCII range so
     // providers using opaque tokens with punctuation remain compatible, while
     // rejecting whitespace, controls, and Unicode that cannot be represented

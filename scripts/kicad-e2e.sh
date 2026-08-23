@@ -1710,6 +1710,303 @@ for schema_file in (schema_path, ledger_schema_path):
             pending.extend(value)
 PY
 
+# v1.482 commits one adapter intent before a single POST. A pending result is
+# replayed locally on repeat submit, while reconciliation uses GET and never
+# retransmits the exact manufacturing ZIP.
+signed_release_adapter_intent_schema="$output_directory/signed-release-adapter-intent.schema.json"
+signed_release_adapter_ack_schema="$output_directory/signed-release-adapter-ack.schema.json"
+signed_release_adapter_receipt_schema="$output_directory/signed-release-adapter-receipt.schema.json"
+signed_release_adapter_submit="$output_directory/signed-release-adapter.submit.json"
+signed_release_adapter_submit_replay="$output_directory/signed-release-adapter.submit-replay.json"
+signed_release_adapter_submit_replay_error="$output_directory/signed-release-adapter.submit-replay.stderr"
+signed_release_adapter_reconcile="$output_directory/signed-release-adapter.reconcile.json"
+signed_release_adapter_reconcile_replay="$output_directory/signed-release-adapter.reconcile-replay.json"
+signed_release_adapter_server="$output_directory/signed-release-adapter-server.py"
+signed_release_adapter_submit_ready="$output_directory/signed-release-adapter-submit.ready"
+signed_release_adapter_submit_request="$output_directory/signed-release-adapter-submit.request.json"
+signed_release_adapter_reconcile_ready="$output_directory/signed-release-adapter-reconcile.ready"
+signed_release_adapter_reconcile_request="$output_directory/signed-release-adapter-reconcile.request.json"
+signed_release_adapter_token='pcbex-e2e-v1482-bearer-token'
+signed_release_adapter_nonce="$(printf 'a%.0s' {1..64})"
+signed_release_adapter_reconciliation_id="$(printf 'b%.0s' {1..64})"
+export PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN="$signed_release_adapter_token"
+
+"$pcbex_binary" signed-factory-release-submission-intent-schema \
+  --output "$signed_release_adapter_intent_schema"
+"$pcbex_binary" signed-factory-release-adapter-acknowledgement-schema \
+  --output "$signed_release_adapter_ack_schema"
+"$pcbex_binary" signed-factory-release-adapter-receipt-schema \
+  --output "$signed_release_adapter_receipt_schema"
+
+cat >"$signed_release_adapter_server" <<'PY'
+import hashlib
+import http.server
+import json
+from pathlib import Path
+import sys
+
+mode, status, reconciliation_id, ready_path, request_path, token = sys.argv[1:]
+
+class Server(http.server.HTTPServer):
+    allow_reuse_address = True
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_arguments):
+        pass
+
+    def _handle(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        expected_method = "POST" if mode == "submit" else "GET"
+        assert self.command == expected_method
+        if mode == "reconcile":
+            assert body == b""
+            assert self.headers.get("X-PCBEX-Reconciliation-ID") == reconciliation_id
+        observed = {
+            "method": self.command,
+            "path": self.path,
+            "body_bytes": len(body),
+            "body_sha256": hashlib.sha256(body).hexdigest(),
+            "authorization_ok": self.headers.get("Authorization") == f"Bearer {token}",
+            "idempotency_key": self.headers.get("Idempotency-Key"),
+            "request_nonce": self.headers.get("X-PCBEX-Request-Nonce"),
+        }
+        Path(request_path).write_text(
+            json.dumps(observed, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        acknowledgement = {
+            "schema_version": 1,
+            "acknowledgement_scope": "pcbex-signed-factory-release-adapter-acknowledgement-v1",
+            "operation": mode,
+            "idempotency_key": self.headers["Idempotency-Key"],
+            "request_nonce": self.headers["X-PCBEX-Request-Nonce"],
+            "reconciliation_id": reconciliation_id if mode == "reconcile" else None,
+            "release_subject_sha256": self.headers["X-PCBEX-Release-Subject-SHA256"],
+            "manufacturing_package_sha256": self.headers["X-PCBEX-Package-SHA256"],
+            "factory_id": self.headers["X-PCBEX-Factory-ID"],
+            "provider": "generic",
+            "status": status,
+            "submission_id": "kicad-e2e-v1482",
+        }
+        response = json.dumps(
+            acknowledgement, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(response)
+
+    do_POST = _handle
+    do_GET = _handle
+
+server = Server(("127.0.0.1", 0), Handler)
+Path(ready_path).write_text(
+    f"http://127.0.0.1:{server.server_port}/release\n", encoding="utf-8"
+)
+server.handle_request()
+server.server_close()
+PY
+
+python3 "$signed_release_adapter_server" \
+  submit adapter_pending '' \
+  "$signed_release_adapter_submit_ready" \
+  "$signed_release_adapter_submit_request" \
+  "$signed_release_adapter_token" &
+signed_release_adapter_server_pid=$!
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true' EXIT
+for _ in $(seq 1 100); do
+  test -s "$signed_release_adapter_submit_ready" && break
+  if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
+    wait "$signed_release_adapter_server_pid"
+  fi
+  sleep 0.05
+done
+test -s "$signed_release_adapter_submit_ready"
+signed_release_adapter_submit_endpoint="$(tr -d '\r\n' < "$signed_release_adapter_submit_ready")"
+"$pcbex_binary" submit-signed-factory-receipt-release \
+  "$fabrication_release_package" \
+  --reservation-ledger "$signed_release_reservation_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --challenge "$(printf 'c%.0s' {1..64})" \
+  --endpoint "$signed_release_adapter_submit_endpoint" \
+  --request-nonce "$signed_release_adapter_nonce" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 \
+  --allow-http-loopback \
+  --output "$signed_release_adapter_submit"
+wait "$signed_release_adapter_server_pid"
+trap - EXIT
+
+signed_release_adapter_key="$(jq -r .idempotency_key "$signed_release_adapter_submit")"
+if "$pcbex_binary" submit-signed-factory-receipt-release \
+  "$fabrication_release_package" \
+  --reservation-ledger "$signed_release_reservation_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --challenge "$(printf 'c%.0s' {1..64})" \
+  --endpoint "$signed_release_adapter_submit_endpoint" \
+  --request-nonce "$signed_release_adapter_nonce" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 \
+  --allow-http-loopback \
+  --require-accepted \
+  --output "$signed_release_adapter_submit_replay" \
+  2>"$signed_release_adapter_submit_replay_error"; then
+  echo "expected the retained pending adapter result to fail its final gate" >&2
+  exit 1
+fi
+cmp "$signed_release_adapter_submit" "$signed_release_adapter_submit_replay"
+grep -Fq 'did not acknowledge acceptance' \
+  "$signed_release_adapter_submit_replay_error"
+
+python3 "$signed_release_adapter_server" \
+  reconcile adapter_accepted "$signed_release_adapter_reconciliation_id" \
+  "$signed_release_adapter_reconcile_ready" \
+  "$signed_release_adapter_reconcile_request" \
+  "$signed_release_adapter_token" &
+signed_release_adapter_server_pid=$!
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true' EXIT
+for _ in $(seq 1 100); do
+  test -s "$signed_release_adapter_reconcile_ready" && break
+  if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
+    wait "$signed_release_adapter_server_pid"
+  fi
+  sleep 0.05
+done
+test -s "$signed_release_adapter_reconcile_ready"
+signed_release_adapter_reconcile_endpoint="$(tr -d '\r\n' < "$signed_release_adapter_reconcile_ready")"
+"$pcbex_binary" reconcile-signed-factory-receipt-release \
+  --reservation-ledger "$signed_release_reservation_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$signed_release_adapter_key" \
+  --endpoint "$signed_release_adapter_reconcile_endpoint" \
+  --reconciliation-id "$signed_release_adapter_reconciliation_id" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 \
+  --allow-http-loopback \
+  --require-accepted \
+  --output "$signed_release_adapter_reconcile"
+wait "$signed_release_adapter_server_pid"
+trap - EXIT
+
+"$pcbex_binary" reconcile-signed-factory-receipt-release \
+  --reservation-ledger "$signed_release_reservation_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$signed_release_adapter_key" \
+  --endpoint "$signed_release_adapter_reconcile_endpoint" \
+  --reconciliation-id "$signed_release_adapter_reconciliation_id" \
+  --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
+  --timeout-seconds 30 \
+  --allow-http-loopback \
+  --require-accepted \
+  --output "$signed_release_adapter_reconcile_replay"
+cmp "$signed_release_adapter_reconcile" "$signed_release_adapter_reconcile_replay"
+
+python3 - \
+  "$signed_release_adapter_submit" \
+  "$signed_release_adapter_reconcile" \
+  "$signed_release_adapter_submit_request" \
+  "$signed_release_adapter_reconcile_request" \
+  "$fabrication_release_package" \
+  "$signed_release_reservation_ledger" \
+  "$signed_release_adapter_token" \
+  "$signed_release_adapter_intent_schema" \
+  "$signed_release_adapter_ack_schema" \
+  "$signed_release_adapter_receipt_schema" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+(
+    submit_path,
+    reconcile_path,
+    submit_request_path,
+    reconcile_request_path,
+    package_path,
+    ledger_path,
+) = map(Path, sys.argv[1:7])
+token = sys.argv[7]
+schema_paths = list(map(Path, sys.argv[8:]))
+submit = json.loads(submit_path.read_bytes())
+reconcile = json.loads(reconcile_path.read_bytes())
+submit_request = json.loads(submit_request_path.read_bytes())
+reconcile_request = json.loads(reconcile_request_path.read_bytes())
+package = package_path.read_bytes()
+
+assert submit["status"] == "adapter_pending"
+assert submit["accepted"] is False
+assert submit["operation"] == "submit"
+assert submit["manufacturing_package_transmission_attempted"] is True
+assert submit["external_submission_attempted"] is True
+assert submit["acknowledgement_validated"] is True
+assert reconcile["status"] == "adapter_accepted"
+assert reconcile["accepted"] is True
+assert reconcile["operation"] == "reconcile"
+assert reconcile["manufacturing_package_transmission_attempted"] is False
+assert reconcile["external_submission_attempted"] is False
+assert reconcile["acknowledgement_validated"] is True
+assert reconcile["idempotency_key"] == submit["idempotency_key"]
+
+for receipt in (submit, reconcile):
+    for claim in (
+        "server_side_idempotency_enforced",
+        "factory_legal_identity_verified",
+        "endpoint_transport_authenticity_verified",
+        "raw_response_authenticity_verified",
+        "trusted_time_verified",
+        "capacity_reserved",
+        "order_placed",
+        "payment_performed",
+        "exactly_once_execution_verified",
+    ):
+        assert receipt[claim] is False, claim
+
+    assert isinstance(receipt["attempted_at_unix"], int)
+    assert receipt["attempted_at_unix"] >= 0
+
+assert submit_request == {
+    "authorization_ok": True,
+    "body_bytes": len(package),
+    "body_sha256": hashlib.sha256(package).hexdigest(),
+    "idempotency_key": submit["idempotency_key"],
+    "method": "POST",
+    "path": "/release",
+    "request_nonce": "a" * 64,
+}
+assert reconcile_request == {
+    "authorization_ok": True,
+    "body_bytes": 0,
+    "body_sha256": hashlib.sha256(b"").hexdigest(),
+    "idempotency_key": submit["idempotency_key"],
+    "method": "GET",
+    "path": "/release",
+    "request_nonce": "a" * 64,
+}
+
+for path in [submit_path, reconcile_path, *ledger_path.iterdir()]:
+    assert token.encode() not in path.read_bytes(), path
+
+for schema_path in schema_paths:
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
+unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

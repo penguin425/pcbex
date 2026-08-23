@@ -66,6 +66,10 @@ boundary document for the artifact you plan to produce or trust.
   freshly replay that authenticated release and durably consume its challenge
   once inside one pinned local Unix ledger.
 
+- [Durable Signed Factory-release Submission](SIGNED_FACTORY_RELEASE_SUBMISSION.md)
+  — commit one adapter intent before POST and reconcile uncertain results
+  without retransmitting the manufacturing ZIP.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

@@ -1922,6 +1922,10 @@ jobs:
         run: >-
           cargo +stable test --package pcbex
           --test signed_factory_receipt_release_reservation --release --locked
+      - name: Run cross-platform v1.482 durable factory-release submission boundaries
+        run: >-
+          cargo +stable test --package pcbex
+          --test signed_factory_receipt_release_submission --release --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
