@@ -70,6 +70,10 @@ boundary document for the artifact you plan to produce or trust.
   — commit one adapter intent before POST and reconcile uncertain results
   without retransmitting the manufacturing ZIP.
 
+- [Authenticated Factory-release Adapter Responses](AUTHENTICATED_FACTORY_RELEASE_ADAPTER_RESPONSES.md)
+  — verify signed POST and GET responses against exact organization-policy
+  keys while preserving the durable v1.482 intent and receipt contracts.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

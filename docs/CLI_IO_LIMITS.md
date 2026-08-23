@@ -473,6 +473,25 @@ from the named environment variable only after public preflight, is never
 written to a durable record, and reflected credentials are reduced to a stable
 failure code. See [Durable Signed Factory-release Submission](SIGNED_FACTORY_RELEASE_SUBMISSION.md).
 
+The v1.483 authenticated commands retain the same intent and compatible receipt
+limits, then add one closed outer response-authentication report capped at 64
+KiB. They exact-read an organization policy pack under the existing 64 MiB
+policy ceiling, require it to stay outside the ledger, and recheck its observed
+identity around intent and result commits.
+
+Each response admits exactly one `Content-Type`, `Content-Digest`,
+`Signature-Input`, and `Signature` header, with each captured value capped at 8
+KiB and restricted to visible ASCII plus spaces. The bounded 64 KiB entity is
+consumed once by the unchanged receipt parser; authentication retains only its
+digest and closed acknowledgement projection, never the raw body or Bearer
+credential.
+
+The authentication report commits before the compatible v1.482 receipt. A
+later invocation can restore a missing compatible receipt from the exact outer
+report without network I/O, while an old unsigned reconciliation observation
+forces a fresh ID instead of repeating the same GET. See
+[Authenticated Factory-release Adapter Responses](AUTHENTICATED_FACTORY_RELEASE_ADAPTER_RESPONSES.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

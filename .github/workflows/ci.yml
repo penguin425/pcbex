@@ -1926,6 +1926,10 @@ jobs:
         run: >-
           cargo +stable test --package pcbex
           --test signed_factory_receipt_release_submission --release --locked
+      - name: Run cross-platform v1.483 authenticated factory-response boundaries
+        run: >-
+          cargo +stable test --package pcbex
+          --test factory_release_adapter_response_authentication --release --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

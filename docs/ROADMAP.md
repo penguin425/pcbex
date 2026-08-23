@@ -195,6 +195,7 @@ auditable release.
 | v1.480.0 | Policy-pinned signed factory-receipt release | Bind one exact normalized accepted factory receipt and manufacturing package to a dedicated role-disjoint Ed25519 factory key selected by an externally pinned organization policy, then freshly replay the complete executable-pinned v1.479 subject around signature verification before retaining an authenticated or valid negative release snapshot without claiming legal identity, TLS or raw-response authenticity, trusted time, capacity reservation, ordering, or payment |
 | v1.481.0 | Local signed factory-receipt release reservation | Freshly replay one exact retained v1.480 subject, require a currently authenticated receipt and active fabrication/attestation windows, then durably admit its signed challenge to one externally identified Unix 0700 local ledger through descriptor-pinned no-replace publication without claiming global one-time use, capacity, submission, ordering, or payment |
 | v1.482.0 | Durable idempotency-keyed signed factory-release submission and reconciliation | Consume one exact v1.481 ledger marker and manufacturing ZIP, durably commit a deterministic adapter intent before one POST, retain the bounded result, and reconcile pending or uncertain outcomes through GET without retransmitting the ZIP or claiming server-side idempotency, legal identity, capacity, order, payment, or exactly-once execution |
+| v1.483.0 | Policy-pinned signed factory-release adapter responses | Preserve the exact v1.482 intent and receipt while authenticating each bounded POST or GET response with a strict RFC 9421 Ed25519 profile, RFC 9530 content digest, covered request context, and role-disjoint factory key from an externally pinned policy; retain positive or closed negative evidence before gating without claiming trusted time, TLS, legal identity, capacity, order, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1699,7 +1700,7 @@ current capacity, external submission, order placement, payment, or exactly
 once execution. The bounded adapter call and reconciliation boundary remains
 separate.
 
-The current v1.482.0 milestone adds that adapter boundary without weakening the
+The released v1.482.0 milestone adds that adapter boundary without weakening the
 v1.481 ledger contract. It reads the exact challenge marker through the pinned
 ledger, revalidates the bound manufacturing ZIP, derives one deterministic
 idempotency key from the ledger, signed release, marker, factory, and package
@@ -1726,3 +1727,24 @@ that the server enforced its idempotency key, establish legal factory identity
 or capacity, authenticate when the server processed the request, place an
 order, authorize payment, or verify globally exactly-once execution. Those
 claims stay false in every receipt.
+
+The current v1.483.0 milestone authenticates the application response without
+changing a byte of the v1.482 intent, acknowledgement, or receipt contracts.
+The adapter opts into one strict RFC 9421 Ed25519 profile and returns an RFC
+9530 `Content-Digest`, `Signature-Input`, and `Signature`. The signature covers
+the response status, digest, media type, request method and target URI, and all
+pcbex request-binding headers, including the reconciliation ID for GET.
+
+An exact organization-policy source and independently supplied canonical digest
+pin role-disjoint response keys to one factory and provider. pcbex verifies the
+body digest, signer, request context, signature, and bounded validity window,
+then durably stores the outer authentication report before the compatible
+v1.482 receipt. A crash between those writes is repaired from the authenticated
+report without another POST or GET. Missing, duplicated, malformed, expired,
+untrusted, reflected-credential, or cryptographically invalid response evidence
+becomes a closed negative report with no positive signer or signature claim.
+
+Only application-response authenticity can become true. The local clock is not
+a trusted timestamp, the HTTP signature does not authenticate legal identity or
+TLS, and server-side idempotency, capacity, order placement, payment, and global
+exactly-once execution remain false.

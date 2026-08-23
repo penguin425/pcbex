@@ -56,6 +56,9 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Submit without blind retries:** Commit one signed-release intent before a
   single adapter POST, then reconcile uncertain outcomes without resending the ZIP.
 
+- **Authenticate adapter responses:** Verify RFC 9421 Ed25519 signatures and
+  RFC 9530 content digests against exact policy-pinned factory keys.
+
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
 
@@ -230,6 +233,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Signed factory-receipt release v1 | Freshly replay the executable-pinned release and authenticate its exact normalized receipt with a dedicated policy-pinned Ed25519 key | `pcbex-agent signed-factory-receipt-release-report-schema` |
 | Signed release reservation v1 | Durably admit one freshly authenticated receipt challenge to a pinned local ledger | `pcbex signed-factory-receipt-release-reservation-schema` |
 | Durable signed-release submission v1 | Commit one idempotency-keyed adapter intent, retain its result, and reconcile by GET without retransmitting the ZIP | `pcbex signed-factory-release-adapter-receipt-schema` |
+| Authenticated factory response v1 | Verify the exact adapter acknowledgement, status, request binding, and body digest under a policy-pinned Ed25519 key | `pcbex factory-release-adapter-response-authentication-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
