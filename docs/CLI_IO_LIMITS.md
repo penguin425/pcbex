@@ -449,6 +449,30 @@ and both windows. It keeps network, global one-time use, submission, capacity,
 order, and payment false. See
 [Signed Release Reservation](SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION.md).
 
+The v1.482 signed-release adapter keeps its durable intent, original result,
+and reconciliation observations in that same pinned v1.481 ledger. Intent and
+receipt files are capped at 16 KiB and 32 KiB; response entities are capped at
+64 KiB. The selected manufacturing ZIP retains the existing 128 MiB archive
+ceiling. Output paths must be new and remain outside the ledger.
+
+Submit validates and snapshots the exact package and reservation marker,
+commits one deterministic intent without replacement, then issues one bounded
+POST. It never retransmits when that intent already exists. Reconciliation
+uses a bounded GET, never includes ZIP bytes, and retains one deterministic
+observation per idempotency-key/reconciliation-ID pair. The HTTP timeout is
+1–600 seconds, redirects are disabled, and production endpoints require HTTPS.
+The idempotency key is stable for one ledger reservation and package; changing
+the intent-bound nonce or endpoint cannot create a second submit key.
+Each receipt records a local pre-call `attempted_at_unix`; it always keeps
+`trusted_time_verified` false and does not claim a remote processing time.
+
+Durable records survive output-publication and final-gate failures. A transport
+failure becomes an `outcome_unknown` receipt rather than an unbounded error;
+the next action is reconciliation, not another POST. The Bearer token is loaded
+from the named environment variable only after public preflight, is never
+written to a durable record, and reflected credentials are reduced to a stable
+failure code. See [Durable Signed Factory-release Submission](SIGNED_FACTORY_RELEASE_SUBMISSION.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

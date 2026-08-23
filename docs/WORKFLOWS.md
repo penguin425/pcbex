@@ -16,6 +16,7 @@ evidence your next consumer actually needs.
 | Fresh clean package plus factory pipeline and approvals | Policy-pinned offline fabrication release | routing/DRC handoff → fabrication authorization → release composition |
 | Retained fabrication release plus protected binary pins | Digest-pinned point-in-time release | stable v1.478 subject → three native entrypoint pin checks → fresh assessment and outer binding |
 | Digest-pinned release plus signed factory receipt | Authenticated receipt release | stable v1.479 subject → policy-pinned receipt signature → fresh outer authentication |
+| Durable signed factory release | Idempotency-keyed adapter handoff | authenticated v1.480 release → local v1.481 reservation → durable intent → one POST or GET reconciliation |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
