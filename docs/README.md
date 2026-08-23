@@ -74,6 +74,10 @@ boundary document for the artifact you plan to produce or trust.
   — verify signed POST and GET responses against exact organization-policy
   keys while preserving the durable v1.482 intent and receipt contracts.
 
+- [Monotonic Factory-release Adapter State](MONOTONIC_FACTORY_RELEASE_ADAPTER_STATE.md)
+  — bind each signed response to the retained local head and reject rollback,
+  equivocation, gaps, forks, or mutation after acceptance or rejection.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

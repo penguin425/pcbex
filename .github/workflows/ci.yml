@@ -1933,6 +1933,10 @@ jobs:
         run: >-
           cargo +stable test --package pcbex
           --test factory_release_adapter_response_authentication --release --locked
+      - name: Run cross-platform v1.484 monotonic factory-state boundaries
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --release --locked
+          factory_release_adapter_monotonic_state
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

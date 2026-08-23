@@ -14,19 +14,15 @@ use crate::policy_pack::{
     FactoryAdapterResponseAuthenticationPolicy, OrganizationPolicyPack,
     TrustedFactoryAdapterResponseKey, policy_pack_sha256, validate_policy_pack,
 };
-#[cfg(test)]
-use crate::signed_factory_receipt_release_submission::MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RESPONSE_BYTES;
 use crate::signed_factory_receipt_release_submission::{
-    FactoryReleaseAdapterOperation, SignedFactoryReleaseAdapterReceipt,
-    SignedFactoryReleaseSubmissionIntent, parse_signed_factory_release_adapter_receipt,
-    receipt_from_response, render_signed_factory_release_adapter_receipt,
-    render_signed_factory_release_submission_intent,
+    FactoryReleaseAdapterOperation, MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RESPONSE_BYTES,
+    SignedFactoryReleaseAdapterReceipt, SignedFactoryReleaseSubmissionIntent,
+    parse_signed_factory_release_adapter_receipt, receipt_from_response,
+    render_signed_factory_release_adapter_receipt, render_signed_factory_release_submission_intent,
     signed_factory_release_adapter_receipt_json_schema,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use ed25519_dalek::{Signature, VerifyingKey};
-#[cfg(test)]
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use pcbex_kicad::ExactArtifactIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -266,7 +262,7 @@ pub(crate) fn authenticated_factory_release_reconciliation_filename(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn sign_factory_release_adapter_http_response(
     intent: &SignedFactoryReleaseSubmissionIntent,
     operation: FactoryReleaseAdapterOperation,
@@ -1171,7 +1167,6 @@ fn signature_input_for_parameters(
         .into()
 }
 
-#[cfg(test)]
 fn content_digest(body: &[u8]) -> String {
     format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(body)))
 }

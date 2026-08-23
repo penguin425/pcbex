@@ -190,6 +190,7 @@ mod fabrication_authorization;
 mod fabrication_authorization_reservation;
 mod factory;
 mod factory_receipt_attestation;
+mod factory_release_adapter_monotonic_state;
 mod factory_release_adapter_response_authentication;
 mod final_bom;
 mod final_cpl;
@@ -291,6 +292,28 @@ use factory_receipt_attestation::{
     factory_receipt_attestation_report_json_schema, parse_signed_factory_receipt_attestation,
     sign_factory_receipt_attestation, signed_factory_receipt_attestation_json_schema,
     validate_factory_receipt_attestation_signing_inputs, verify_factory_receipt_attestation,
+};
+#[cfg(unix)]
+use factory_release_adapter_monotonic_state::{
+    FactoryReleaseAdapterMonotonicObservationReport, FactoryReleaseAdapterMonotonicState,
+    MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+    MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
+    MAX_FACTORY_RELEASE_ADAPTER_STATE_SEQUENCE,
+    build_factory_release_adapter_monotonic_state_entry,
+    monotonic_factory_release_reconciliation_filename, monotonic_factory_release_state_filename,
+    monotonic_factory_release_submission_filename,
+    parse_factory_release_adapter_monotonic_observation_report,
+    parse_factory_release_adapter_monotonic_state_entry,
+    reconcile_monotonic_factory_release_adapter,
+    render_factory_release_adapter_monotonic_observation_report,
+    render_factory_release_adapter_monotonic_state_entry, submit_monotonic_factory_release_adapter,
+    validate_factory_release_adapter_state_transition,
+};
+use factory_release_adapter_monotonic_state::{
+    factory_release_adapter_monotonic_http_message_signature_json_schema,
+    factory_release_adapter_monotonic_observation_report_json_schema,
+    factory_release_adapter_monotonic_state_entry_json_schema,
+    factory_release_adapter_monotonic_state_json_schema,
 };
 #[cfg(unix)]
 use factory_release_adapter_response_authentication::{
@@ -1118,6 +1141,26 @@ enum Command {
     },
     /// Print the closed policy-pinned adapter response-authentication report JSON Schema.
     FactoryReleaseAdapterResponseAuthenticationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed authenticated monotonic factory-state JSON Schema.
+    FactoryReleaseAdapterMonotonicStateSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed RFC 9421 monotonic response-signature evidence schema.
+    FactoryReleaseAdapterMonotonicHttpMessageSignatureSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed durable monotonic factory-state entry JSON Schema.
+    FactoryReleaseAdapterMonotonicStateEntrySchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed authenticated monotonic observation-report schema.
+    FactoryReleaseAdapterMonotonicObservationReportSchema {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
@@ -5854,6 +5897,84 @@ enum Command {
         #[arg(long)]
         require_accepted: bool,
     },
+    /// Submit once and require an authenticated genesis state in the selected ledger.
+    SubmitMonotonicAuthenticatedSignedFactoryReceiptRelease {
+        /// Fully validated manufacturing ZIP bound by the signed release marker.
+        package: CompactPath,
+        /// Existing absolute 0700 ledger containing the v1.481 marker and fixed manifest.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Signed v1.480 receipt challenge whose v1.481 marker must exist in the ledger.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        challenge: String,
+        /// Exact organization policy pack pinning trusted factory response keys.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// HTTPS adapter submission endpoint; redirects, queries, userinfo, and fragments are refused.
+        #[arg(long)]
+        endpoint: String,
+        /// Caller-generated 64-hex nonce bound by the durable submission intent.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        request_nonce: String,
+        /// Environment-variable name containing the Bearer credential.
+        #[arg(long)]
+        bearer_token_env: String,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        /// New monotonic observation path; durable evidence survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
+        /// Fail after retention unless the continuous authenticated state accepted the release.
+        #[arg(long)]
+        require_accepted: bool,
+    },
+    /// Reconcile the next authenticated state without retransmitting the manufacturing ZIP.
+    ReconcileMonotonicAuthenticatedSignedFactoryReceiptRelease {
+        /// Existing absolute 0700 ledger containing the durable submission intent and state chain.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Deterministic idempotency key printed by the original submission attempt.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        idempotency_key: String,
+        /// Exact organization policy pack pinning trusted factory response keys.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// HTTPS adapter status endpoint; GET returns the earliest state after the accepted head.
+        #[arg(long)]
+        endpoint: String,
+        /// Caller-generated 64-hex observation ID; reuse replays its durable report locally.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        reconciliation_id: String,
+        /// Environment-variable name containing the Bearer credential.
+        #[arg(long)]
+        bearer_token_env: String,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        /// New monotonic observation path; durable evidence survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
+        /// Fail after retention unless the continuous authenticated state accepted the release.
+        #[arg(long)]
+        require_accepted: bool,
+    },
     /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
     FactorySubmit {
         package: PathBuf,
@@ -8321,6 +8442,906 @@ fn reconcile_authenticated_signed_factory_receipt_release_local(
     Ok(report)
 }
 
+#[cfg(unix)]
+fn publish_factory_release_adapter_monotonic_observation_report(
+    prepared_output: tempfile::NamedTempFile,
+    output: &Path,
+    report: &FactoryReleaseAdapterMonotonicObservationReport,
+    intent: &signed_factory_receipt_release_submission::SignedFactoryReleaseSubmissionIntent,
+    policy_source: &[u8],
+    expected_policy_sha256: &str,
+) -> Result<()> {
+    let rendered = render_factory_release_adapter_monotonic_observation_report(
+        report,
+        intent,
+        policy_source,
+        expected_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    persist_atomic_new_file_bytes(prepared_output, output, &rendered)
+}
+
+#[cfg(unix)]
+fn expected_monotonic_factory_release_observation_filename(
+    report: &FactoryReleaseAdapterMonotonicObservationReport,
+) -> Result<String> {
+    match report.adapter_receipt.operation {
+        signed_factory_receipt_release_submission::FactoryReleaseAdapterOperation::Submit => {
+            if report.adapter_receipt.reconciliation_id.is_some() {
+                bail!("monotonic submission observation unexpectedly has a reconciliation id");
+            }
+            monotonic_factory_release_submission_filename(&report.adapter_receipt.idempotency_key)
+                .map_err(anyhow::Error::msg)
+        }
+        signed_factory_receipt_release_submission::FactoryReleaseAdapterOperation::Reconcile => {
+            let reconciliation_id = report
+                .adapter_receipt
+                .reconciliation_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("monotonic reconciliation observation has no id"))?;
+            monotonic_factory_release_reconciliation_filename(
+                &report.adapter_receipt.idempotency_key,
+                reconciliation_id,
+            )
+            .map_err(anyhow::Error::msg)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn load_monotonic_factory_release_state_chain(
+    ledger: &anchored_io::PinnedDirectory,
+    idempotency_key: &str,
+    intent: &signed_factory_receipt_release_submission::SignedFactoryReleaseSubmissionIntent,
+    policy_source: &[u8],
+    expected_policy_sha256: &str,
+) -> Result<
+    Option<(
+        FactoryReleaseAdapterMonotonicState,
+        FactoryReleaseAdapterMonotonicObservationReport,
+    )>,
+> {
+    let mut head: Option<(
+        FactoryReleaseAdapterMonotonicState,
+        FactoryReleaseAdapterMonotonicObservationReport,
+    )> = None;
+    for sequence in 0..=MAX_FACTORY_RELEASE_ADAPTER_STATE_SEQUENCE {
+        let name = monotonic_factory_release_state_filename(idempotency_key, sequence)
+            .map_err(anyhow::Error::msg)?;
+        let Some(source) = read_optional_signed_release_ledger_record(
+            ledger,
+            &name,
+            MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
+            "durable authenticated monotonic factory state entry",
+        )?
+        else {
+            break;
+        };
+        let entry = parse_factory_release_adapter_monotonic_state_entry(&source)
+            .map_err(anyhow::Error::msg)?;
+        if entry.state.sequence != sequence || entry.state.idempotency_key != idempotency_key {
+            bail!("durable monotonic factory state entry does not match its ledger name");
+        }
+        let observation_source = ledger
+            .read_regular_file_with_limit(
+                &entry.observation_filename,
+                MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+            )
+            .context("reading authenticated observation bound by monotonic state entry")?;
+        if exact_artifact_identity(&observation_source) != entry.observation {
+            bail!("durable monotonic factory state entry observation identity is invalid");
+        }
+        let report = parse_factory_release_adapter_monotonic_observation_report(
+            &observation_source,
+            intent,
+            policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if expected_monotonic_factory_release_observation_filename(&report)?
+            != entry.observation_filename
+            || !report.state_continuity_verified
+            || report.observed_state.as_ref() != Some(&entry.state)
+            || report.requested_state.as_ref() != head.as_ref().map(|(state, _)| state)
+        {
+            bail!(
+                "durable monotonic factory state entry is not backed by its exact chain observation"
+            );
+        }
+        validate_factory_release_adapter_state_transition(
+            head.as_ref().map(|(state, _)| state),
+            &entry.state,
+        )
+        .map_err(|failure| {
+            anyhow::anyhow!("invalid durable monotonic state transition: {failure}")
+        })?;
+        head = Some((entry.state, report));
+    }
+    Ok(head)
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn retain_monotonic_factory_release_state_entry<Guard>(
+    ledger: &anchored_io::PinnedDirectory,
+    report: &FactoryReleaseAdapterMonotonicObservationReport,
+    observation_name: &str,
+    observation_source: &[u8],
+    intent: &signed_factory_receipt_release_submission::SignedFactoryReleaseSubmissionIntent,
+    policy_source: &[u8],
+    expected_policy_sha256: &str,
+    guard: &Guard,
+) -> Result<()>
+where
+    Guard: Fn() -> io::Result<()>,
+{
+    let Some(state) = report.observed_state.as_ref() else {
+        if report.state_continuity_verified {
+            bail!("verified monotonic observation has no observed state");
+        }
+        return Ok(());
+    };
+    if !report.state_continuity_verified {
+        return Ok(());
+    }
+    let entry = build_factory_release_adapter_monotonic_state_entry(
+        state,
+        observation_name,
+        observation_source,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let entry_source =
+        render_factory_release_adapter_monotonic_state_entry(&entry).map_err(anyhow::Error::msg)?;
+    let entry_name = monotonic_factory_release_state_filename(
+        &report.adapter_receipt.idempotency_key,
+        state.sequence,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let outcome = persist_signed_release_ledger_record(
+        ledger,
+        &entry_name,
+        &entry_source,
+        ".pcbex-monotonic-factory-release-state-",
+        "authenticated monotonic factory state entry",
+        guard,
+    )?;
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            let existing_source = ledger
+                .read_regular_file_with_limit(
+                    &entry_name,
+                    MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
+                )
+                .context("reading concurrently committed monotonic factory state entry")?;
+            let existing = parse_factory_release_adapter_monotonic_state_entry(&existing_source)
+                .map_err(anyhow::Error::msg)?;
+            if existing.state != *state {
+                bail!("concurrently committed factory state entry is an equivocation");
+            }
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "monotonic factory state entry may have committed, but durable completion failed; retry the same observation id without retransmitting the package: {error}"
+            )
+        }
+    }
+    let head = load_monotonic_factory_release_state_chain(
+        ledger,
+        &report.adapter_receipt.idempotency_key,
+        intent,
+        policy_source,
+        expected_policy_sha256,
+    )?
+    .ok_or_else(|| anyhow::anyhow!("retained monotonic factory state chain has no head"))?;
+    if head.0.sequence < state.sequence || (head.0.sequence == state.sequence && head.0 != *state) {
+        bail!("retained monotonic factory state does not extend the selected chain");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn repair_monotonic_factory_release_observation<Guard>(
+    ledger: &anchored_io::PinnedDirectory,
+    report: &FactoryReleaseAdapterMonotonicObservationReport,
+    observation_name: &str,
+    observation_source: &[u8],
+    compatible_name: &str,
+    compatible_label: &str,
+    intent: &signed_factory_receipt_release_submission::SignedFactoryReleaseSubmissionIntent,
+    policy_source: &[u8],
+    expected_policy_sha256: &str,
+    guard: &Guard,
+) -> Result<()>
+where
+    Guard: Fn() -> io::Result<()>,
+{
+    retain_monotonic_factory_release_state_entry(
+        ledger,
+        report,
+        observation_name,
+        observation_source,
+        intent,
+        policy_source,
+        expected_policy_sha256,
+        guard,
+    )?;
+    let receipt_source = render_signed_factory_release_adapter_receipt(&report.adapter_receipt)
+        .map_err(anyhow::Error::msg)?;
+    if let Some(existing) = read_optional_signed_release_ledger_record(
+        ledger,
+        compatible_name,
+        MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+        compatible_label,
+    )? {
+        if existing != receipt_source {
+            bail!("durable compatible factory receipt conflicts with its monotonic report");
+        }
+    } else {
+        let outcome = persist_signed_release_ledger_record(
+            ledger,
+            compatible_name,
+            &receipt_source,
+            ".pcbex-monotonic-factory-release-compatible-receipt-",
+            compatible_label,
+            guard,
+        )?;
+        finish_signed_release_adapter_record(
+            ledger,
+            compatible_name,
+            &receipt_source,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            compatible_label,
+            "retry the same observation id",
+            outcome,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn submit_monotonic_authenticated_signed_factory_receipt_release_local(
+    package_path: &Path,
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    challenge: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    endpoint: &str,
+    request_nonce: &str,
+    bearer_token_env: &str,
+    timeout_seconds: u64,
+    output: &Path,
+    allow_http_loopback: bool,
+) -> Result<FactoryReleaseAdapterMonotonicObservationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("monotonic authenticated factory release submission ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    reject_pipeline_output_aliases(
+        output,
+        &[package_path, policy_path],
+        "monotonic factory release observation output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &[package_path, policy_path])?;
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory adapter response authentication policy pack",
+    )?;
+    let (policy_evidence, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+    let marker_name = signed_factory_receipt_release_reservation_filename(challenge)
+        .map_err(anyhow::Error::msg)?;
+    let marker_source = ledger
+        .read_regular_file_with_limit(
+            &marker_name,
+            MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_BYTES,
+        )
+        .context("reading committed signed release reservation marker")?;
+    let marker =
+        parse_signed_factory_receipt_release_reservation(&marker_source, expected_ledger_id)
+            .map_err(anyhow::Error::msg)?;
+    if marker.release_report_summary.challenge != challenge {
+        bail!("signed release reservation marker challenge does not match its ledger name");
+    }
+    let marker_identity = exact_artifact_identity(&marker_source);
+    let (package_source, package_identity) = read_exact_artifact(
+        package_path,
+        MAX_PACKAGE_BYTES,
+        "monotonic authenticated signed factory release manufacturing package",
+    )?;
+    validate_manufacturing_package(&package_source).map_err(anyhow::Error::msg)?;
+    let intent = build_signed_factory_release_submission_intent(
+        &marker,
+        &marker_identity.sha256,
+        package_identity.bytes,
+        &package_identity.sha256,
+        endpoint,
+        request_nonce,
+        allow_http_loopback,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let intent_source =
+        render_signed_factory_release_submission_intent(&intent).map_err(anyhow::Error::msg)?;
+    let intent_identity = exact_artifact_identity(&intent_source);
+    let intent_name = signed_factory_release_submission_intent_filename(&intent.idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let compatible_name =
+        signed_factory_release_submission_result_filename(&intent.idempotency_key)
+            .map_err(anyhow::Error::msg)?;
+    let observation_name = monotonic_factory_release_submission_filename(&intent.idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let legacy_authenticated_name =
+        authenticated_factory_release_submission_filename(&intent.idempotency_key)
+            .map_err(anyhow::Error::msg)?;
+    let guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            Some(&marker_name),
+            Some(&marker_source),
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory adapter response authentication policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+    };
+
+    if let Some(existing_intent) = read_optional_signed_release_ledger_record(
+        &ledger,
+        &intent_name,
+        MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        "durable signed release submission intent",
+    )? {
+        if existing_intent != intent_source {
+            bail!("existing durable submission intent does not match the selected release request");
+        }
+        if let Some(observation_source) = read_optional_signed_release_ledger_record(
+            &ledger,
+            &observation_name,
+            MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+            "durable monotonic factory release submission observation",
+        )? {
+            let report = parse_factory_release_adapter_monotonic_observation_report(
+                &observation_source,
+                &intent,
+                &policy_source,
+                expected_policy_sha256,
+            )
+            .map_err(anyhow::Error::msg)?;
+            repair_monotonic_factory_release_observation(
+                &ledger,
+                &report,
+                &observation_name,
+                &observation_source,
+                &compatible_name,
+                "compatible monotonic factory release submission receipt",
+                &intent,
+                &policy_source,
+                expected_policy_sha256,
+                &guard,
+            )?;
+            publish_factory_release_adapter_monotonic_observation_report(
+                prepared_output,
+                output,
+                &report,
+                &intent,
+                &policy_source,
+                expected_policy_sha256,
+            )?;
+            return Ok(report);
+        }
+        if read_optional_signed_release_ledger_record(
+            &ledger,
+            &compatible_name,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            "durable compatible factory release submission receipt",
+        )?
+        .is_some()
+            || read_optional_signed_release_ledger_record(
+                &ledger,
+                &legacy_authenticated_name,
+                MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+                "durable legacy authenticated factory release submission result",
+            )?
+            .is_some()
+        {
+            bail!(
+                "a prior submission result exists without monotonic state evidence; use monotonic reconciliation and do not retransmit the package"
+            );
+        }
+        bail!(
+            "durable submission intent already exists without a monotonic result; reconcile without retransmitting the package"
+        );
+    }
+    if read_optional_signed_release_ledger_record(
+        &ledger,
+        &observation_name,
+        MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+        "durable monotonic factory release submission observation",
+    )?
+    .is_some()
+        || read_optional_signed_release_ledger_record(
+            &ledger,
+            &compatible_name,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            "durable factory release submission receipt",
+        )?
+        .is_some()
+        || read_optional_signed_release_ledger_record(
+            &ledger,
+            &legacy_authenticated_name,
+            MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+            "durable legacy authenticated factory release submission result",
+        )?
+        .is_some()
+    {
+        bail!("durable factory release result exists without its exact intent");
+    }
+
+    let bearer_token =
+        load_factory_release_bearer_token(bearer_token_env).map_err(anyhow::Error::msg)?;
+    validate_signed_factory_receipt_release_reservation_time(&marker, current_unix_seconds()?)
+        .map_err(anyhow::Error::msg)?;
+    require_exact_artifact(
+        package_path,
+        MAX_PACKAGE_BYTES,
+        &package_identity,
+        "monotonic authenticated signed factory release manufacturing package",
+    )?;
+    require_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        &policy_identity,
+        "factory adapter response authentication policy pack",
+    )?;
+    let intent_guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            Some(&marker_name),
+            Some(&marker_source),
+            None,
+            None,
+        )?;
+        require_exact_artifact(
+            package_path,
+            MAX_PACKAGE_BYTES,
+            &package_identity,
+            "monotonic authenticated signed factory release manufacturing package",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory adapter response authentication policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        validate_signed_release_reservation_time_now(&marker)
+    };
+    let intent_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &intent_name,
+        &intent_source,
+        ".pcbex-monotonic-factory-release-submission-intent-",
+        "durable monotonic factory release submission intent",
+        &intent_guard,
+    )?;
+    match intent_outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            bail!("submission intent committed concurrently; reconcile without retransmitting")
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "submission intent may have committed, but durable completion failed; reconcile without retransmitting: {error}"
+            )
+        }
+    }
+    intent_guard().map_err(anyhow::Error::from)?;
+    let (receipt, report) = submit_monotonic_factory_release_adapter(
+        &intent,
+        &intent_identity.sha256,
+        &package_source,
+        &bearer_token,
+        timeout_seconds,
+        allow_http_loopback,
+        current_unix_seconds()?,
+        &policy_evidence,
+        &policy,
+    )
+    .map_err(anyhow::Error::msg)?;
+    drop(bearer_token);
+    let observation_source = render_factory_release_adapter_monotonic_observation_report(
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let observation_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &observation_name,
+        &observation_source,
+        ".pcbex-monotonic-factory-release-submission-observation-",
+        "authenticated monotonic factory release submission observation",
+        &guard,
+    )?;
+    finish_signed_release_adapter_record(
+        &ledger,
+        &observation_name,
+        &observation_source,
+        MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+        "authenticated monotonic factory release submission observation",
+        "reconcile without retransmitting the package",
+        observation_outcome,
+    )?;
+    if receipt != report.adapter_receipt {
+        bail!("monotonic adapter result does not retain its exact compatible receipt");
+    }
+    repair_monotonic_factory_release_observation(
+        &ledger,
+        &report,
+        &observation_name,
+        &observation_source,
+        &compatible_name,
+        "compatible monotonic factory release submission receipt",
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+        &guard,
+    )?;
+    require_exact_artifact(
+        package_path,
+        MAX_PACKAGE_BYTES,
+        &package_identity,
+        "monotonic authenticated signed factory release manufacturing package",
+    )
+    .context("monotonic submission evidence was retained, but the caller package changed")?;
+    require_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        &policy_identity,
+        "factory adapter response authentication policy pack",
+    )
+    .context("monotonic submission evidence was retained, but the pinned policy changed")?;
+    publish_factory_release_adapter_monotonic_observation_report(
+        prepared_output,
+        output,
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?;
+    Ok(report)
+}
+
+#[cfg(unix)]
+fn compatible_factory_release_receipt_filename_for_monotonic_report(
+    report: &FactoryReleaseAdapterMonotonicObservationReport,
+) -> Result<String> {
+    match report.adapter_receipt.operation {
+        signed_factory_receipt_release_submission::FactoryReleaseAdapterOperation::Submit => {
+            signed_factory_release_submission_result_filename(
+                &report.adapter_receipt.idempotency_key,
+            )
+            .map_err(anyhow::Error::msg)
+        }
+        signed_factory_receipt_release_submission::FactoryReleaseAdapterOperation::Reconcile => {
+            let reconciliation_id = report
+                .adapter_receipt
+                .reconciliation_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("monotonic reconciliation report has no id"))?;
+            signed_factory_release_reconciliation_filename(
+                &report.adapter_receipt.idempotency_key,
+                reconciliation_id,
+            )
+            .map_err(anyhow::Error::msg)
+        }
+    }
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn reconcile_monotonic_authenticated_signed_factory_receipt_release_local(
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    idempotency_key: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    endpoint: &str,
+    reconciliation_id: &str,
+    bearer_token_env: &str,
+    timeout_seconds: u64,
+    output: &Path,
+    allow_http_loopback: bool,
+) -> Result<FactoryReleaseAdapterMonotonicObservationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("monotonic authenticated factory reconciliation ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    reject_pipeline_output_aliases(
+        output,
+        &[policy_path],
+        "monotonic factory release reconciliation observation output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &[policy_path])?;
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory adapter response authentication policy pack",
+    )?;
+    let (policy_evidence, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+    let intent_name = signed_factory_release_submission_intent_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let intent_source = ledger
+        .read_regular_file_with_limit(
+            &intent_name,
+            MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        )
+        .context("reading durable signed release submission intent")?;
+    let intent = parse_signed_factory_release_submission_intent(&intent_source)
+        .map_err(anyhow::Error::msg)?;
+    if intent.ledger_id != expected_ledger_id || intent.idempotency_key != idempotency_key {
+        bail!("durable signed release submission intent does not match the selected ledger key");
+    }
+    let intent_identity = exact_artifact_identity(&intent_source);
+    let guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory adapter response authentication policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+    };
+
+    let mut head = load_monotonic_factory_release_state_chain(
+        &ledger,
+        idempotency_key,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?;
+    if let Some((state, report)) = &head
+        && matches!(
+            state.status,
+            FactoryReleaseAdapterStatus::AdapterAccepted
+                | FactoryReleaseAdapterStatus::AdapterRejected
+        )
+    {
+        let observation_name = expected_monotonic_factory_release_observation_filename(report)?;
+        let observation_source = ledger
+            .read_regular_file_with_limit(
+                &observation_name,
+                MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+            )
+            .context("reading terminal monotonic factory observation")?;
+        let compatible_name =
+            compatible_factory_release_receipt_filename_for_monotonic_report(report)?;
+        repair_monotonic_factory_release_observation(
+            &ledger,
+            report,
+            &observation_name,
+            &observation_source,
+            &compatible_name,
+            "compatible terminal monotonic factory release receipt",
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+            &guard,
+        )?;
+        publish_factory_release_adapter_monotonic_observation_report(
+            prepared_output,
+            output,
+            report,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )?;
+        return Ok(report.clone());
+    }
+
+    let observation_name =
+        monotonic_factory_release_reconciliation_filename(idempotency_key, reconciliation_id)
+            .map_err(anyhow::Error::msg)?;
+    let compatible_name =
+        signed_factory_release_reconciliation_filename(idempotency_key, reconciliation_id)
+            .map_err(anyhow::Error::msg)?;
+    if let Some(observation_source) = read_optional_signed_release_ledger_record(
+        &ledger,
+        &observation_name,
+        MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+        "durable monotonic factory reconciliation observation",
+    )? {
+        let report = parse_factory_release_adapter_monotonic_observation_report(
+            &observation_source,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if report.adapter_receipt.reconciliation_id.as_deref() != Some(reconciliation_id) {
+            bail!("monotonic reconciliation observation does not match its selected id");
+        }
+        repair_monotonic_factory_release_observation(
+            &ledger,
+            &report,
+            &observation_name,
+            &observation_source,
+            &compatible_name,
+            "compatible monotonic factory reconciliation receipt",
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+            &guard,
+        )?;
+        publish_factory_release_adapter_monotonic_observation_report(
+            prepared_output,
+            output,
+            &report,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )?;
+        return Ok(report);
+    }
+    let legacy_authenticated_name =
+        authenticated_factory_release_reconciliation_filename(idempotency_key, reconciliation_id)
+            .map_err(anyhow::Error::msg)?;
+    if read_optional_signed_release_ledger_record(
+        &ledger,
+        &compatible_name,
+        MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+        "durable legacy factory reconciliation receipt",
+    )?
+    .is_some()
+        || read_optional_signed_release_ledger_record(
+            &ledger,
+            &legacy_authenticated_name,
+            MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+            "durable legacy authenticated factory reconciliation report",
+        )?
+        .is_some()
+    {
+        bail!(
+            "this reconciliation id already has a legacy observation; choose a fresh id for monotonic reconciliation"
+        );
+    }
+
+    let bearer_token =
+        load_factory_release_bearer_token(bearer_token_env).map_err(anyhow::Error::msg)?;
+    guard().map_err(anyhow::Error::from)?;
+    let requested_state = head.as_ref().map(|(state, _)| state);
+    let (receipt, report) = reconcile_monotonic_factory_release_adapter(
+        &intent,
+        &intent_identity.sha256,
+        endpoint,
+        reconciliation_id,
+        requested_state,
+        &bearer_token,
+        timeout_seconds,
+        allow_http_loopback,
+        current_unix_seconds()?,
+        &policy_evidence,
+        &policy,
+    )
+    .map_err(anyhow::Error::msg)?;
+    drop(bearer_token);
+    if report.requested_state.as_ref() != requested_state {
+        bail!("monotonic reconciliation report does not bind the selected local state head");
+    }
+    let observation_source = render_factory_release_adapter_monotonic_observation_report(
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let observation_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &observation_name,
+        &observation_source,
+        ".pcbex-monotonic-factory-release-reconciliation-observation-",
+        "authenticated monotonic factory release reconciliation observation",
+        &guard,
+    )?;
+    finish_signed_release_adapter_record(
+        &ledger,
+        &observation_name,
+        &observation_source,
+        MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+        "authenticated monotonic factory release reconciliation observation",
+        "retry the same reconciliation id",
+        observation_outcome,
+    )?;
+    if receipt != report.adapter_receipt {
+        bail!("monotonic reconciliation does not retain its exact compatible receipt");
+    }
+    repair_monotonic_factory_release_observation(
+        &ledger,
+        &report,
+        &observation_name,
+        &observation_source,
+        &compatible_name,
+        "compatible monotonic factory reconciliation receipt",
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+        &guard,
+    )?;
+    head = load_monotonic_factory_release_state_chain(
+        &ledger,
+        idempotency_key,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?;
+    if report.state_continuity_verified
+        && head.as_ref().is_none_or(|(state, _)| {
+            report
+                .observed_state
+                .as_ref()
+                .is_none_or(|observed| state.sequence < observed.sequence)
+        })
+    {
+        bail!("durable monotonic reconciliation did not advance or replay the selected chain");
+    }
+    require_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        &policy_identity,
+        "factory adapter response authentication policy pack",
+    )
+    .context("monotonic reconciliation evidence was retained, but the pinned policy changed")?;
+    publish_factory_release_adapter_monotonic_observation_report(
+        prepared_output,
+        output,
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?;
+    Ok(report)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -8463,6 +9484,10 @@ fn capabilities_report() -> CapabilitiesReport {
             "Fabrication authorization reservation ledger manifest v1",
             "Factory release adapter HTTP Message Signature v1",
             "Factory release adapter response authentication report v1",
+            "Factory release adapter monotonic state v1",
+            "Factory release adapter monotonic HTTP Message Signature v1",
+            "Factory release adapter monotonic state entry v1",
+            "Factory release adapter monotonic observation report v1",
             "Firmware bundle manifest v2",
             "Fresh firmware bundle build report v1",
             "C11 firmware source bundle",
@@ -8742,6 +9767,34 @@ fn run_cli() -> Result<()> {
                 &factory_release_adapter_response_authentication_report_json_schema(),
                 output.as_deref(),
                 "factory release adapter response authentication report schema output",
+            )?;
+        }
+        Command::FactoryReleaseAdapterMonotonicStateSchema { output } => {
+            write_closed_schema(
+                &factory_release_adapter_monotonic_state_json_schema(),
+                output.as_deref(),
+                "factory release adapter monotonic state schema output",
+            )?;
+        }
+        Command::FactoryReleaseAdapterMonotonicHttpMessageSignatureSchema { output } => {
+            write_closed_schema(
+                &factory_release_adapter_monotonic_http_message_signature_json_schema(),
+                output.as_deref(),
+                "factory release adapter monotonic signature schema output",
+            )?;
+        }
+        Command::FactoryReleaseAdapterMonotonicStateEntrySchema { output } => {
+            write_closed_schema(
+                &factory_release_adapter_monotonic_state_entry_json_schema(),
+                output.as_deref(),
+                "factory release adapter monotonic state entry schema output",
+            )?;
+        }
+        Command::FactoryReleaseAdapterMonotonicObservationReportSchema { output } => {
+            write_closed_schema(
+                &factory_release_adapter_monotonic_observation_report_json_schema(),
+                output.as_deref(),
+                "factory release adapter monotonic observation report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -21286,6 +22339,155 @@ fn run_cli() -> Result<()> {
                 }
                 if require_accepted && !report.accepted {
                     bail!("authenticated factory adapter acknowledgement did not accept the release");
+                }
+            }
+        }
+        Command::SubmitMonotonicAuthenticatedSignedFactoryReceiptRelease {
+            package,
+            reservation_ledger,
+            expected_ledger_id,
+            challenge,
+            policy_pack,
+            expected_policy_sha256,
+            endpoint,
+            request_nonce,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            allow_http_loopback,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    package,
+                    reservation_ledger,
+                    expected_ledger_id,
+                    challenge,
+                    policy_pack,
+                    expected_policy_sha256,
+                    endpoint,
+                    request_nonce,
+                    bearer_token_env,
+                    timeout_seconds,
+                    output,
+                    allow_http_loopback,
+                    require_accepted,
+                );
+                bail!(
+                    "durable monotonic authenticated factory release submission is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report =
+                    submit_monotonic_authenticated_signed_factory_receipt_release_local(
+                        &package,
+                        &reservation_ledger,
+                        &expected_ledger_id,
+                        &challenge,
+                        &policy_pack,
+                        &expected_policy_sha256,
+                        &endpoint,
+                        &request_nonce,
+                        &bearer_token_env,
+                        timeout_seconds,
+                        &output,
+                        allow_http_loopback,
+                    )?;
+                eprintln!(
+                    "monotonic authenticated factory release submission: authenticated={}; continuous={}; status={:?}; idempotency_key={}; report={}",
+                    report.response_authenticated,
+                    report.state_continuity_verified,
+                    report.adapter_receipt.status,
+                    report.adapter_receipt.idempotency_key,
+                    output.display()
+                );
+                if !report.response_authenticated {
+                    bail!(
+                        "factory adapter response was not authenticated; negative evidence was retained durably"
+                    );
+                }
+                if !report.state_continuity_verified {
+                    bail!(
+                        "factory adapter response did not verify as the monotonic genesis state; evidence was retained durably"
+                    );
+                }
+                if require_accepted && !report.accepted {
+                    bail!("continuous authenticated factory state has not accepted the release");
+                }
+            }
+        }
+        Command::ReconcileMonotonicAuthenticatedSignedFactoryReceiptRelease {
+            reservation_ledger,
+            expected_ledger_id,
+            idempotency_key,
+            policy_pack,
+            expected_policy_sha256,
+            endpoint,
+            reconciliation_id,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            allow_http_loopback,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    reservation_ledger,
+                    expected_ledger_id,
+                    idempotency_key,
+                    policy_pack,
+                    expected_policy_sha256,
+                    endpoint,
+                    reconciliation_id,
+                    bearer_token_env,
+                    timeout_seconds,
+                    output,
+                    allow_http_loopback,
+                    require_accepted,
+                );
+                bail!(
+                    "durable monotonic authenticated factory reconciliation is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report =
+                    reconcile_monotonic_authenticated_signed_factory_receipt_release_local(
+                        &reservation_ledger,
+                        &expected_ledger_id,
+                        &idempotency_key,
+                        &policy_pack,
+                        &expected_policy_sha256,
+                        &endpoint,
+                        &reconciliation_id,
+                        &bearer_token_env,
+                        timeout_seconds,
+                        &output,
+                        allow_http_loopback,
+                    )?;
+                eprintln!(
+                    "monotonic authenticated factory reconciliation: authenticated={}; continuous={}; status={:?}; idempotency_key={}; report={}",
+                    report.response_authenticated,
+                    report.state_continuity_verified,
+                    report.adapter_receipt.status,
+                    report.adapter_receipt.idempotency_key,
+                    output.display()
+                );
+                if !report.response_authenticated {
+                    bail!(
+                        "factory adapter reconciliation response was not authenticated; negative evidence was retained durably"
+                    );
+                }
+                if !report.state_continuity_verified {
+                    bail!(
+                        "factory adapter reconciliation did not extend or exactly replay the selected monotonic state; evidence was retained durably"
+                    );
+                }
+                if require_accepted && !report.accepted {
+                    bail!("continuous authenticated factory state has not accepted the release");
                 }
             }
         }

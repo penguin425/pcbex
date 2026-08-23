@@ -6,6 +6,11 @@ This v1.483 boundary verifies each factory-release POST or reconciliation GET
 response against an exact organization-policy key. It preserves the v1.482
 intent, acknowledgement, and receipt formats byte for byte.
 
+> [!TIP]
+> Need rollback and fork detection across multiple observations? Use the
+> [v1.484 monotonic state profile](MONOTONIC_FACTORY_RELEASE_ADAPTER_STATE.md).
+> This v1.483 profile intentionally authenticates one response in isolation.
+
 > [!IMPORTANT]
 > A valid HTTP message signature authenticates the covered application message
 > under the configured key. It does not prove legal factory identity, TLS

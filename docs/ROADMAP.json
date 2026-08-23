@@ -949,6 +949,11 @@
     {
       "id": "policy-pinned-signed-factory-release-adapter-responses",
       "release": "v1.483.0",
+      "status": "released"
+    },
+    {
+      "id": "authenticated-monotonic-factory-release-adapter-state",
+      "release": "v1.484.0",
       "status": "current"
     }
   ]
