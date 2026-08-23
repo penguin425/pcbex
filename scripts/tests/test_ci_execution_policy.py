@@ -723,7 +723,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             document.count(signed_factory_receipt_release_command), 1
         )
         self.assertIn(signed_factory_receipt_release_command, boundaries)
-        self.assertEqual(document.count(factory_receipt_attestation_command), 1)
+        self.assertEqual(document.count(factory_receipt_attestation_command), 2)
         self.assertIn(factory_receipt_attestation_command, boundaries)
         self.assertEqual(document.count(signed_release_reservation_command), 1)
         self.assertIn(signed_release_reservation_command, boundaries)
@@ -743,7 +743,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(routing_drc_fabrication_release_command, rust_windows)
         self.assertNotIn(executable_pinned_fabrication_release_command, rust_windows)
         self.assertNotIn(signed_factory_receipt_release_command, rust_windows)
-        self.assertNotIn(factory_receipt_attestation_command, rust_windows)
+        self.assertIn(factory_receipt_attestation_command, rust_windows)
         self.assertNotIn(signed_release_reservation_command, rust_windows)
         self.assertNotIn(signed_release_reservation_rust_command, rust_windows)
         self.assertNotIn(signed_release_submission_command, rust_windows)
@@ -763,6 +763,14 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
+        )
+        self.assertLess(
+            rust_windows.index(
+                "cargo +stable test --package pcbex --bin pcbex --release --locked windows_"
+            ),
+            rust_windows.index(
+                "- name: Run Windows factory-receipt cryptographic boundaries"
+            ),
         )
         self.assertIn("runs-on: windows-latest", rust_windows)
         self.assertIn("rustup toolchain install stable --profile minimal", rust_windows)
@@ -960,6 +968,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
         ]
         self.assertIn(
             factory_receipt_attestation_command,
+            factory_receipt_attestation_block,
+        )
+        self.assertIn(
+            "if: ${{ runner.os != 'Windows' }}",
             factory_receipt_attestation_block,
         )
         signed_release_reservation_block = boundaries[

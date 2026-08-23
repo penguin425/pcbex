@@ -1909,6 +1909,9 @@ jobs:
           python -m unittest
           agent.tests.test_signed_factory_receipt_release_v1480 -v
       - name: Run cross-platform v1.480 factory-receipt cryptographic boundaries
+        # Windows reuses the already-linked bin test harness in the dedicated
+        # Rust boundary job, keeping this 45-minute matrix below its ceiling.
+        if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_receipt_attestation
@@ -2034,3 +2037,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Run Windows Rust process regressions
         run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_
+      - name: Run Windows factory-receipt cryptographic boundaries
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --release --locked
+          factory_receipt_attestation
