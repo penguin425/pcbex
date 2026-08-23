@@ -240,7 +240,10 @@ class SignedFactoryReceiptReleaseReservationTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "posix", "durable local ledger is Unix-only")
     def test_cli_freshly_replays_before_committing(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            # macOS exposes its temporary directory through the lexical
+            # /var -> /private/var symlink.  Use the physical root so the
+            # production boundary can keep rejecting symlink components.
+            root = Path(directory).resolve(strict=True)
             retained = root / "release.json"
             retained.write_bytes(self.raw)
             ledger = root / "ledger"
