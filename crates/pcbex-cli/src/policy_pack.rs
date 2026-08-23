@@ -55,6 +55,22 @@ pub struct FactoryReceiptAttestationPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct TrustedFactoryAdapterResponseKey {
+    pub key_id: String,
+    pub factory_id: String,
+    pub provider: String,
+    pub public_key: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FactoryAdapterResponseAuthenticationPolicy {
+    pub maximum_validity_seconds: u64,
+    pub trusted_keys: Vec<TrustedFactoryAdapterResponseKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrganizationPolicyPack {
     pub schema_version: u32,
     pub id: String,
@@ -74,6 +90,9 @@ pub struct OrganizationPolicyPack {
     pub procurement_authorization_policy: Option<ProcurementAuthorizationPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub factory_receipt_attestation_policy: Option<FactoryReceiptAttestationPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory_adapter_response_authentication_policy:
+        Option<FactoryAdapterResponseAuthenticationPolicy>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -410,6 +429,75 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
             assigned_keys.insert(&trusted.public_key);
         }
     }
+    if let Some(policy) = &pack.factory_adapter_response_authentication_policy {
+        if !(1..=604_800).contains(&policy.maximum_validity_seconds) {
+            return Err(
+                "factory adapter response authentication maximum_validity_seconds must be between 1 and 604800"
+                    .into(),
+            );
+        }
+        if !(1..=100).contains(&policy.trusted_keys.len()) {
+            return Err(
+                "factory adapter response authentication trusted_keys must contain 1 to 100 entries"
+                    .into(),
+            );
+        }
+        let mut response_key_ids = HashSet::new();
+        let mut response_keys = HashSet::new();
+        for trusted in &policy.trusted_keys {
+            validate_slug("trusted factory adapter response key id", &trusted.key_id)?;
+            validate_slug(
+                "trusted factory adapter response factory id",
+                &trusted.factory_id,
+            )?;
+            if !matches!(trusted.provider.as_str(), "jlcpcb" | "pcbway" | "generic") {
+                return Err(
+                    "trusted factory adapter response provider must be one of jlcpcb, pcbway, or generic"
+                        .into(),
+                );
+            }
+            validate_public_key(&trusted.public_key)?;
+            let public_key = hex_decode_array::<32>(
+                &trusted.public_key,
+                "trusted factory adapter response public key",
+            )?;
+            let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|error| {
+                format!(
+                    "invalid trusted factory adapter response public key for key {:?}: {error}",
+                    trusted.key_id
+                )
+            })?;
+            if verifying_key.is_weak() {
+                return Err(format!(
+                    "weak trusted factory adapter response public key for key {:?}",
+                    trusted.key_id
+                ));
+            }
+            if !response_key_ids.insert(&trusted.key_id) {
+                return Err(format!(
+                    "duplicate trusted factory adapter response key id {:?}",
+                    trusted.key_id
+                ));
+            }
+            if assigned_signers.contains(&trusted.key_id) {
+                return Err(format!(
+                    "key id {:?} cannot hold both factory adapter response authentication and another trust role",
+                    trusted.key_id
+                ));
+            }
+            if !response_keys.insert(&trusted.public_key) {
+                return Err("duplicate trusted factory adapter response public key".into());
+            }
+            if assigned_keys.contains(&trusted.public_key) {
+                return Err(
+                    "a public key cannot hold factory adapter response authentication and another trust role"
+                        .into(),
+                );
+            }
+            assigned_signers.insert(&trusted.key_id);
+            assigned_keys.insert(&trusted.public_key);
+        }
+    }
     Ok(())
 }
 
@@ -730,6 +818,28 @@ pub fn policy_pack_json_schema() -> Value {
                         }
                     }
                 }
+            },
+            "factory_adapter_response_authentication_policy": {
+                "type": "object", "additionalProperties": false,
+                "required": ["maximum_validity_seconds", "trusted_keys"],
+                "properties": {
+                    "maximum_validity_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 604800
+                    },
+                    "trusted_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["key_id", "factory_id", "provider", "public_key"],
+                            "properties": {
+                                "key_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                                "factory_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                                "provider": {"enum": ["jlcpcb", "pcbway", "generic"]},
+                                "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                            }
+                        }
+                    }
+                }
             }
         }
     })
@@ -874,6 +984,10 @@ mod tests {
         assert!(pack.procurement_authorization_policy.is_none());
         assert!(pack.factory_receipt_attestation_policy.is_none());
         assert!(
+            pack.factory_adapter_response_authentication_policy
+                .is_none()
+        );
+        assert!(
             !serde_json::to_string(&pack)
                 .unwrap()
                 .contains("fabrication_authorization_policy")
@@ -887,6 +1001,11 @@ mod tests {
             !serde_json::to_string(&pack)
                 .unwrap()
                 .contains("factory_receipt_attestation_policy")
+        );
+        assert!(
+            !serde_json::to_string(&pack)
+                .unwrap()
+                .contains("factory_adapter_response_authentication_policy")
         );
     }
 
@@ -955,6 +1074,15 @@ mod tests {
                 ["items"]["additionalProperties"],
             false
         );
+        assert_eq!(
+            schema["properties"]["factory_adapter_response_authentication_policy"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["factory_adapter_response_authentication_policy"]["properties"]["trusted_keys"]
+                ["items"]["additionalProperties"],
+            false
+        );
         assert!(
             !schema["required"]
                 .as_array()
@@ -975,6 +1103,75 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|field| field == "factory_receipt_attestation_policy")
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "factory_adapter_response_authentication_policy")
+        );
+    }
+
+    #[test]
+    fn validates_factory_adapter_response_policy_and_role_separation() {
+        let mut pack = sample();
+        let response_key =
+            hex::encode(SigningKey::from_bytes(&[81; 32]).verifying_key().to_bytes());
+        pack.factory_adapter_response_authentication_policy =
+            Some(FactoryAdapterResponseAuthenticationPolicy {
+                maximum_validity_seconds: 300,
+                trusted_keys: vec![TrustedFactoryAdapterResponseKey {
+                    key_id: "factory-a-adapter-response".into(),
+                    factory_id: "factory-a".into(),
+                    provider: "generic".into(),
+                    public_key: response_key.clone(),
+                }],
+            });
+        validate_policy_pack(&pack).unwrap();
+        assert_eq!(
+            parse_policy_pack(&serde_json::to_string(&pack).unwrap()).unwrap(),
+            pack
+        );
+
+        pack.factory_adapter_response_authentication_policy
+            .as_mut()
+            .unwrap()
+            .maximum_validity_seconds = 0;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("maximum_validity_seconds")
+        );
+        pack.factory_adapter_response_authentication_policy
+            .as_mut()
+            .unwrap()
+            .maximum_validity_seconds = 300;
+        pack.factory_adapter_response_authentication_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .provider = "unknown".into();
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("provider must be one of")
+        );
+        pack.factory_adapter_response_authentication_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .provider = "generic".into();
+        let approval_key = pack.trusted_approval_keys[0].public_key.clone();
+        pack.factory_adapter_response_authentication_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .public_key = approval_key;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
         );
     }
 

@@ -90,6 +90,7 @@ writer.
 | Authorization | Signed review, fabrication release, procurement release | Rust cryptography plus owning orchestrator |
 | Local admission | Fabrication and procurement challenge reservation markers | Owning verifier plus Rust pinned-ledger boundary |
 | Factory-release adapter | Durable signed-release intent, one POST attempt, GET reconciliation, and closed receipts | Rust pinned-ledger and bounded HTTP boundary |
+| Authenticated factory response | Policy-pinned RFC 9421 signature, RFC 9530 body digest, covered request context, and durable positive or negative outer report | Rust cryptographic verifier layered over the unchanged factory-release adapter |
 
 Later layers should retain or bind earlier identities instead of copying a
 boolean result. Fresh replay is required wherever the focused contract says a

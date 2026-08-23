@@ -29,6 +29,7 @@ consumer must not promote one result into another kind of claim.
 | Signed factory-receipt release | One exact normalized receipt and package were signed by the dedicated factory key selected by an externally pinned policy, around a fresh v1.479 replay | Factory legal identity, TLS/raw-response authenticity, trusted time, current capacity, submission, order, payment, or one-time use |
 | Signed release reservation marker | One selected local Unix ledger admitted one freshly authenticated v1.480 signed challenge without replacement | Global uniqueness, cross-host coordination, trusted time, capacity, submission, order, payment, or exactly-once execution |
 | Signed factory-release adapter receipt | One durable local intent produced one bounded POST attempt or one GET reconciliation observation, bound to the reserved release and exact ZIP | Server-side idempotency enforcement, legal factory identity, transport/raw-response authenticity, capacity, order, payment, or exactly-once execution |
+| Authenticated factory-release response report | One exact adapter response status, JSON body, and covered request context verified under a factory/provider key from an externally pinned policy | Trusted time, TLS or legal identity, key custody, server-side idempotency, capacity, order, payment, or exactly-once execution |
 | Native KiCad ERC/DRC report | Normalized output from the selected staged KiCad invocation | Authenticity or safety of the KiCad executable, plugins, or host |
 | Manufacturing package | Canonical staged outputs and source/profile identity after the package gates pass | Factory acceptance, assembly success, or order placement |
 | Provider or factory receipt | Bounded response bytes plus declared transport observations | Truth, currentness, endpoint identity beyond the adapter contract, or future availability |
@@ -86,9 +87,11 @@ Factory and supplier adapters can retain exact response bytes, hashes, status,
 and bounded timing observations. Those records support replay and correlation;
 they do not turn an unsigned response into an authenticated commercial promise.
 
-TLS configuration, endpoint ownership, response signatures, trusted time,
-availability, lifecycle, lead time, and price authenticity require an external
-trust contract. Supplier coverage remains a component-line correlation, not a
+The v1.483 response boundary can verify an RFC 9421 application signature and
+RFC 9530 body digest under an externally pinned key. TLS configuration,
+endpoint ownership, legal identity, trusted timestamping, availability,
+lifecycle, lead time, and price authenticity still require separate trust
+contracts. Supplier coverage remains a component-line correlation, not a
 landed-cost or order-readiness calculation.
 
 ## Signatures and policy

@@ -190,6 +190,7 @@ mod fabrication_authorization;
 mod fabrication_authorization_reservation;
 mod factory;
 mod factory_receipt_attestation;
+mod factory_release_adapter_response_authentication;
 mod final_bom;
 mod final_cpl;
 mod firmware;
@@ -290,6 +291,22 @@ use factory_receipt_attestation::{
     factory_receipt_attestation_report_json_schema, parse_signed_factory_receipt_attestation,
     sign_factory_receipt_attestation, signed_factory_receipt_attestation_json_schema,
     validate_factory_receipt_attestation_signing_inputs, verify_factory_receipt_attestation,
+};
+#[cfg(unix)]
+use factory_release_adapter_response_authentication::{
+    FactoryReleaseAdapterResponseAuthenticationReport,
+    MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+    authenticated_factory_release_reconciliation_filename,
+    authenticated_factory_release_submission_filename,
+    capture_factory_release_adapter_response_policy,
+    parse_factory_release_adapter_response_authentication_report,
+    reconcile_authenticated_factory_release_adapter,
+    render_factory_release_adapter_response_authentication_report,
+    submit_authenticated_factory_release_adapter,
+};
+use factory_release_adapter_response_authentication::{
+    factory_release_adapter_http_message_signature_json_schema,
+    factory_release_adapter_response_authentication_report_json_schema,
 };
 use final_bom::{final_bom_report_json_schema, render_final_bom_report, verify_final_bom_sources};
 use final_cpl::{final_cpl_report_json_schema, render_final_cpl_report, verify_final_cpl_sources};
@@ -1091,6 +1108,16 @@ enum Command {
     },
     /// Print the closed signed-release adapter receipt JSON Schema.
     SignedFactoryReleaseAdapterReceiptSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed RFC 9421 factory response-signature evidence JSON Schema.
+    FactoryReleaseAdapterHttpMessageSignatureSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed policy-pinned adapter response-authentication report JSON Schema.
+    FactoryReleaseAdapterResponseAuthenticationReportSchema {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
@@ -5749,6 +5776,84 @@ enum Command {
         #[arg(long)]
         require_accepted: bool,
     },
+    /// Submit once and authenticate the adapter response under an exact organization policy.
+    SubmitAuthenticatedSignedFactoryReceiptRelease {
+        /// Fully validated manufacturing ZIP bound by the signed release marker.
+        package: CompactPath,
+        /// Existing absolute 0700 ledger containing the v1.481 marker and fixed manifest.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Signed v1.480 receipt challenge whose v1.481 marker must exist in the ledger.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        challenge: String,
+        /// Exact organization policy pack pinning trusted factory response keys.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// HTTPS adapter submission endpoint; redirects, queries, userinfo, and fragments are refused.
+        #[arg(long)]
+        endpoint: String,
+        /// Caller-generated 64-hex nonce bound by the durable submission intent.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        request_nonce: String,
+        /// Environment-variable name containing the Bearer credential.
+        #[arg(long)]
+        bearer_token_env: String,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        /// New authentication-report path; the durable ledger result survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
+        /// Fail after retaining the report unless the signed acknowledgement accepted the release.
+        #[arg(long)]
+        require_accepted: bool,
+    },
+    /// Reconcile once and authenticate the adapter response without retransmitting its ZIP.
+    ReconcileAuthenticatedSignedFactoryReceiptRelease {
+        /// Existing absolute 0700 ledger containing the durable submission intent.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Deterministic idempotency key printed by the original submission attempt.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        idempotency_key: String,
+        /// Exact organization policy pack pinning trusted factory response keys.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// HTTPS adapter status endpoint; reconciliation uses GET and never sends package bytes.
+        #[arg(long)]
+        endpoint: String,
+        /// Caller-generated 64-hex observation ID; reuse replays its stored signed result.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        reconciliation_id: String,
+        /// Environment-variable name containing the Bearer credential.
+        #[arg(long)]
+        bearer_token_env: String,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        /// New authentication-report path; the durable ledger observation survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
+        /// Fail after retaining the report unless the signed acknowledgement accepted the release.
+        #[arg(long)]
+        require_accepted: bool,
+    },
     /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
     FactorySubmit {
         package: PathBuf,
@@ -7139,6 +7244,54 @@ fn publish_signed_release_adapter_receipt(
 }
 
 #[cfg(unix)]
+fn publish_factory_release_adapter_response_authentication_report(
+    prepared_output: tempfile::NamedTempFile,
+    output: &Path,
+    report: &FactoryReleaseAdapterResponseAuthenticationReport,
+    intent: &signed_factory_receipt_release_submission::SignedFactoryReleaseSubmissionIntent,
+    policy_source: &[u8],
+    expected_policy_sha256: &str,
+) -> Result<()> {
+    let rendered = render_factory_release_adapter_response_authentication_report(
+        report,
+        intent,
+        policy_source,
+        expected_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    persist_atomic_new_file_bytes(prepared_output, output, &rendered)
+}
+
+#[cfg(unix)]
+fn finish_signed_release_adapter_record(
+    ledger: &anchored_io::PinnedDirectory,
+    destination_name: &str,
+    expected_source: &[u8],
+    maximum_bytes: u64,
+    label: &str,
+    uncertain_recovery: &str,
+    outcome: anchored_io::NoReplacePublicationOutcome,
+) -> Result<()> {
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => Ok(()),
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            let existing = ledger
+                .read_regular_file_with_limit(destination_name, maximum_bytes)
+                .with_context(|| format!("reading concurrently committed {label}"))?;
+            if existing != expected_source {
+                bail!("concurrently committed {label} does not match this operation");
+            }
+            Ok(())
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "{label} may have committed, but durable completion failed; {uncertain_recovery}: {error}"
+            )
+        }
+    }
+}
+
+#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
 fn submit_signed_factory_receipt_release_local(
     package_path: &Path,
@@ -7497,6 +7650,677 @@ fn reconcile_signed_factory_receipt_release_local(
     Ok(receipt)
 }
 
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn submit_authenticated_signed_factory_receipt_release_local(
+    package_path: &Path,
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    challenge: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    endpoint: &str,
+    request_nonce: &str,
+    bearer_token_env: &str,
+    timeout_seconds: u64,
+    output: &Path,
+    allow_http_loopback: bool,
+) -> Result<FactoryReleaseAdapterResponseAuthenticationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("authenticated signed factory release submission ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    reject_pipeline_output_aliases(
+        output,
+        &[package_path, policy_path],
+        "authenticated factory release adapter response report output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &[package_path, policy_path])?;
+
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory adapter response authentication policy pack",
+    )?;
+    let (policy_evidence, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+
+    let marker_name = signed_factory_receipt_release_reservation_filename(challenge)
+        .map_err(anyhow::Error::msg)?;
+    let marker_source = ledger
+        .read_regular_file_with_limit(
+            &marker_name,
+            MAX_SIGNED_FACTORY_RECEIPT_RELEASE_RESERVATION_BYTES,
+        )
+        .context("reading committed signed release reservation marker")?;
+    let marker =
+        parse_signed_factory_receipt_release_reservation(&marker_source, expected_ledger_id)
+            .map_err(anyhow::Error::msg)?;
+    if marker.release_report_summary.challenge != challenge {
+        bail!("signed release reservation marker challenge does not match its ledger name");
+    }
+    let marker_identity = exact_artifact_identity(&marker_source);
+    let (package_source, package_identity) = read_exact_artifact(
+        package_path,
+        MAX_PACKAGE_BYTES,
+        "authenticated signed factory release manufacturing package",
+    )?;
+    validate_manufacturing_package(&package_source).map_err(anyhow::Error::msg)?;
+    let intent = build_signed_factory_release_submission_intent(
+        &marker,
+        &marker_identity.sha256,
+        package_identity.bytes,
+        &package_identity.sha256,
+        endpoint,
+        request_nonce,
+        allow_http_loopback,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let intent_source =
+        render_signed_factory_release_submission_intent(&intent).map_err(anyhow::Error::msg)?;
+    let intent_identity = exact_artifact_identity(&intent_source);
+    let intent_name = signed_factory_release_submission_intent_filename(&intent.idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let result_name = signed_factory_release_submission_result_filename(&intent.idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let authenticated_name =
+        authenticated_factory_release_submission_filename(&intent.idempotency_key)
+            .map_err(anyhow::Error::msg)?;
+
+    let existing_intent = read_optional_signed_release_ledger_record(
+        &ledger,
+        &intent_name,
+        MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        "durable signed release submission intent",
+    )?;
+    if let Some(existing_intent) = existing_intent {
+        if existing_intent != intent_source {
+            bail!("existing durable submission intent does not match the selected release request");
+        }
+        if let Some(authenticated_source) = read_optional_signed_release_ledger_record(
+            &ledger,
+            &authenticated_name,
+            MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+            "durable authenticated signed release submission result",
+        )? {
+            let report = parse_factory_release_adapter_response_authentication_report(
+                &authenticated_source,
+                &intent,
+                &policy_source,
+                expected_policy_sha256,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let receipt_source =
+                render_signed_factory_release_adapter_receipt(&report.adapter_receipt)
+                    .map_err(anyhow::Error::msg)?;
+            if let Some(existing_result) = read_optional_signed_release_ledger_record(
+                &ledger,
+                &result_name,
+                MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+                "durable compatible signed release submission result",
+            )? {
+                if existing_result != receipt_source {
+                    bail!(
+                        "durable compatible submission result conflicts with its authenticated report"
+                    );
+                }
+            } else {
+                let guard = || {
+                    validate_signed_release_adapter_record_guard(
+                        &ledger,
+                        expected_ledger_id,
+                        Some(&marker_name),
+                        Some(&marker_source),
+                        Some(&intent_name),
+                        Some(&intent_source),
+                    )?;
+                    require_exact_artifact(
+                        policy_path,
+                        MAX_POLICY_PACK_BYTES,
+                        &policy_identity,
+                        "factory adapter response authentication policy pack",
+                    )
+                    .map_err(|error| io::Error::other(format!("{error:#}")))
+                };
+                let outcome = persist_signed_release_ledger_record(
+                    &ledger,
+                    &result_name,
+                    &receipt_source,
+                    ".pcbex-authenticated-factory-release-compatible-result-",
+                    "compatible signed release submission result",
+                    &guard,
+                )?;
+                finish_signed_release_adapter_record(
+                    &ledger,
+                    &result_name,
+                    &receipt_source,
+                    MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+                    "compatible signed release submission result",
+                    "reconcile without retransmitting the package",
+                    outcome,
+                )?;
+            }
+            publish_factory_release_adapter_response_authentication_report(
+                prepared_output,
+                output,
+                &report,
+                &intent,
+                &policy_source,
+                expected_policy_sha256,
+            )?;
+            return Ok(report);
+        }
+        if read_optional_signed_release_ledger_record(
+            &ledger,
+            &result_name,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            "durable signed release submission result",
+        )?
+        .is_some()
+        {
+            bail!(
+                "a legacy unauthenticated submission result already exists; reconcile with the authenticated command and do not retransmit the package"
+            );
+        }
+        bail!(
+            "durable submission intent already exists without an authenticated result; reconcile the idempotency key without retransmitting the package"
+        );
+    }
+    if read_optional_signed_release_ledger_record(
+        &ledger,
+        &authenticated_name,
+        MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+        "durable authenticated signed release submission result",
+    )?
+    .is_some()
+        || read_optional_signed_release_ledger_record(
+            &ledger,
+            &result_name,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            "durable signed release submission result",
+        )?
+        .is_some()
+    {
+        bail!("durable submission result exists without its exact intent");
+    }
+
+    let bearer_token =
+        load_factory_release_bearer_token(bearer_token_env).map_err(anyhow::Error::msg)?;
+    validate_signed_factory_receipt_release_reservation_time(&marker, current_unix_seconds()?)
+        .map_err(anyhow::Error::msg)?;
+    require_exact_artifact(
+        package_path,
+        MAX_PACKAGE_BYTES,
+        &package_identity,
+        "authenticated signed factory release manufacturing package",
+    )?;
+    require_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        &policy_identity,
+        "factory adapter response authentication policy pack",
+    )?;
+    let intent_guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            Some(&marker_name),
+            Some(&marker_source),
+            None,
+            None,
+        )?;
+        require_exact_artifact(
+            package_path,
+            MAX_PACKAGE_BYTES,
+            &package_identity,
+            "authenticated signed factory release manufacturing package",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory adapter response authentication policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        validate_signed_release_reservation_time_now(&marker)
+    };
+    let intent_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &intent_name,
+        &intent_source,
+        ".pcbex-authenticated-factory-release-submission-intent-",
+        "durable authenticated signed release submission intent",
+        &intent_guard,
+    )?;
+    match intent_outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            bail!(
+                "durable submission intent was committed concurrently; reconcile its idempotency key without retransmitting the package"
+            )
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "submission intent may have committed, but durable completion failed; reconcile without retransmitting the package: {error}"
+            )
+        }
+    }
+
+    // No POST retry is permitted after the durable intent barrier commits.
+    intent_guard().map_err(anyhow::Error::from)?;
+    let attempted_at_unix = current_unix_seconds()?;
+    let (receipt, report) = submit_authenticated_factory_release_adapter(
+        &intent,
+        &intent_identity.sha256,
+        &package_source,
+        &bearer_token,
+        timeout_seconds,
+        allow_http_loopback,
+        attempted_at_unix,
+        &policy_evidence,
+        &policy,
+    )
+    .map_err(anyhow::Error::msg)?;
+    drop(bearer_token);
+    let authenticated_source = render_factory_release_adapter_response_authentication_report(
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let receipt_source =
+        render_signed_factory_release_adapter_receipt(&receipt).map_err(anyhow::Error::msg)?;
+    let result_guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            Some(&marker_name),
+            Some(&marker_source),
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory adapter response authentication policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+    };
+    let authenticated_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &authenticated_name,
+        &authenticated_source,
+        ".pcbex-authenticated-factory-release-submission-result-",
+        "authenticated signed release submission result",
+        &result_guard,
+    )?;
+    finish_signed_release_adapter_record(
+        &ledger,
+        &authenticated_name,
+        &authenticated_source,
+        MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+        "authenticated signed release submission result",
+        "reconcile without retransmitting the package",
+        authenticated_outcome,
+    )?;
+    let compatible_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &result_name,
+        &receipt_source,
+        ".pcbex-authenticated-factory-release-compatible-result-",
+        "compatible signed release submission result",
+        &result_guard,
+    )?;
+    finish_signed_release_adapter_record(
+        &ledger,
+        &result_name,
+        &receipt_source,
+        MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+        "compatible signed release submission result",
+        "reconcile without retransmitting the package",
+        compatible_outcome,
+    )?;
+    require_exact_artifact(
+        package_path,
+        MAX_PACKAGE_BYTES,
+        &package_identity,
+        "authenticated signed factory release manufacturing package",
+    )
+    .context(
+        "authenticated submission result was retained durably, but the caller package changed; do not retransmit",
+    )?;
+    require_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        &policy_identity,
+        "factory adapter response authentication policy pack",
+    )
+    .context(
+        "authenticated submission result was retained durably, but the pinned policy source changed",
+    )?;
+    publish_factory_release_adapter_response_authentication_report(
+        prepared_output,
+        output,
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?;
+    Ok(report)
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn reconcile_authenticated_signed_factory_receipt_release_local(
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    idempotency_key: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    endpoint: &str,
+    reconciliation_id: &str,
+    bearer_token_env: &str,
+    timeout_seconds: u64,
+    output: &Path,
+    allow_http_loopback: bool,
+) -> Result<FactoryReleaseAdapterResponseAuthenticationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("authenticated signed factory release reconciliation ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    reject_pipeline_output_aliases(
+        output,
+        &[policy_path],
+        "authenticated factory release reconciliation report output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &[policy_path])?;
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory adapter response authentication policy pack",
+    )?;
+    let (policy_evidence, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+
+    let intent_name = signed_factory_release_submission_intent_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let intent_source = ledger
+        .read_regular_file_with_limit(
+            &intent_name,
+            MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        )
+        .context("reading durable signed release submission intent")?;
+    let intent = parse_signed_factory_release_submission_intent(&intent_source)
+        .map_err(anyhow::Error::msg)?;
+    if intent.ledger_id != expected_ledger_id || intent.idempotency_key != idempotency_key {
+        bail!("durable signed release submission intent does not match the selected ledger key");
+    }
+    let intent_identity = exact_artifact_identity(&intent_source);
+    let result_name = signed_factory_release_submission_result_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let authenticated_submission_name =
+        authenticated_factory_release_submission_filename(idempotency_key)
+            .map_err(anyhow::Error::msg)?;
+    let guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory adapter response authentication policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+    };
+
+    if let Some(authenticated_source) = read_optional_signed_release_ledger_record(
+        &ledger,
+        &authenticated_submission_name,
+        MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+        "durable authenticated signed release submission result",
+    )? {
+        let report = parse_factory_release_adapter_response_authentication_report(
+            &authenticated_source,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let receipt_source = render_signed_factory_release_adapter_receipt(&report.adapter_receipt)
+            .map_err(anyhow::Error::msg)?;
+        if let Some(existing_result) = read_optional_signed_release_ledger_record(
+            &ledger,
+            &result_name,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            "durable compatible signed release submission result",
+        )? {
+            if existing_result != receipt_source {
+                bail!(
+                    "durable compatible submission result conflicts with its authenticated report"
+                );
+            }
+        } else {
+            let outcome = persist_signed_release_ledger_record(
+                &ledger,
+                &result_name,
+                &receipt_source,
+                ".pcbex-authenticated-factory-release-compatible-result-",
+                "compatible signed release submission result",
+                &guard,
+            )?;
+            finish_signed_release_adapter_record(
+                &ledger,
+                &result_name,
+                &receipt_source,
+                MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+                "compatible signed release submission result",
+                "retry reconciliation",
+                outcome,
+            )?;
+        }
+        if report.response_authenticated
+            && matches!(
+                report.adapter_receipt.status,
+                FactoryReleaseAdapterStatus::AdapterAccepted
+                    | FactoryReleaseAdapterStatus::AdapterRejected
+            )
+        {
+            publish_factory_release_adapter_response_authentication_report(
+                prepared_output,
+                output,
+                &report,
+                &intent,
+                &policy_source,
+                expected_policy_sha256,
+            )?;
+            return Ok(report);
+        }
+    }
+
+    let reconciliation_name =
+        signed_factory_release_reconciliation_filename(idempotency_key, reconciliation_id)
+            .map_err(anyhow::Error::msg)?;
+    let authenticated_reconciliation_name =
+        authenticated_factory_release_reconciliation_filename(idempotency_key, reconciliation_id)
+            .map_err(anyhow::Error::msg)?;
+    if let Some(authenticated_source) = read_optional_signed_release_ledger_record(
+        &ledger,
+        &authenticated_reconciliation_name,
+        MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+        "durable authenticated signed release reconciliation observation",
+    )? {
+        let report = parse_factory_release_adapter_response_authentication_report(
+            &authenticated_source,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(anyhow::Error::msg)?;
+        if report.adapter_receipt.reconciliation_id.as_deref() != Some(reconciliation_id) {
+            bail!("authenticated reconciliation observation does not match its selected id");
+        }
+        let receipt_source = render_signed_factory_release_adapter_receipt(&report.adapter_receipt)
+            .map_err(anyhow::Error::msg)?;
+        if let Some(existing) = read_optional_signed_release_ledger_record(
+            &ledger,
+            &reconciliation_name,
+            MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+            "durable compatible signed release reconciliation observation",
+        )? {
+            if existing != receipt_source {
+                bail!(
+                    "durable compatible reconciliation observation conflicts with its authenticated report"
+                );
+            }
+        } else {
+            let outcome = persist_signed_release_ledger_record(
+                &ledger,
+                &reconciliation_name,
+                &receipt_source,
+                ".pcbex-authenticated-factory-release-compatible-reconciliation-",
+                "compatible signed release reconciliation observation",
+                &guard,
+            )?;
+            finish_signed_release_adapter_record(
+                &ledger,
+                &reconciliation_name,
+                &receipt_source,
+                MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+                "compatible signed release reconciliation observation",
+                "retry reconciliation",
+                outcome,
+            )?;
+        }
+        publish_factory_release_adapter_response_authentication_report(
+            prepared_output,
+            output,
+            &report,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )?;
+        return Ok(report);
+    }
+    if read_optional_signed_release_ledger_record(
+        &ledger,
+        &reconciliation_name,
+        MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+        "durable signed release reconciliation observation",
+    )?
+    .is_some()
+    {
+        bail!(
+            "this reconciliation id already has a legacy unauthenticated observation; choose a fresh reconciliation id for an authenticated query"
+        );
+    }
+
+    let bearer_token =
+        load_factory_release_bearer_token(bearer_token_env).map_err(anyhow::Error::msg)?;
+    guard().map_err(anyhow::Error::from)?;
+    let (receipt, report) = reconcile_authenticated_factory_release_adapter(
+        &intent,
+        &intent_identity.sha256,
+        endpoint,
+        reconciliation_id,
+        &bearer_token,
+        timeout_seconds,
+        allow_http_loopback,
+        current_unix_seconds()?,
+        &policy_evidence,
+        &policy,
+    )
+    .map_err(anyhow::Error::msg)?;
+    drop(bearer_token);
+    let authenticated_source = render_factory_release_adapter_response_authentication_report(
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let receipt_source =
+        render_signed_factory_release_adapter_receipt(&receipt).map_err(anyhow::Error::msg)?;
+    let authenticated_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &authenticated_reconciliation_name,
+        &authenticated_source,
+        ".pcbex-authenticated-factory-release-reconciliation-",
+        "authenticated signed release reconciliation observation",
+        &guard,
+    )?;
+    finish_signed_release_adapter_record(
+        &ledger,
+        &authenticated_reconciliation_name,
+        &authenticated_source,
+        MAX_FACTORY_RELEASE_ADAPTER_RESPONSE_AUTHENTICATION_BYTES,
+        "authenticated signed release reconciliation observation",
+        "retry reconciliation",
+        authenticated_outcome,
+    )?;
+    let compatible_outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &reconciliation_name,
+        &receipt_source,
+        ".pcbex-authenticated-factory-release-compatible-reconciliation-",
+        "compatible signed release reconciliation observation",
+        &guard,
+    )?;
+    finish_signed_release_adapter_record(
+        &ledger,
+        &reconciliation_name,
+        &receipt_source,
+        MAX_SIGNED_FACTORY_RELEASE_ADAPTER_RECEIPT_BYTES,
+        "compatible signed release reconciliation observation",
+        "retry reconciliation",
+        compatible_outcome,
+    )?;
+    require_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        &policy_identity,
+        "factory adapter response authentication policy pack",
+    )
+    .context(
+        "authenticated reconciliation observation was retained durably, but the pinned policy source changed",
+    )?;
+    publish_factory_release_adapter_response_authentication_report(
+        prepared_output,
+        output,
+        &report,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?;
+    Ok(report)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -7637,6 +8461,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "Fabrication authorization report v1",
             "Fabrication authorization reservation v1",
             "Fabrication authorization reservation ledger manifest v1",
+            "Factory release adapter HTTP Message Signature v1",
+            "Factory release adapter response authentication report v1",
             "Firmware bundle manifest v2",
             "Fresh firmware bundle build report v1",
             "C11 firmware source bundle",
@@ -7902,6 +8728,20 @@ fn run_cli() -> Result<()> {
                 &signed_factory_release_adapter_receipt_json_schema(),
                 output.as_deref(),
                 "signed factory release adapter receipt schema output",
+            )?;
+        }
+        Command::FactoryReleaseAdapterHttpMessageSignatureSchema { output } => {
+            write_closed_schema(
+                &factory_release_adapter_http_message_signature_json_schema(),
+                output.as_deref(),
+                "factory release adapter HTTP message signature schema output",
+            )?;
+        }
+        Command::FactoryReleaseAdapterResponseAuthenticationReportSchema { output } => {
+            write_closed_schema(
+                &factory_release_adapter_response_authentication_report_json_schema(),
+                output.as_deref(),
+                "factory release adapter response authentication report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -20303,6 +21143,149 @@ fn run_cli() -> Result<()> {
                 }
                 if require_accepted && !receipt.accepted {
                     bail!("signed factory release adapter did not acknowledge acceptance");
+                }
+            }
+        }
+        Command::SubmitAuthenticatedSignedFactoryReceiptRelease {
+            package,
+            reservation_ledger,
+            expected_ledger_id,
+            challenge,
+            policy_pack,
+            expected_policy_sha256,
+            endpoint,
+            request_nonce,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            allow_http_loopback,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    package,
+                    reservation_ledger,
+                    expected_ledger_id,
+                    challenge,
+                    policy_pack,
+                    expected_policy_sha256,
+                    endpoint,
+                    request_nonce,
+                    bearer_token_env,
+                    timeout_seconds,
+                    output,
+                    allow_http_loopback,
+                    require_accepted,
+                );
+                bail!(
+                    "durable authenticated signed factory release submission is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report = submit_authenticated_signed_factory_receipt_release_local(
+                    &package,
+                    &reservation_ledger,
+                    &expected_ledger_id,
+                    &challenge,
+                    &policy_pack,
+                    &expected_policy_sha256,
+                    &endpoint,
+                    &request_nonce,
+                    &bearer_token_env,
+                    timeout_seconds,
+                    &output,
+                    allow_http_loopback,
+                )?;
+                eprintln!(
+                    "authenticated signed factory release submission: authenticated={}; status={:?}; idempotency_key={}; report={}",
+                    report.response_authenticated,
+                    report.adapter_receipt.status,
+                    report.adapter_receipt.idempotency_key,
+                    output.display()
+                );
+                if !report.response_authenticated {
+                    bail!(
+                        "factory adapter response was not authenticated; the negative report and compatible receipt were retained durably"
+                    );
+                }
+                if report.adapter_receipt.status == FactoryReleaseAdapterStatus::OutcomeUnknown {
+                    bail!(
+                        "authenticated signed factory release outcome is unknown; reconcile the retained idempotency key without retransmitting the package"
+                    );
+                }
+                if require_accepted && !report.accepted {
+                    bail!("authenticated factory adapter acknowledgement did not accept the release");
+                }
+            }
+        }
+        Command::ReconcileAuthenticatedSignedFactoryReceiptRelease {
+            reservation_ledger,
+            expected_ledger_id,
+            idempotency_key,
+            policy_pack,
+            expected_policy_sha256,
+            endpoint,
+            reconciliation_id,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            allow_http_loopback,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    reservation_ledger,
+                    expected_ledger_id,
+                    idempotency_key,
+                    policy_pack,
+                    expected_policy_sha256,
+                    endpoint,
+                    reconciliation_id,
+                    bearer_token_env,
+                    timeout_seconds,
+                    output,
+                    allow_http_loopback,
+                    require_accepted,
+                );
+                bail!(
+                    "durable authenticated signed factory release reconciliation is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report = reconcile_authenticated_signed_factory_receipt_release_local(
+                    &reservation_ledger,
+                    &expected_ledger_id,
+                    &idempotency_key,
+                    &policy_pack,
+                    &expected_policy_sha256,
+                    &endpoint,
+                    &reconciliation_id,
+                    &bearer_token_env,
+                    timeout_seconds,
+                    &output,
+                    allow_http_loopback,
+                )?;
+                eprintln!(
+                    "authenticated signed factory release reconciliation: authenticated={}; status={:?}; idempotency_key={}; report={}",
+                    report.response_authenticated,
+                    report.adapter_receipt.status,
+                    report.adapter_receipt.idempotency_key,
+                    output.display()
+                );
+                if !report.response_authenticated {
+                    bail!(
+                        "factory adapter reconciliation response was not authenticated; the negative report and compatible receipt were retained durably"
+                    );
+                }
+                if report.adapter_receipt.status == FactoryReleaseAdapterStatus::OutcomeUnknown {
+                    bail!("authenticated signed factory release reconciliation remains unknown");
+                }
+                if require_accepted && !report.accepted {
+                    bail!("authenticated factory adapter acknowledgement did not accept the release");
                 }
             }
         }

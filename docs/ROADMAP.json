@@ -944,6 +944,11 @@
     {
       "id": "durable-idempotency-keyed-signed-factory-release-submission-reconciliation",
       "release": "v1.482.0",
+      "status": "released"
+    },
+    {
+      "id": "policy-pinned-signed-factory-release-adapter-responses",
+      "release": "v1.483.0",
       "status": "current"
     }
   ]

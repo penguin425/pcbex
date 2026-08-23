@@ -488,7 +488,7 @@ pub(crate) fn reconcile_signed_factory_release_adapter(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn receipt_from_response(
+pub(crate) fn receipt_from_response(
     intent: &SignedFactoryReleaseSubmissionIntent,
     intent_sha256: &str,
     operation: FactoryReleaseAdapterOperation,
@@ -1385,6 +1385,54 @@ fn artifact_schema() -> Value {
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+pub(crate) fn test_signed_factory_release_submission_intent(
+    endpoint: &str,
+    package: &[u8],
+) -> SignedFactoryReleaseSubmissionIntent {
+    let package = FactoryReleaseArtifactIdentity {
+        bytes: package.len() as u64,
+        sha256: sha256(package),
+    };
+    let mut intent = SignedFactoryReleaseSubmissionIntent {
+        schema_version: SIGNED_FACTORY_RELEASE_SUBMISSION_SCHEMA_VERSION,
+        intent_scope: SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_SCOPE.into(),
+        local_submission_intent_committed: true,
+        server_side_idempotency_enforced: false,
+        capacity_reserved: false,
+        order_placed: false,
+        payment_performed: false,
+        ledger_id: "2".repeat(64),
+        idempotency_key: String::new(),
+        request_nonce: "1".repeat(64),
+        factory_id: "factory-a".into(),
+        provider: FactoryProvider::Generic,
+        submission_endpoint: endpoint.into(),
+        reservation_challenge: "3".repeat(64),
+        release_subject_sha256: "4".repeat(64),
+        reservation_marker_sha256: "5".repeat(64),
+        manufacturing_package: package,
+        binding_sha256: String::new(),
+    };
+    intent.idempotency_key = domain_hash(
+        IDEMPOTENCY_KEY_DOMAIN,
+        &IdempotencyKeyMaterial {
+            schema_version: intent.schema_version,
+            ledger_id: &intent.ledger_id,
+            factory_id: &intent.factory_id,
+            provider: intent.provider,
+            reservation_challenge: &intent.reservation_challenge,
+            release_subject_sha256: &intent.release_subject_sha256,
+            reservation_marker_sha256: &intent.reservation_marker_sha256,
+            manufacturing_package: &intent.manufacturing_package,
+        },
+    )
+    .expect("test intent idempotency key");
+    intent.binding_sha256 = intent_binding(&intent).expect("test intent binding");
+    validate_signed_factory_release_submission_intent(&intent).expect("valid test intent");
+    intent
 }
 
 #[cfg(test)]

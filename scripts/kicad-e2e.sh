@@ -786,21 +786,38 @@ fabrication_release_pin_output="$output_directory/routing-drc-fabrication.pin-ou
 factory_receipt_secret_directory="$(mktemp -d)"
 factory_receipt_private_key="$factory_receipt_secret_directory/factory-receipt.key"
 factory_receipt_public_key="$output_directory/factory-receipt.pub"
+factory_response_secret_directory="$(mktemp -d)"
+factory_response_private_key="$factory_response_secret_directory/factory-response.pem"
+factory_response_public_der="$factory_response_secret_directory/factory-response.der"
+factory_response_public_key="$output_directory/factory-response.pub"
 factory_receipt_policy_template="$output_directory/factory-receipt-policy-template.json"
-trap 'rm -f -- "$factory_receipt_private_key"; rmdir -- "$factory_receipt_secret_directory" 2>/dev/null || true' EXIT
+trap 'rm -f -- "$factory_receipt_private_key" "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_receipt_secret_directory" "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
 "$pcbex_binary" approval-keygen \
   --private-key "$factory_receipt_private_key" \
   --public-key "$factory_receipt_public_key"
+openssl genpkey -algorithm ED25519 -out "$factory_response_private_key"
+openssl pkey -in "$factory_response_private_key" -pubout -outform DER \
+  -out "$factory_response_public_der"
+python3 - "$factory_response_public_der" "$factory_response_public_key" <<'PY'
+from pathlib import Path
+import sys
+
+source, output = map(Path, sys.argv[1:])
+encoded = source.read_bytes()
+assert len(encoded) >= 32
+output.write_text(encoded[-32:].hex() + "\n", encoding="ascii")
+PY
 python3 - \
   examples/acme-policy-pack.json \
   "$factory_receipt_public_key" \
+  "$factory_response_public_key" \
   "$factory_receipt_policy_template" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-source, public_key, output = map(Path, sys.argv[1:])
+source, receipt_public_key, response_public_key, output = map(Path, sys.argv[1:])
 pack = json.loads(source.read_text(encoding="utf-8"))
 pack["factory_receipt_attestation_policy"] = {
     "maximum_validity_seconds": 3600,
@@ -808,7 +825,18 @@ pack["factory_receipt_attestation_policy"] = {
         {
             "factory_id": "kicad-e2e-factory",
             "provider": "generic",
-            "public_key": public_key.read_text(encoding="ascii").strip(),
+            "public_key": receipt_public_key.read_text(encoding="ascii").strip(),
+        }
+    ],
+}
+pack["factory_adapter_response_authentication_policy"] = {
+    "maximum_validity_seconds": 300,
+    "trusted_keys": [
+        {
+            "key_id": "kicad-e2e-factory-response",
+            "factory_id": "kicad-e2e-factory",
+            "provider": "generic",
+            "public_key": response_public_key.read_text(encoding="ascii").strip(),
         }
     ],
 }
@@ -1391,7 +1419,7 @@ factory_receipt_expires="$((factory_receipt_now + 1800))"
 
 rm -f -- "$factory_receipt_private_key"
 rmdir -- "$factory_receipt_secret_directory"
-trap - EXIT
+trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
 "$pcbex_binary" verify-factory-receipt-attestation \
   "$fabrication_release_package" \
@@ -1710,12 +1738,14 @@ for schema_file in (schema_path, ledger_schema_path):
             pending.extend(value)
 PY
 
-# v1.482 commits one adapter intent before a single POST. A pending result is
-# replayed locally on repeat submit, while reconciliation uses GET and never
-# retransmits the exact manufacturing ZIP.
+# v1.483 preserves the exact v1.482 intent and receipt while authenticating one
+# POST and one GET response under the role-disjoint policy key. Replays remain
+# local, and reconciliation never retransmits the exact manufacturing ZIP.
 signed_release_adapter_intent_schema="$output_directory/signed-release-adapter-intent.schema.json"
 signed_release_adapter_ack_schema="$output_directory/signed-release-adapter-ack.schema.json"
 signed_release_adapter_receipt_schema="$output_directory/signed-release-adapter-receipt.schema.json"
+signed_release_adapter_signature_schema="$output_directory/signed-release-adapter-signature.schema.json"
+signed_release_adapter_auth_schema="$output_directory/signed-release-adapter-auth.schema.json"
 signed_release_adapter_submit="$output_directory/signed-release-adapter.submit.json"
 signed_release_adapter_submit_replay="$output_directory/signed-release-adapter.submit-replay.json"
 signed_release_adapter_submit_replay_error="$output_directory/signed-release-adapter.submit-replay.stderr"
@@ -1737,15 +1767,31 @@ export PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN="$signed_release_adapter_token"
   --output "$signed_release_adapter_ack_schema"
 "$pcbex_binary" signed-factory-release-adapter-receipt-schema \
   --output "$signed_release_adapter_receipt_schema"
+"$pcbex_binary" factory-release-adapter-http-message-signature-schema \
+  --output "$signed_release_adapter_signature_schema"
+"$pcbex_binary" factory-release-adapter-response-authentication-report-schema \
+  --output "$signed_release_adapter_auth_schema"
 
 cat >"$signed_release_adapter_server" <<'PY'
+import base64
 import hashlib
 import http.server
 import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
+import time
 
-mode, status, reconciliation_id, ready_path, request_path, token = sys.argv[1:]
+(
+    mode,
+    status,
+    reconciliation_id,
+    ready_path,
+    request_path,
+    token,
+    private_key,
+) = sys.argv[1:]
 
 class Server(http.server.HTTPServer):
     allow_reuse_address = True
@@ -1770,6 +1816,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "body_bytes": len(body),
             "body_sha256": hashlib.sha256(body).hexdigest(),
             "authorization_ok": self.headers.get("Authorization") == f"Bearer {token}",
+            "response_profile_ok": self.headers.get(
+                "X-PCBEX-Response-Signature-Profile"
+            ) == "rfc9421-ed25519-content-digest-v1",
             "idempotency_key": self.headers.get("Idempotency-Key"),
             "request_nonce": self.headers.get("X-PCBEX-Request-Nonce"),
         }
@@ -1794,8 +1843,74 @@ class Handler(http.server.BaseHTTPRequestHandler):
         response = json.dumps(
             acknowledgement, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
+        digest = "sha-256=:" + base64.b64encode(
+            hashlib.sha256(response).digest()
+        ).decode("ascii") + ":"
+        created = int(time.time())
+        expires = created + 120
+        common = (
+            '("@status" "content-digest" "content-type" '
+            '"x-pcbex-adapter";req "x-pcbex-schema-version";req '
+            '"x-pcbex-response-signature-profile";req '
+            '"idempotency-key";req "x-pcbex-request-nonce";req '
+        )
+        if mode == "reconcile":
+            common += '"x-pcbex-reconciliation-id";req '
+        common += (
+            '"x-pcbex-release-subject-sha256";req '
+            '"x-pcbex-package-sha256";req "x-pcbex-factory-id";req '
+            '"@method";req "@target-uri";req)'
+        )
+        parameters = (
+            f'{common};created={created};expires={expires};'
+            'keyid="kicad-e2e-factory-response";alg="ed25519";'
+            'tag="pcbex-signed-factory-release-response-v1"'
+        )
+        signature_input = "pcbex=" + parameters
+        signature_base = [
+            '"@status": 200',
+            f'"content-digest": {digest}',
+            '"content-type": application/json',
+            '"x-pcbex-adapter";req: signed-factory-release-http-v1',
+            '"x-pcbex-schema-version";req: 1',
+            '"x-pcbex-response-signature-profile";req: '
+            'rfc9421-ed25519-content-digest-v1',
+            f'"idempotency-key";req: {self.headers["Idempotency-Key"]}',
+            f'"x-pcbex-request-nonce";req: {self.headers["X-PCBEX-Request-Nonce"]}',
+        ]
+        if mode == "reconcile":
+            signature_base.append(
+                f'"x-pcbex-reconciliation-id";req: {reconciliation_id}'
+            )
+        signature_base.extend([
+            '"x-pcbex-release-subject-sha256";req: '
+            + self.headers["X-PCBEX-Release-Subject-SHA256"],
+            '"x-pcbex-package-sha256";req: '
+            + self.headers["X-PCBEX-Package-SHA256"],
+            f'"x-pcbex-factory-id";req: {self.headers["X-PCBEX-Factory-ID"]}',
+            f'"@method";req: {expected_method}',
+            f'"@target-uri";req: http://127.0.0.1:{self.server.server_port}/release',
+            f'"@signature-params": {parameters}',
+        ])
+        with tempfile.NamedTemporaryFile() as signature_base_file:
+            signature_base_file.write("\n".join(signature_base).encode("ascii"))
+            signature_base_file.flush()
+            signed = subprocess.run(
+                [
+                    "openssl", "pkeyutl", "-sign", "-rawin",
+                    "-inkey", private_key, "-in", signature_base_file.name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            ).stdout
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Digest", digest)
+        self.send_header("Signature-Input", signature_input)
+        self.send_header(
+            "Signature", "pcbex=:" + base64.b64encode(signed).decode("ascii") + ":"
+        )
         self.send_header("Content-Length", str(len(response)))
         self.send_header("Connection", "close")
         self.end_headers()
@@ -1816,9 +1931,10 @@ python3 "$signed_release_adapter_server" \
   submit adapter_pending '' \
   "$signed_release_adapter_submit_ready" \
   "$signed_release_adapter_submit_request" \
-  "$signed_release_adapter_token" &
+  "$signed_release_adapter_token" \
+  "$factory_response_private_key" &
 signed_release_adapter_server_pid=$!
-trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true' EXIT
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do
   test -s "$signed_release_adapter_submit_ready" && break
   if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
@@ -1828,11 +1944,13 @@ for _ in $(seq 1 100); do
 done
 test -s "$signed_release_adapter_submit_ready"
 signed_release_adapter_submit_endpoint="$(tr -d '\r\n' < "$signed_release_adapter_submit_ready")"
-"$pcbex_binary" submit-signed-factory-receipt-release \
+"$pcbex_binary" submit-authenticated-signed-factory-receipt-release \
   "$fabrication_release_package" \
   --reservation-ledger "$signed_release_reservation_ledger" \
   --expected-ledger-id "$signed_release_reservation_id" \
   --challenge "$(printf 'c%.0s' {1..64})" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
   --endpoint "$signed_release_adapter_submit_endpoint" \
   --request-nonce "$signed_release_adapter_nonce" \
   --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
@@ -1840,14 +1958,16 @@ signed_release_adapter_submit_endpoint="$(tr -d '\r\n' < "$signed_release_adapte
   --allow-http-loopback \
   --output "$signed_release_adapter_submit"
 wait "$signed_release_adapter_server_pid"
-trap - EXIT
+trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
-signed_release_adapter_key="$(jq -r .idempotency_key "$signed_release_adapter_submit")"
-if "$pcbex_binary" submit-signed-factory-receipt-release \
+signed_release_adapter_key="$(jq -r .adapter_receipt.idempotency_key "$signed_release_adapter_submit")"
+if "$pcbex_binary" submit-authenticated-signed-factory-receipt-release \
   "$fabrication_release_package" \
   --reservation-ledger "$signed_release_reservation_ledger" \
   --expected-ledger-id "$signed_release_reservation_id" \
   --challenge "$(printf 'c%.0s' {1..64})" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
   --endpoint "$signed_release_adapter_submit_endpoint" \
   --request-nonce "$signed_release_adapter_nonce" \
   --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
@@ -1860,16 +1980,17 @@ if "$pcbex_binary" submit-signed-factory-receipt-release \
   exit 1
 fi
 cmp "$signed_release_adapter_submit" "$signed_release_adapter_submit_replay"
-grep -Fq 'did not acknowledge acceptance' \
+grep -Fq 'did not accept the release' \
   "$signed_release_adapter_submit_replay_error"
 
 python3 "$signed_release_adapter_server" \
   reconcile adapter_accepted "$signed_release_adapter_reconciliation_id" \
   "$signed_release_adapter_reconcile_ready" \
   "$signed_release_adapter_reconcile_request" \
-  "$signed_release_adapter_token" &
+  "$signed_release_adapter_token" \
+  "$factory_response_private_key" &
 signed_release_adapter_server_pid=$!
-trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true' EXIT
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 for _ in $(seq 1 100); do
   test -s "$signed_release_adapter_reconcile_ready" && break
   if ! kill -0 "$signed_release_adapter_server_pid" 2>/dev/null; then
@@ -1879,10 +2000,12 @@ for _ in $(seq 1 100); do
 done
 test -s "$signed_release_adapter_reconcile_ready"
 signed_release_adapter_reconcile_endpoint="$(tr -d '\r\n' < "$signed_release_adapter_reconcile_ready")"
-"$pcbex_binary" reconcile-signed-factory-receipt-release \
+"$pcbex_binary" reconcile-authenticated-signed-factory-receipt-release \
   --reservation-ledger "$signed_release_reservation_ledger" \
   --expected-ledger-id "$signed_release_reservation_id" \
   --idempotency-key "$signed_release_adapter_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
   --endpoint "$signed_release_adapter_reconcile_endpoint" \
   --reconciliation-id "$signed_release_adapter_reconciliation_id" \
   --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
@@ -1891,12 +2014,14 @@ signed_release_adapter_reconcile_endpoint="$(tr -d '\r\n' < "$signed_release_ada
   --require-accepted \
   --output "$signed_release_adapter_reconcile"
 wait "$signed_release_adapter_server_pid"
-trap - EXIT
+trap 'rm -f -- "$factory_response_private_key" "$factory_response_public_der"; rmdir -- "$factory_response_secret_directory" 2>/dev/null || true' EXIT
 
-"$pcbex_binary" reconcile-signed-factory-receipt-release \
+"$pcbex_binary" reconcile-authenticated-signed-factory-receipt-release \
   --reservation-ledger "$signed_release_reservation_ledger" \
   --expected-ledger-id "$signed_release_reservation_id" \
   --idempotency-key "$signed_release_adapter_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
   --endpoint "$signed_release_adapter_reconcile_endpoint" \
   --reconciliation-id "$signed_release_adapter_reconciliation_id" \
   --bearer-token-env PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN \
@@ -1916,7 +2041,9 @@ python3 - \
   "$signed_release_adapter_token" \
   "$signed_release_adapter_intent_schema" \
   "$signed_release_adapter_ack_schema" \
-  "$signed_release_adapter_receipt_schema" <<'PY'
+  "$signed_release_adapter_receipt_schema" \
+  "$signed_release_adapter_signature_schema" \
+  "$signed_release_adapter_auth_schema" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -1932,8 +2059,10 @@ import sys
 ) = map(Path, sys.argv[1:7])
 token = sys.argv[7]
 schema_paths = list(map(Path, sys.argv[8:]))
-submit = json.loads(submit_path.read_bytes())
-reconcile = json.loads(reconcile_path.read_bytes())
+submit_report = json.loads(submit_path.read_bytes())
+reconcile_report = json.loads(reconcile_path.read_bytes())
+submit = submit_report["adapter_receipt"]
+reconcile = reconcile_report["adapter_receipt"]
 submit_request = json.loads(submit_request_path.read_bytes())
 reconcile_request = json.loads(reconcile_request_path.read_bytes())
 package = package_path.read_bytes()
@@ -1951,6 +2080,31 @@ assert reconcile["manufacturing_package_transmission_attempted"] is False
 assert reconcile["external_submission_attempted"] is False
 assert reconcile["acknowledgement_validated"] is True
 assert reconcile["idempotency_key"] == submit["idempotency_key"]
+
+for report in (submit_report, reconcile_report):
+    assert report["status"] == "response_authenticated"
+    assert report["response_authenticated"] is True
+    assert report["response_signature_verified"] is True
+    assert report["response_content_digest_verified"] is True
+    assert report["policy_pack_pin_matched"] is True
+    assert report["signer_policy_matched"] is True
+    assert report["signature_time_active"] is True
+    assert report["acknowledgement_authenticated"] is True
+    assert report["raw_response_authenticity_verified"] is True
+    assert report["signer"]["key_id"] == "kicad-e2e-factory-response"
+    assert report["response_signature"]["algorithm"] == "ed25519"
+    assert report["authentication_failure"] is None
+    for claim in (
+        "endpoint_transport_authenticity_verified",
+        "factory_legal_identity_verified",
+        "trusted_time_verified",
+        "server_side_idempotency_enforced",
+        "capacity_reserved",
+        "order_placed",
+        "payment_performed",
+        "exactly_once_execution_verified",
+    ):
+        assert report[claim] is False, claim
 
 for receipt in (submit, reconcile):
     for claim in (
@@ -1971,6 +2125,7 @@ for receipt in (submit, reconcile):
 
 assert submit_request == {
     "authorization_ok": True,
+    "response_profile_ok": True,
     "body_bytes": len(package),
     "body_sha256": hashlib.sha256(package).hexdigest(),
     "idempotency_key": submit["idempotency_key"],
@@ -1980,6 +2135,7 @@ assert submit_request == {
 }
 assert reconcile_request == {
     "authorization_ok": True,
+    "response_profile_ok": True,
     "body_bytes": 0,
     "body_sha256": hashlib.sha256(b"").hexdigest(),
     "idempotency_key": submit["idempotency_key"],
@@ -1990,6 +2146,12 @@ assert reconcile_request == {
 
 for path in [submit_path, reconcile_path, *ledger_path.iterdir()]:
     assert token.encode() not in path.read_bytes(), path
+
+ledger_names = {path.name for path in ledger_path.iterdir()}
+assert any(name.startswith("authenticated-factory-release-submission-v1-")
+           for name in ledger_names)
+assert any(name.startswith("authenticated-factory-release-reconciliation-v1-")
+           for name in ledger_names)
 
 for schema_path in schema_paths:
     schema = json.loads(schema_path.read_bytes())
@@ -2006,6 +2168,9 @@ for schema_path in schema_paths:
             pending.extend(value)
 PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
+rm -f -- "$factory_response_private_key" "$factory_response_public_der"
+rmdir -- "$factory_response_secret_directory"
+trap - EXIT
 
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
