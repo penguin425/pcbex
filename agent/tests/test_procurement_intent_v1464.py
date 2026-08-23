@@ -169,7 +169,7 @@ def _write_fake_pcbex(
             board = board_path.read_bytes()
             package = package_path.read_bytes()
             if MODE == "timeout":
-                time.sleep(2)
+                time.sleep(5)
             if MODE == "stdout-overflow":
                 sys.stdout.buffer.write(b"x" * (1024 * 1024 + 1))
                 sys.stdout.buffer.flush()
@@ -833,7 +833,11 @@ class ProcurementIntentV1464Tests(unittest.TestCase):
                 inputs["bundle"],
                 inputs["snapshot"],
                 _write_fake_pcbex(root, mode="timeout"),
-                timeout_seconds=0.5,
+                # Windows process creation can legitimately consume more than
+                # 500 ms before the child is observable. Keep enough aggregate
+                # budget to reach the child while still forcing its 5 s sleep
+                # through the bounded-process timeout path.
+                timeout_seconds=2,
             )
 
     def test_cli_retains_rejection_before_final_gate_and_never_clobbers(self) -> None:
