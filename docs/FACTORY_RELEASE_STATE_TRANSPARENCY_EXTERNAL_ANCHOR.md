@@ -261,8 +261,9 @@ input/output or input/ledger overlap fail before public output appears.
 ## What remains
 
 One inclusion proof does not show that a later external tree extends an earlier
-one. External-log consistency is the next boundary; independent gossip follows
-to compare views that do not share one retained baseline.
+one. Version 1.489 adds that strict external-log consistency chain;
+independent gossip remains the next boundary for comparing views that do not
+share one retained baseline.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain

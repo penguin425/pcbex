@@ -42,7 +42,7 @@ pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_REPORT_B
     4 * 1024 * 1024;
 
 const MAX_EXTERNAL_ANCHOR_LOGS: usize = 100;
-const MAX_EXTERNAL_ANCHOR_AUDIT_PATH: usize = 64;
+pub(crate) const MAX_EXTERNAL_ANCHOR_AUDIT_PATH: usize = 64;
 const MAX_EXTERNAL_ANCHOR_AGE_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_TIMESTAMP: u64 = 999_999_999_999_999;
 const LEAF_BINDING_DOMAIN: &[u8] =
@@ -641,7 +641,7 @@ fn validate_external_anchor_policy_role_separation(
     Ok(())
 }
 
-fn validate_external_tree_head_shape(
+pub(crate) fn validate_external_tree_head_shape(
     head: &SignedFactoryReleaseTransparencyExternalTreeHead,
 ) -> Result<(), String> {
     if head.schema_version != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_SCHEMA_VERSION
@@ -715,7 +715,7 @@ fn validate_external_anchor_proof_shape(
     Ok(())
 }
 
-fn verify_external_tree_head_signature(
+pub(crate) fn verify_external_tree_head_signature(
     head: &SignedFactoryReleaseTransparencyExternalTreeHead,
 ) -> Result<(), String> {
     validate_external_tree_head_shape(head)?;
@@ -740,7 +740,7 @@ fn verify_external_tree_head_signature(
         })
 }
 
-fn external_tree_head_signature_payload(
+pub(crate) fn external_tree_head_signature_payload(
     head: &SignedFactoryReleaseTransparencyExternalTreeHead,
 ) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&ExternalTreeHeadSignaturePayload {
@@ -1341,7 +1341,7 @@ pub(crate) fn factory_release_state_transparency_external_anchor_report_json_sch
     ]))
 }
 
-fn external_tree_head_schema() -> Value {
+pub(crate) fn external_tree_head_schema() -> Value {
     json!({
         "type": "object", "additionalProperties": false,
         "required": [

@@ -1857,7 +1857,7 @@ real organizational independence, selected-ledger rollback resistance, trusted
 time, transport/legal identity, capacity, order, payment, and exactly-once
 execution remain false.
 
-The current v1.488.0 milestone anchors that exact latest witness report without
+The released v1.488.0 milestone anchors that exact latest witness report without
 changing any v1.484 state, v1.485 inclusion, v1.486 consistency, or v1.487
 witness byte. A separate canonical policy and independently configured semantic
 SHA-256 select 1–100 canonically ordered external log IDs, non-weak Ed25519
@@ -1883,5 +1883,27 @@ another proof conflicts. This proves inclusion in one selected external signed
 view only. External-log append-only consistency, global non-equivocation,
 selected-ledger rollback resistance, trusted time, real organizational
 independence, transport/legal identity, capacity, order, payment, and
-exactly-once execution remain false. External-log consistency is the next
-independent milestone.
+exactly-once execution remain false.
+
+The current v1.489.0 milestone proves strict append-only extension from that
+retained external anchor without changing any v1.484–v1.488 wire byte. Each
+canonical proof carries the exact pinned external policy and log identities,
+both complete v1.488-format signed tree heads and their compact identities, and
+a bounded RFC 6962-shaped consistency path. Both signatures authenticate
+before the verifier interprets size, time, or Merkle relationships.
+
+Generation 1 starts only at the complete signed head embedded in the exact
+durable v1.488 report. Each later generation starts at the exact preceding
+v1.489 head, keeps one log ID, algorithm, key, release context, witness policy,
+and external policy, and must strictly increase tree size without reversing the
+signed observation order. The current head remains fresh only relative to the
+local evaluation clock and the unchanged v1.488 age policy.
+
+The Unix verifier reloads the complete v1.484–v1.488 chain and every v1.489
+predecessor around guarded no-replace publication. Exact latest-proof retry
+returns retained bytes after expiry; a competing branch from an earlier head
+cannot replace the winner. This proves prefix consistency only for selected
+views in one selected ledger. Global non-equivocation, selected-ledger rollback
+resistance, trusted time, real organizational independence, transport/legal
+identity, capacity, order, payment, and exactly-once execution remain false.
+Independent external-log gossip is the next milestone.

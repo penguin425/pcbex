@@ -64,7 +64,8 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
   separately pinned signed Merkle view and prove strict append-only extension
   between retained checkpoints. Require distinct policy-pinned witness
   organizations to endorse the exact latest checkpoint, then anchor that exact
-  quorum report in a separately trusted external signed Merkle view.
+  quorum report in a separately trusted external signed Merkle view and prove
+  later external views strictly extend the retained anchor.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
@@ -246,6 +247,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Factory-state transparency consistency v1 | Prove one retained signed view strictly extends another and retain the transition in a no-replace chain | `pcbex factory-release-state-transparency-consistency-verification-report-schema` |
 | Factory-state transparency witness quorum v1 | Require distinct policy-pinned organizations to sign the exact latest v1.486 report and tree head | `pcbex factory-release-state-transparency-witness-quorum-verification-report-schema` |
 | Factory-state transparency external anchor v1 | Prove the exact latest v1.487 quorum report appears in one separately policy-pinned external signed Merkle view | `pcbex factory-release-state-transparency-external-anchor-verification-report-schema` |
+| Factory-state transparency external consistency v1 | Prove later signed views strictly extend the retained external anchor and keep a bounded no-replace chain | `pcbex factory-release-state-transparency-external-consistency-verification-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

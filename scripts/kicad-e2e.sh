@@ -4139,6 +4139,422 @@ for schema_path in (policy_schema_path, proof_schema_path, report_schema_path):
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.489 proves that later signed views strictly extend the retained v1.488
+# external anchor. The local chain remains append-only and no-replace; gossip
+# and global non-equivocation remain explicit nonclaims.
+factory_transparency_external_consistency_proof_schema="$output_directory/factory-release-transparency-external-consistency-proof.schema.json"
+factory_transparency_external_consistency_report_schema="$output_directory/factory-release-transparency-external-consistency-report.schema.json"
+factory_transparency_external_consistency_proof_1="$output_directory/factory-release-transparency-external-consistency-1.proof.json"
+factory_transparency_external_consistency_proof_2="$output_directory/factory-release-transparency-external-consistency-2.proof.json"
+factory_transparency_external_consistency_unauthenticated_proof="$output_directory/factory-release-transparency-external-consistency-unauthenticated.proof.json"
+factory_transparency_external_consistency_bad_path_proof="$output_directory/factory-release-transparency-external-consistency-bad-path.proof.json"
+factory_transparency_external_consistency_alternate_proof="$output_directory/factory-release-transparency-external-consistency-alternate.proof.json"
+factory_transparency_external_consistency_report_1="$output_directory/factory-release-transparency-external-consistency-1.report.json"
+factory_transparency_external_consistency_report_2="$output_directory/factory-release-transparency-external-consistency-2.report.json"
+factory_transparency_external_consistency_replay="$output_directory/factory-release-transparency-external-consistency.replay.json"
+factory_transparency_external_consistency_unauthenticated_output="$output_directory/factory-release-transparency-external-consistency-unauthenticated.report.json"
+factory_transparency_external_consistency_unauthenticated_error="$output_directory/factory-release-transparency-external-consistency-unauthenticated.stderr"
+factory_transparency_external_consistency_bad_path_output="$output_directory/factory-release-transparency-external-consistency-bad-path.report.json"
+factory_transparency_external_consistency_bad_path_error="$output_directory/factory-release-transparency-external-consistency-bad-path.stderr"
+factory_transparency_external_consistency_conflict_output="$output_directory/factory-release-transparency-external-consistency-conflict.report.json"
+factory_transparency_external_consistency_conflict_error="$output_directory/factory-release-transparency-external-consistency-conflict.stderr"
+
+"$pcbex_binary" factory-release-state-transparency-external-consistency-proof-schema \
+  --output "$factory_transparency_external_consistency_proof_schema"
+"$pcbex_binary" factory-release-state-transparency-external-consistency-verification-report-schema \
+  --output "$factory_transparency_external_consistency_report_schema"
+
+python3 - \
+  "$factory_transparency_external_anchor_report" \
+  "$factory_transparency_external_consistency_proof_1" \
+  "$factory_transparency_external_consistency_proof_2" \
+  "$factory_transparency_external_consistency_unauthenticated_proof" \
+  "$factory_transparency_external_consistency_bad_path_proof" \
+  "$factory_transparency_external_consistency_alternate_proof" \
+  "$factory_transparency_external_anchor_private" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+anchor_path, proof_1_path, proof_2_path, unauthenticated_path, bad_path_path, \
+    alternate_path, private_path = map(Path, sys.argv[1:])
+anchor = json.loads(anchor_path.read_bytes())
+anchor_proof = anchor["anchor_proof"]
+anchor_head = anchor_proof["tree_head"]
+policy_digest = anchor["external_anchor_policy_sha256"]
+external_log_id = anchor["external_log_id"]
+seed = bytes.fromhex(private_path.read_text(encoding="ascii").strip())
+private_key = Ed25519PrivateKey.from_private_bytes(seed)
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":")).encode("ascii")
+
+def merkle_leaf(digest):
+    return hashlib.sha256(
+        b"\x00" +
+        b"pcbex:factory-release-state-transparency-external-anchor-merkle-leaf:v1\0" +
+        bytes.fromhex(digest)
+    ).digest()
+
+def merkle_node(left, right):
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+def merkle_root(leaves):
+    if len(leaves) == 1:
+        return leaves[0]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    return merkle_node(merkle_root(leaves[:split]), merkle_root(leaves[split:]))
+
+def consistency_subproof(old_size, leaves, complete_subtree):
+    if old_size == len(leaves):
+        return [] if complete_subtree else [merkle_root(leaves)]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    if old_size <= split:
+        return consistency_subproof(
+            old_size, leaves[:split], complete_subtree
+        ) + [merkle_root(leaves[split:])]
+    return consistency_subproof(
+        old_size - split, leaves[split:], False
+    ) + [merkle_root(leaves[:split])]
+
+def sign_head(head):
+    payload = {
+        "domain": "pcbex-factory-release-state-transparency-external-anchor-tree-head-v1",
+        "schema_version": head["schema_version"],
+        "tree_head_scope": head["tree_head_scope"],
+        "log_id": head["log_id"],
+        "tree_size": head["tree_size"],
+        "root_sha256": head["root_sha256"],
+        "observed_at_unix": head["observed_at_unix"],
+        "algorithm": head["algorithm"],
+        "public_key": head["public_key"],
+    }
+    head["signature"] = private_key.sign(compact(payload)).hex()
+
+def head_sha256(head):
+    return hashlib.sha256(compact(head)).hexdigest()
+
+def extension(previous_head, leaves, observed_at):
+    old_size = previous_head["tree_size"]
+    current = {
+        "schema_version": 1,
+        "tree_head_scope":
+            "signed-factory-release-state-transparency-external-anchor-tree-head-v1",
+        "log_id": external_log_id,
+        "tree_size": len(leaves),
+        "root_sha256": merkle_root(leaves).hex(),
+        "observed_at_unix": observed_at,
+        "algorithm": "ed25519",
+        "public_key": previous_head["public_key"],
+        "signature": "",
+    }
+    sign_head(current)
+    return {
+        "schema_version": 1,
+        "proof_scope":
+            "factory-release-state-transparency-external-log-consistency-proof-v1",
+        "external_anchor_policy_sha256": policy_digest,
+        "external_log_id": external_log_id,
+        "previous_tree_head_sha256": head_sha256(previous_head),
+        "current_tree_head_sha256": head_sha256(current),
+        "previous_tree_head": previous_head,
+        "current_tree_head": current,
+        "consistency_path": [
+            node.hex() for node in consistency_subproof(old_size, leaves, True)
+        ],
+    }
+
+anchor_leaf = merkle_leaf(anchor_proof["leaf_sha256"])
+leaves_3 = [
+    bytes.fromhex(anchor_proof["audit_path"][0]),
+    anchor_leaf,
+    bytes.fromhex(anchor_proof["audit_path"][1]),
+]
+assert merkle_root(leaves_3).hex() == anchor_head["root_sha256"]
+leaves_4 = leaves_3 + [merkle_leaf("66" * 32)]
+proof_1 = extension(
+    anchor_head, leaves_4, anchor_head["observed_at_unix"] + 1
+)
+proof_1_path.write_text(json.dumps(proof_1, indent=2) + "\n", encoding="utf-8")
+
+unauthenticated = copy.deepcopy(proof_1)
+unauthenticated["current_tree_head"]["root_sha256"] = "33" * 32
+unauthenticated_path.write_text(
+    json.dumps(unauthenticated, indent=2) + "\n", encoding="utf-8"
+)
+
+bad_path = copy.deepcopy(proof_1)
+bad_path["consistency_path"][0] = "44" * 32
+bad_path_path.write_text(json.dumps(bad_path, indent=2) + "\n", encoding="utf-8")
+
+alternate_leaves = leaves_3 + [merkle_leaf("77" * 32)]
+alternate = extension(
+    anchor_head, alternate_leaves, anchor_head["observed_at_unix"] + 1
+)
+alternate_path.write_text(json.dumps(alternate, indent=2) + "\n", encoding="utf-8")
+
+leaves_5 = leaves_4 + [merkle_leaf("88" * 32)]
+proof_2 = extension(
+    proof_1["current_tree_head"],
+    leaves_5,
+    proof_1["current_tree_head"]["observed_at_unix"] + 1,
+)
+proof_2_path.write_text(json.dumps(proof_2, indent=2) + "\n", encoding="utf-8")
+PY
+
+factory_transparency_external_consistency_time="$((factory_transparency_external_anchor_time + 1))"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --anchor-checkpoint-generation 2 \
+  --consistency-proof "$factory_transparency_external_consistency_unauthenticated_proof" \
+  --evaluated-at-unix "$factory_transparency_external_consistency_time" \
+  --output "$factory_transparency_external_consistency_unauthenticated_output" \
+  2>"$factory_transparency_external_consistency_unauthenticated_error"; then
+  echo "expected an unauthenticated external consistency tree head to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_consistency_unauthenticated_output"
+grep -Fq 'invalid factory release transparency external tree-head signature' \
+  "$factory_transparency_external_consistency_unauthenticated_error"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --anchor-checkpoint-generation 2 \
+  --consistency-proof "$factory_transparency_external_consistency_bad_path_proof" \
+  --evaluated-at-unix "$factory_transparency_external_consistency_time" \
+  --output "$factory_transparency_external_consistency_bad_path_output" \
+  2>"$factory_transparency_external_consistency_bad_path_error"; then
+  echo "expected an invalid external consistency path to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_consistency_bad_path_output"
+grep -Fq 'external consistency path does not reconstruct both signed roots' \
+  "$factory_transparency_external_consistency_bad_path_error"
+
+"$pcbex_binary" verify-factory-release-state-transparency-external-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --anchor-checkpoint-generation 2 \
+  --consistency-proof "$factory_transparency_external_consistency_proof_1" \
+  --evaluated-at-unix "$factory_transparency_external_consistency_time" \
+  --output "$factory_transparency_external_consistency_report_1" \
+  --require-accepted
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --consistency-proof "$factory_transparency_external_consistency_alternate_proof" \
+  --evaluated-at-unix "$factory_transparency_external_consistency_time" \
+  --output "$factory_transparency_external_consistency_conflict_output" \
+  2>"$factory_transparency_external_consistency_conflict_error"; then
+  echo "expected a competing external consistency transition to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_consistency_conflict_output"
+grep -Fq 'does not extend the selected retained head' \
+  "$factory_transparency_external_consistency_conflict_error"
+
+"$pcbex_binary" verify-factory-release-state-transparency-external-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --consistency-proof "$factory_transparency_external_consistency_proof_2" \
+  --evaluated-at-unix "$((factory_transparency_external_consistency_time + 1))" \
+  --output "$factory_transparency_external_consistency_report_2" \
+  --require-accepted
+"$pcbex_binary" verify-factory-release-state-transparency-external-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --consistency-proof "$factory_transparency_external_consistency_proof_2" \
+  --evaluated-at-unix "$((factory_transparency_external_consistency_time + 10000))" \
+  --output "$factory_transparency_external_consistency_replay" \
+  --require-accepted
+cmp "$factory_transparency_external_consistency_report_2" \
+  "$factory_transparency_external_consistency_replay"
+
+python3 - \
+  "$factory_transparency_external_consistency_report_1" \
+  "$factory_transparency_external_consistency_report_2" \
+  "$factory_transparency_external_consistency_proof_1" \
+  "$factory_transparency_external_consistency_proof_2" \
+  "$factory_transparency_external_anchor_report" \
+  "$factory_transparency_external_consistency_proof_schema" \
+  "$factory_transparency_external_consistency_report_schema" \
+  "$monotonic_release_ledger" "$monotonic_key" \
+  "$factory_transparency_external_anchor_private" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+report_1_path, report_2_path, proof_1_path, proof_2_path, anchor_path, \
+    proof_schema_path, report_schema_path, ledger_path = map(Path, sys.argv[1:9])
+key, private_path = sys.argv[9:]
+report_1 = json.loads(report_1_path.read_bytes())
+report_2 = json.loads(report_2_path.read_bytes())
+proof_1 = json.loads(proof_1_path.read_bytes())
+proof_2 = json.loads(proof_2_path.read_bytes())
+anchor = json.loads(anchor_path.read_bytes())
+for report, generation, previous_size, current_size, proof in (
+    (report_1, 1, 3, 4, proof_1),
+    (report_2, 2, 4, 5, proof_2),
+):
+    assert report["status"] == "verified"
+    assert report["external_consistency_generation"] == generation
+    assert report["previous_external_tree_size"] == previous_size
+    assert report["current_external_tree_size"] == current_size
+    assert report["external_anchor_report"] == anchor
+    assert report["consistency_proof"] == proof
+    for claim in (
+        "monotonic_state_chain_verified",
+        "source_checkpoint_inclusion_verified",
+        "complete_source_consistency_chain_verified",
+        "source_log_append_only_consistency_verified",
+        "witness_quorum_verified",
+        "external_anchor_verified",
+        "external_anchor_report_identity_verified",
+        "external_anchor_policy_pin_matched",
+        "external_log_policy_matched",
+        "previous_external_tree_head_signature_verified",
+        "current_external_tree_head_signature_verified",
+        "same_external_log_and_key_verified",
+        "strict_external_tree_extension_verified",
+        "external_consistency_proof_verified",
+        "complete_external_consistency_chain_verified",
+        "external_log_append_only_consistency_verified",
+        "current_external_checkpoint_fresh_at_evaluation",
+    ):
+        assert report[claim] is True, claim
+    for claim in (
+        "selected_ledger_external_consistency_report_committed",
+        "global_non_equivocation_verified",
+        "selected_ledger_rollback_resistance_verified",
+        "trusted_time_verified",
+        "independent_organization_operation_verified",
+        "endpoint_transport_authenticity_verified",
+        "factory_legal_identity_verified",
+        "server_side_idempotency_enforced",
+        "capacity_reserved",
+        "order_placed",
+        "payment_performed",
+        "exactly_once_execution_verified",
+    ):
+        assert report[claim] is False, claim
+assert report_1["previous_external_consistency_report_artifact"] is None
+assert report_2["previous_external_consistency_report_artifact"] == {
+    "bytes": len(report_1_path.read_bytes()),
+    "sha256": hashlib.sha256(report_1_path.read_bytes()).hexdigest(),
+}
+assert report_1["chain_anchor_external_anchor_report_artifact"] == {
+    "bytes": len(anchor_path.read_bytes()),
+    "sha256": hashlib.sha256(anchor_path.read_bytes()).hexdigest(),
+}
+filename_context = {
+    "source_log_id": report_2["source_log_id"],
+    "witness_policy_sha256": report_2["witness_policy_sha256"],
+    "external_log_id": report_2["external_log_id"],
+    "external_anchor_policy_sha256": report_2["external_anchor_policy_sha256"],
+}
+context_sha256 = hashlib.sha256(
+    b"pcbex:factory-release-state-transparency-external-consistency-filename:v1\0" +
+    json.dumps(filename_context, separators=(",", ":")).encode("ascii")
+).hexdigest()
+for report_path, generation in ((report_1_path, 1), (report_2_path, 2)):
+    name = (
+        f"factory-release-state-transparency-external-consistency-v1-{key}-"
+        f"{generation:04}-{context_sha256[:32]}.json"
+    )
+    assert (ledger_path / name).read_bytes() == report_path.read_bytes()
+secret = Path(private_path).read_text(encoding="ascii").strip().encode()
+for path in [report_1_path, report_2_path, *ledger_path.iterdir()]:
+    assert secret not in path.read_bytes(), path
+for schema_path in (proof_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
 rm -f -- \
   "$factory_response_private_key" "$factory_response_public_der" \

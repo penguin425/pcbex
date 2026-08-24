@@ -974,6 +974,11 @@
     {
       "id": "factory-release-transparency-external-log-anchoring",
       "release": "v1.488.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-log-consistency",
+      "release": "v1.489.0",
       "status": "current"
     }
   ]

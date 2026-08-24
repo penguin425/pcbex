@@ -95,6 +95,10 @@ boundary document for the artifact you plan to produce or trust.
   policy-pinned external signed Merkle view without claiming external-log
   consistency or selected-ledger rollback resistance.
 
+- [Factory-release State Transparency External Consistency](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_CONSISTENCY.md)
+  — prove later signed views strictly extend the retained external anchor and
+  retain a bounded no-replace chain without claiming global non-equivocation.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
