@@ -20,6 +20,7 @@ evidence your next consumer actually needs.
 | Durable release with authenticated adapter evidence | Policy-pinned signed response handoff | v1.481 reservation → unchanged v1.482 intent → one signed POST or GET → durable v1.483 authentication report |
 | Durable release with authenticated state history | Rollback-resistant adapter handoff | v1.481 reservation → unchanged intent/receipt → signed genesis → head-bound one-step reconciliation → durable v1.484 state chain |
 | Current factory state plus external transparency receipt | Policy-pinned inclusion evidence | complete v1.484 chain replay → exact current head → supplied signed Merkle receipt → durable v1.485 report |
+| Retained and newer transparency checkpoints | Selected-log append-only evidence | retained v1.485 anchor → supplied newer receipt and RFC 6962-shaped consistency path → durable v1.486 chain |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |

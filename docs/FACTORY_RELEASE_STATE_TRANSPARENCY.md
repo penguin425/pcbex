@@ -227,8 +227,10 @@ policy file and expected digest that authenticated the state chain, then add the
 standalone transparency policy and its independent pin at verification time.
 
 The command consumes a supplied receipt and performs no network request. Log
-submission, receipt acquisition, consistency proofs, gossip, trusted
-timestamping, and transport identity remain separate future boundaries.
+submission and receipt acquisition remain external. Use
+[Factory-state Transparency Consistency](FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY.md)
+to prove append-only extension between retained views; gossip, trusted
+timestamping, and transport identity remain separate boundaries.
 
 ## Schema discovery
 

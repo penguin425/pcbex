@@ -93,6 +93,7 @@ writer.
 | Authenticated factory response | Policy-pinned RFC 9421 signature, RFC 9530 body digest, covered request context, and durable positive or negative outer report | Rust cryptographic verifier layered over the unchanged factory-release adapter |
 | Monotonic factory state | Completely reverified sequence/predecessor chain, immutable observations, and sequence-keyed state entries | Rust transition verifier plus the selected pinned Unix ledger |
 | Factory-state transparency | Exact current state inclusion in one separately policy-pinned Ed25519-signed Merkle view | Rust receipt verifier layered over the unchanged v1.484 chain |
+| Transparency consistency | Strict append-only extension between two fully reverified signed views plus a bounded no-replace predecessor chain | Rust consistency verifier layered over v1.485 reports and the selected pinned ledger |
 
 Later layers should retain or bind earlier identities instead of copying a
 boolean result. Fresh replay is required wherever the focused contract says a

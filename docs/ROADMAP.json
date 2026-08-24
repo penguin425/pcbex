@@ -959,6 +959,11 @@
     {
       "id": "policy-pinned-factory-release-state-transparency",
       "release": "v1.485.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-checkpoint-consistency",
+      "release": "v1.486.0",
       "status": "current"
     }
   ]

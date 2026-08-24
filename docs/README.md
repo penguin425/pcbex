@@ -82,6 +82,10 @@ boundary document for the artifact you plan to produce or trust.
   verify the exact current v1.484 head in one separately policy-pinned signed
   Merkle view without claiming global non-equivocation or trusted time.
 
+- [Factory-release State Transparency Consistency](FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY.md)
+  — prove strict append-only extension between retained signed views and keep a
+  bounded no-replace checkpoint chain without claiming global non-equivocation.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

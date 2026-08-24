@@ -193,6 +193,7 @@ mod factory_receipt_attestation;
 mod factory_release_adapter_monotonic_state;
 mod factory_release_adapter_response_authentication;
 mod factory_release_state_transparency;
+mod factory_release_state_transparency_consistency;
 mod final_bom;
 mod final_cpl;
 mod firmware;
@@ -297,7 +298,7 @@ use factory_receipt_attestation::{
 #[cfg(unix)]
 use factory_release_adapter_monotonic_state::{
     FactoryReleaseAdapterMonotonicObservationReport, FactoryReleaseAdapterMonotonicState,
-    MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+    FactoryReleaseAdapterMonotonicStateEntry, MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
     MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
     MAX_FACTORY_RELEASE_ADAPTER_STATE_SEQUENCE,
     build_factory_release_adapter_monotonic_state_entry,
@@ -347,6 +348,21 @@ use factory_release_state_transparency::{
     factory_release_state_transparency_policy_json_schema,
     factory_release_state_transparency_receipt_json_schema,
     factory_release_state_transparency_verification_report_json_schema,
+};
+#[cfg(unix)]
+use factory_release_state_transparency_consistency::{
+    FactoryReleaseStateTransparencyConsistencyVerificationReport,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_PROOF_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_REPORT_BYTES,
+    factory_release_state_transparency_consistency_filename,
+    parse_factory_release_state_transparency_consistency_proof,
+    parse_factory_release_state_transparency_consistency_report,
+    render_factory_release_state_transparency_consistency_report,
+    verify_factory_release_state_transparency_consistency,
+};
+use factory_release_state_transparency_consistency::{
+    factory_release_state_transparency_consistency_proof_json_schema,
+    factory_release_state_transparency_consistency_report_json_schema,
 };
 use final_bom::{final_bom_report_json_schema, render_final_bom_report, verify_final_bom_sources};
 use final_cpl::{final_cpl_report_json_schema, render_final_cpl_report, verify_final_cpl_sources};
@@ -1193,6 +1209,16 @@ enum Command {
     },
     /// Print the closed factory-release state transparency verification-report schema.
     FactoryReleaseStateTransparencyVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory-release transparency consistency-proof JSON Schema.
+    FactoryReleaseStateTransparencyConsistencyProofSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory-release transparency consistency-report JSON Schema.
+    FactoryReleaseStateTransparencyConsistencyVerificationReportSchema {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
@@ -6043,6 +6069,48 @@ enum Command {
         #[arg(long)]
         require_accepted: bool,
     },
+    /// Prove and durably retain append-only consistency between transparency checkpoints.
+    VerifyFactoryReleaseStateTransparencyConsistency {
+        /// Existing absolute 0700 ledger containing the complete v1.484 state chain.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Deterministic idempotency key selecting the durable monotonic state chain.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        idempotency_key: String,
+        /// Exact v1.484 organization policy pack used to verify the complete state chain.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// Exact standalone policy pinning trusted transparency-log keys and freshness.
+        #[arg(long)]
+        transparency_policy: CompactPath,
+        /// Independently configured canonical SHA-256 of the transparency trust policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_transparency_policy_sha256: String,
+        /// Canonical signed inclusion receipt for the strictly newer checkpoint.
+        #[arg(long)]
+        receipt: CompactPath,
+        /// Canonical RFC 6962-shaped proof from the retained checkpoint to this receipt.
+        #[arg(long)]
+        consistency_proof: CompactPath,
+        /// Retained v1.485 state sequence used only to bootstrap generation 1.
+        #[arg(long)]
+        anchor_state_sequence: Option<u64>,
+        /// New verification-report path; the durable ledger copy survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only deterministic evaluation time; production uses the current clock.
+        #[arg(long, hide = true)]
+        evaluated_at_unix: Option<u64>,
+        /// Fail after retention unless the current transparent factory state is accepted.
+        #[arg(long)]
+        require_accepted: bool,
+    },
     /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
     FactorySubmit {
         package: PathBuf,
@@ -9671,6 +9739,612 @@ fn verify_factory_release_state_transparency_receipt_local(
     Ok(report)
 }
 
+#[cfg(unix)]
+fn load_factory_release_transparency_state_sources(
+    ledger: &anchored_io::PinnedDirectory,
+    idempotency_key: &str,
+    sequence: u64,
+    selected_head_sequence: u64,
+) -> Result<(Vec<u8>, FactoryReleaseAdapterMonotonicStateEntry, Vec<u8>)> {
+    if sequence > selected_head_sequence {
+        bail!("factory release transparency report names a state beyond the selected head");
+    }
+    let state_name = monotonic_factory_release_state_filename(idempotency_key, sequence)
+        .map_err(anyhow::Error::msg)?;
+    let state_source = ledger
+        .read_regular_file_with_limit(
+            &state_name,
+            MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_STATE_ENTRY_BYTES,
+        )
+        .context("reading state entry for factory release transparency consistency")?;
+    let state_entry = parse_factory_release_adapter_monotonic_state_entry(&state_source)
+        .map_err(anyhow::Error::msg)?;
+    if state_entry.state.sequence != sequence
+        || state_entry.state.idempotency_key != idempotency_key
+    {
+        bail!("factory release transparency state entry does not match its ledger name");
+    }
+    let observation_source = ledger
+        .read_regular_file_with_limit(
+            &state_entry.observation_filename,
+            MAX_FACTORY_RELEASE_ADAPTER_MONOTONIC_REPORT_BYTES,
+        )
+        .context("reading observation for factory release transparency consistency")?;
+    if exact_artifact_identity(&observation_source) != state_entry.observation {
+        bail!("factory release transparency state observation identity is invalid");
+    }
+    Ok((state_source, state_entry, observation_source))
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn validate_embedded_factory_release_transparency_report(
+    ledger: &anchored_io::PinnedDirectory,
+    idempotency_key: &str,
+    selected_head_sequence: u64,
+    report: &FactoryReleaseStateTransparencyVerificationReport,
+    policy: &OrganizationPolicyPack,
+    expected_policy_sha256: &str,
+    transparency_policy_source: &[u8],
+    expected_transparency_policy_sha256: &str,
+) -> Result<Vec<u8>> {
+    if report.idempotency_key != idempotency_key {
+        bail!("factory release transparency report names a different ledger key");
+    }
+    let (state_source, state_entry, observation_source) =
+        load_factory_release_transparency_state_sources(
+            ledger,
+            idempotency_key,
+            report.state_sequence,
+            selected_head_sequence,
+        )?;
+    render_factory_release_state_transparency_verification_report(
+        report,
+        &state_source,
+        &state_entry,
+        &observation_source,
+        policy,
+        expected_policy_sha256,
+        transparency_policy_source,
+        expected_transparency_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn load_factory_release_transparency_anchor(
+    ledger: &anchored_io::PinnedDirectory,
+    idempotency_key: &str,
+    log_id: &str,
+    anchor_state_sequence: u64,
+    selected_head_sequence: u64,
+    policy: &OrganizationPolicyPack,
+    expected_policy_sha256: &str,
+    transparency_policy_source: &[u8],
+    expected_transparency_policy_sha256: &str,
+) -> Result<(FactoryReleaseStateTransparencyVerificationReport, Vec<u8>)> {
+    let (state_source, state_entry, observation_source) =
+        load_factory_release_transparency_state_sources(
+            ledger,
+            idempotency_key,
+            anchor_state_sequence,
+            selected_head_sequence,
+        )?;
+    let name =
+        factory_release_state_transparency_filename(idempotency_key, anchor_state_sequence, log_id)
+            .map_err(anyhow::Error::msg)?;
+    let source = ledger
+        .read_regular_file_with_limit(&name, MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_REPORT_BYTES)
+        .context("reading retained factory release transparency anchor")?;
+    let report = parse_factory_release_state_transparency_verification_report(
+        &source,
+        &state_source,
+        &state_entry,
+        &observation_source,
+        policy,
+        expected_policy_sha256,
+        transparency_policy_source,
+        expected_transparency_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    if report.state_sequence != anchor_state_sequence
+        || report.idempotency_key != idempotency_key
+        || report.transparency_receipt.tree_head.log_id != log_id
+    {
+        bail!("retained factory release transparency anchor does not match its ledger name");
+    }
+    Ok((report, source))
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn load_factory_release_transparency_consistency_chain(
+    ledger: &anchored_io::PinnedDirectory,
+    idempotency_key: &str,
+    log_id: &str,
+    selected_head_sequence: u64,
+    policy: &OrganizationPolicyPack,
+    expected_policy_sha256: &str,
+    transparency_policy_source: &[u8],
+    expected_transparency_policy_sha256: &str,
+) -> Result<
+    Option<(
+        FactoryReleaseStateTransparencyConsistencyVerificationReport,
+        Vec<u8>,
+    )>,
+> {
+    let mut previous: Option<(
+        FactoryReleaseStateTransparencyConsistencyVerificationReport,
+        Vec<u8>,
+    )> = None;
+    for generation in 1..=factory_release_state_transparency_consistency::MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_GENERATION
+    {
+        let name = factory_release_state_transparency_consistency_filename(
+            idempotency_key,
+            log_id,
+            generation,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let Some(source) = read_optional_signed_release_ledger_record(
+            ledger,
+            &name,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_REPORT_BYTES,
+            "durable factory release transparency consistency report",
+        )?
+        else {
+            break;
+        };
+        let report = parse_factory_release_state_transparency_consistency_report(&source)
+            .map_err(anyhow::Error::msg)?;
+        if report.checkpoint_generation != generation
+            || report.idempotency_key != idempotency_key
+            || report.log_id != log_id
+        {
+            bail!("durable factory release transparency consistency report does not match its ledger name");
+        }
+        validate_embedded_factory_release_transparency_report(
+            ledger,
+            idempotency_key,
+            selected_head_sequence,
+            &report.previous_transparency_report,
+            policy,
+            expected_policy_sha256,
+            transparency_policy_source,
+            expected_transparency_policy_sha256,
+        )?;
+        validate_embedded_factory_release_transparency_report(
+            ledger,
+            idempotency_key,
+            selected_head_sequence,
+            &report.current_transparency_report,
+            policy,
+            expected_policy_sha256,
+            transparency_policy_source,
+            expected_transparency_policy_sha256,
+        )?;
+
+        if generation == 1 {
+            let (anchor, anchor_source) = load_factory_release_transparency_anchor(
+                ledger,
+                idempotency_key,
+                log_id,
+                report.previous_state_sequence,
+                selected_head_sequence,
+                policy,
+                expected_policy_sha256,
+                transparency_policy_source,
+                expected_transparency_policy_sha256,
+            )?;
+            if report.anchor_transparency_report_artifact.as_ref()
+                != Some(&exact_artifact_identity(&anchor_source))
+                || report.previous_consistency_report_artifact.is_some()
+                || report.previous_transparency_report != anchor
+            {
+                bail!("factory release transparency consistency genesis anchor is invalid");
+            }
+        } else {
+            let (previous_report, previous_source) = previous.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("factory release transparency consistency chain has a gap")
+            })?;
+            if report.anchor_transparency_report_artifact.is_some()
+                || report.previous_consistency_report_artifact.as_ref()
+                    != Some(&exact_artifact_identity(previous_source))
+                || report.previous_transparency_report
+                    != previous_report.current_transparency_report
+            {
+                bail!("factory release transparency consistency predecessor is invalid");
+            }
+        }
+        previous = Some((report, source));
+    }
+    Ok(previous)
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_factory_release_state_transparency_consistency_local(
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    idempotency_key: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    transparency_policy_path: &Path,
+    expected_transparency_policy_sha256: &str,
+    receipt_path: &Path,
+    consistency_proof_path: &Path,
+    anchor_state_sequence: Option<u64>,
+    output: &Path,
+    evaluated_at_unix: Option<u64>,
+) -> Result<FactoryReleaseStateTransparencyConsistencyVerificationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("factory release transparency consistency ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    reject_pipeline_output_aliases(
+        output,
+        &[
+            policy_path,
+            transparency_policy_path,
+            receipt_path,
+            consistency_proof_path,
+        ],
+        "factory release state transparency consistency output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(
+        &ledger,
+        &[
+            policy_path,
+            transparency_policy_path,
+            receipt_path,
+            consistency_proof_path,
+        ],
+    )?;
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory release transparency consistency organization policy pack",
+    )?;
+    let (_, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+    let (transparency_policy_source, transparency_policy_identity) = read_exact_artifact(
+        transparency_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+        "factory release transparency consistency trust policy",
+    )?;
+    let (receipt_source, receipt_identity) = read_exact_artifact(
+        receipt_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_RECEIPT_BYTES,
+        "current factory release transparency receipt",
+    )?;
+    let receipt =
+        factory_release_state_transparency::parse_factory_release_state_transparency_receipt(
+            &receipt_source,
+        )
+        .map_err(anyhow::Error::msg)?;
+    let (proof_source, proof_identity) = read_exact_artifact(
+        consistency_proof_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_PROOF_BYTES,
+        "factory release transparency consistency proof",
+    )?;
+    parse_factory_release_state_transparency_consistency_proof(&proof_source)
+        .map_err(anyhow::Error::msg)?;
+
+    let intent_name = signed_factory_release_submission_intent_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let intent_source = ledger
+        .read_regular_file_with_limit(
+            &intent_name,
+            MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        )
+        .context("reading durable signed release submission intent")?;
+    let intent = parse_signed_factory_release_submission_intent(&intent_source)
+        .map_err(anyhow::Error::msg)?;
+    if intent.ledger_id != expected_ledger_id || intent.idempotency_key != idempotency_key {
+        bail!("durable signed release submission intent does not match the selected ledger key");
+    }
+    let (state, _) = load_monotonic_factory_release_state_chain(
+        &ledger,
+        idempotency_key,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!("factory release transparency consistency requires a monotonic state head")
+    })?;
+    let (state_entry_source, state_entry, observation_source) =
+        load_factory_release_transparency_state_sources(
+            &ledger,
+            idempotency_key,
+            state.sequence,
+            state.sequence,
+        )?;
+    if state_entry.state != state {
+        bail!("current factory state entry differs from the verified chain head");
+    }
+    let log_id = receipt.tree_head.log_id.clone();
+    let baseline_chain = load_factory_release_transparency_consistency_chain(
+        &ledger,
+        idempotency_key,
+        &log_id,
+        state.sequence,
+        &policy,
+        expected_policy_sha256,
+        &transparency_policy_source,
+        expected_transparency_policy_sha256,
+    )?;
+
+    let replay = baseline_chain.as_ref().filter(|(retained, _)| {
+        retained.current_transparency_report.receipt_artifact == receipt_identity
+            && retained.consistency_proof_artifact == proof_identity
+    });
+    if let Some((retained, retained_source)) = replay {
+        let report_name = factory_release_state_transparency_consistency_filename(
+            idempotency_key,
+            &log_id,
+            retained.checkpoint_generation,
+        )
+        .map_err(anyhow::Error::msg)?;
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory release transparency consistency organization policy pack",
+        )?;
+        require_exact_artifact(
+            transparency_policy_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+            &transparency_policy_identity,
+            "factory release transparency consistency trust policy",
+        )?;
+        require_exact_artifact(
+            receipt_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_RECEIPT_BYTES,
+            &receipt_identity,
+            "current factory release transparency receipt",
+        )?;
+        require_exact_artifact(
+            consistency_proof_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_PROOF_BYTES,
+            &proof_identity,
+            "factory release transparency consistency proof",
+        )?;
+        let retained_head = load_monotonic_factory_release_state_chain(
+            &ledger,
+            idempotency_key,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )?;
+        if retained_head.as_ref().map(|(candidate, _)| candidate) != Some(&state) {
+            bail!("factory release transparency consistency replay state head changed");
+        }
+        let retained_chain = load_factory_release_transparency_consistency_chain(
+            &ledger,
+            idempotency_key,
+            &log_id,
+            state.sequence,
+            &policy,
+            expected_policy_sha256,
+            &transparency_policy_source,
+            expected_transparency_policy_sha256,
+        )?;
+        if retained_chain.as_ref().map(|(_, source)| source) != Some(retained_source)
+            || retained_chain.as_ref().map(|(report, _)| report) != Some(retained)
+        {
+            bail!("durable factory release transparency consistency replay changed");
+        }
+        let retained_again = ledger
+            .read_regular_file_with_limit(
+                &report_name,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_REPORT_BYTES,
+            )
+            .context("re-reading durable factory release transparency consistency replay")?;
+        if retained_again != *retained_source {
+            bail!("durable factory release transparency consistency replay record changed");
+        }
+        persist_atomic_new_file_bytes(prepared_output, output, retained_source)?;
+        return Ok(retained.clone());
+    }
+    if let Some((retained, _)) = baseline_chain.as_ref()
+        && (retained.current_transparency_report.receipt_artifact == receipt_identity
+            || retained.consistency_proof_artifact == proof_identity)
+    {
+        bail!(
+            "durable factory release transparency consistency record conflicts with this evidence"
+        );
+    }
+
+    let current_report = verify_factory_release_state_transparency_receipt(
+        &state_entry_source,
+        &state_entry,
+        &observation_source,
+        true,
+        &receipt_source,
+        &policy,
+        expected_policy_sha256,
+        &transparency_policy_source,
+        expected_transparency_policy_sha256,
+        evaluated_at_unix.unwrap_or(current_unix_seconds()?),
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let (previous_report, generation, anchor_artifact, previous_artifact) =
+        if let Some((retained, retained_source)) = baseline_chain.as_ref() {
+            if anchor_state_sequence.is_some() {
+                bail!("anchor state sequence is accepted only while bootstrapping generation 1");
+            }
+            (
+                retained.current_transparency_report.clone(),
+                retained.checkpoint_generation + 1,
+                None,
+                Some(exact_artifact_identity(retained_source)),
+            )
+        } else {
+            let anchor_state_sequence = anchor_state_sequence.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "anchor state sequence is required to bootstrap transparency consistency"
+                )
+            })?;
+            let (anchor, anchor_source) = load_factory_release_transparency_anchor(
+                &ledger,
+                idempotency_key,
+                &log_id,
+                anchor_state_sequence,
+                state.sequence,
+                &policy,
+                expected_policy_sha256,
+                &transparency_policy_source,
+                expected_transparency_policy_sha256,
+            )?;
+            (
+                anchor,
+                1,
+                Some(exact_artifact_identity(&anchor_source)),
+                None,
+            )
+        };
+    let report = verify_factory_release_state_transparency_consistency(
+        &previous_report,
+        &current_report,
+        true,
+        true,
+        generation,
+        anchor_artifact,
+        previous_artifact,
+        &proof_source,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let report_source = render_factory_release_state_transparency_consistency_report(&report)
+        .map_err(anyhow::Error::msg)?;
+    let report_name = factory_release_state_transparency_consistency_filename(
+        idempotency_key,
+        &log_id,
+        generation,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let baseline_source = baseline_chain.as_ref().map(|(_, source)| source.clone());
+
+    let guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        let retained_head = load_monotonic_factory_release_state_chain(
+            &ledger,
+            idempotency_key,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_head.as_ref().map(|(candidate, _)| candidate) != Some(&state) {
+            return Err(io::Error::other(
+                "factory release transparency consistency state is no longer the selected head",
+            ));
+        }
+        let retained_chain = load_factory_release_transparency_consistency_chain(
+            &ledger,
+            idempotency_key,
+            &log_id,
+            state.sequence,
+            &policy,
+            expected_policy_sha256,
+            &transparency_policy_source,
+            expected_transparency_policy_sha256,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        let retained_source = retained_chain.map(|(_, source)| source);
+        if retained_source != baseline_source && retained_source.as_ref() != Some(&report_source) {
+            return Err(io::Error::other(
+                "factory release transparency consistency chain changed during verification",
+            ));
+        }
+        require_exact_artifact(
+            policy_path,
+            MAX_POLICY_PACK_BYTES,
+            &policy_identity,
+            "factory release transparency consistency organization policy pack",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            transparency_policy_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+            &transparency_policy_identity,
+            "factory release transparency consistency trust policy",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            receipt_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_RECEIPT_BYTES,
+            &receipt_identity,
+            "current factory release transparency receipt",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        require_exact_artifact(
+            consistency_proof_path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_PROOF_BYTES,
+            &proof_identity,
+            "factory release transparency consistency proof",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+    };
+
+    guard().map_err(anyhow::Error::from)?;
+    let outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        &report_source,
+        ".pcbex-factory-release-state-transparency-consistency-",
+        "factory release transparency consistency verification",
+        &guard,
+    )?;
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            let existing = ledger
+                .read_regular_file_with_limit(
+                    &report_name,
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_REPORT_BYTES,
+                )
+                .context("reading concurrently committed transparency consistency report")?;
+            if existing != report_source {
+                bail!("concurrently committed transparency consistency report conflicts");
+            }
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "factory release transparency consistency report may have committed, but durable completion failed; retry the same evidence: {error}"
+            )
+        }
+    }
+    guard().map_err(anyhow::Error::from)?;
+    persist_atomic_new_file_bytes(prepared_output, output, &report_source)?;
+    Ok(report)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -9820,6 +10494,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "Factory release state transparency trust policy v1",
             "Factory release state transparency receipt v1",
             "Factory release state transparency verification report v1",
+            "Factory release state transparency consistency proof v1",
+            "Factory release state transparency consistency verification report v1",
             "Firmware bundle manifest v2",
             "Fresh firmware bundle build report v1",
             "C11 firmware source bundle",
@@ -10148,6 +10824,22 @@ fn run_cli() -> Result<()> {
                 &factory_release_state_transparency_verification_report_json_schema(),
                 output.as_deref(),
                 "factory release state transparency verification report schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyConsistencyProofSchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_consistency_proof_json_schema(),
+                output.as_deref(),
+                "factory release state transparency consistency proof schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyConsistencyVerificationReportSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &factory_release_state_transparency_consistency_report_json_schema(),
+                output.as_deref(),
+                "factory release state transparency consistency report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -22902,6 +23594,76 @@ fn run_cli() -> Result<()> {
                     && report.state_status != FactoryReleaseAdapterStatus::AdapterAccepted
                 {
                     bail!("transparent current factory state has not accepted the release");
+                }
+            }
+        }
+        Command::VerifyFactoryReleaseStateTransparencyConsistency {
+            reservation_ledger,
+            expected_ledger_id,
+            idempotency_key,
+            policy_pack,
+            expected_policy_sha256,
+            transparency_policy,
+            expected_transparency_policy_sha256,
+            receipt,
+            consistency_proof,
+            anchor_state_sequence,
+            output,
+            evaluated_at_unix,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    reservation_ledger,
+                    expected_ledger_id,
+                    idempotency_key,
+                    policy_pack,
+                    expected_policy_sha256,
+                    transparency_policy,
+                    expected_transparency_policy_sha256,
+                    receipt,
+                    consistency_proof,
+                    anchor_state_sequence,
+                    output,
+                    evaluated_at_unix,
+                    require_accepted,
+                );
+                bail!(
+                    "durable factory release state transparency consistency verification is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report = verify_factory_release_state_transparency_consistency_local(
+                    &reservation_ledger,
+                    &expected_ledger_id,
+                    &idempotency_key,
+                    &policy_pack,
+                    &expected_policy_sha256,
+                    &transparency_policy,
+                    &expected_transparency_policy_sha256,
+                    &receipt,
+                    &consistency_proof,
+                    anchor_state_sequence,
+                    &output,
+                    evaluated_at_unix,
+                )?;
+                eprintln!(
+                    "factory release state transparency consistency: verified={}; log={}; generation={}; tree_size={} -> {}; state_sequence={}; report={}",
+                    report.selected_log_append_only_consistency_verified,
+                    report.log_id,
+                    report.checkpoint_generation,
+                    report.previous_tree_size,
+                    report.current_tree_size,
+                    report.current_state_sequence,
+                    output.display()
+                );
+                if require_accepted
+                    && report.current_transparency_report.state_status
+                        != FactoryReleaseAdapterStatus::AdapterAccepted
+                {
+                    bail!("consistently transparent current factory state has not accepted the release");
                 }
             }
         }

@@ -198,6 +198,7 @@ auditable release.
 | v1.483.0 | Policy-pinned signed factory-release adapter responses | Preserve the exact v1.482 intent and receipt while authenticating each bounded POST or GET response with a strict RFC 9421 Ed25519 profile, RFC 9530 content digest, covered request context, and role-disjoint factory key from an externally pinned policy; retain positive or closed negative evidence before gating without claiming trusted time, TLS, legal identity, capacity, order, payment, or exactly-once execution |
 | v1.484.0 | Authenticated monotonic factory-release adapter state | Preserve every v1.482/v1.483 wire contract while adding a separate signed sequence/predecessor/state profile that binds the client's accepted head, admits only genesis, exact replay, or one linked successor, rejects rollback/equivocation/gaps/forks/terminal mutation, and durably repairs a bounded local chain without claiming global non-equivocation, ledger rollback resistance, trusted time, capacity, order, payment, or exactly-once execution |
 | v1.485.0 | Policy-pinned factory-release state transparency | Fully reverify the unchanged v1.484 chain, bind its exact current state entry into a bounded Merkle leaf, and verify one supplied inclusion receipt under a separately digest-pinned Ed25519 log policy before durable no-replace retention, without claiming global non-equivocation, inter-view consistency, ledger rollback resistance, trusted time, transport identity, ordering, payment, or exactly-once execution |
+| v1.486.0 | Factory-release transparency checkpoint consistency | Fully reverify two v1.485 inclusion reports and every retained predecessor, require the same policy-pinned log/key and release subject, reject rollback, same-size equivocation, time reversal, and non-strict replay, reconstruct both signed roots from one bounded RFC 6962-shaped consistency path, and retain each transition in a generation-keyed no-replace chain without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1780,7 +1781,7 @@ capacity, order placement, payment, and exactly-once execution remain false.
 Trusted timestamps, transport identity, and actual order authority remain later
 independent milestones.
 
-The current v1.485.0 milestone adds a supplied transparency receipt without
+The released v1.485.0 milestone adds a supplied transparency receipt without
 changing any v1.484 state, observation, signature, organization-policy, or
 policy-digest byte. A standalone canonical policy and independently configured
 SHA-256 select 1–100 role-disjoint Ed25519 log keys and one bounded checkpoint
@@ -1804,5 +1805,27 @@ commitment flag remains false.
 This milestone proves inclusion in one policy-selected signed view. It does not
 prove that the log showed the same view to every observer, that later tree heads
 extend earlier ones, or that the selected local ledger cannot be rolled back.
-Consistency proofs, independent gossip, trusted timestamping, transport/legal
-identity, and actual order authority remain later independent milestones.
+Independent gossip, trusted timestamping, transport/legal identity, and actual
+order authority remain later independent milestones.
+
+The current v1.486.0 milestone adds append-only comparison without changing any
+v1.484 state or v1.485 policy, receipt, or report byte. Generation 1 selects an
+exact retained v1.485 report by state sequence and log ID. Every later
+generation names the exact preceding v1.486 report, while both embedded
+inclusion reports are freshly rebound to their retained state entries,
+observations, organization-policy pin, and transparency-policy pin.
+
+The supplied canonical proof binds both signed tree-head digests. The verifier
+requires one log ID and key, nondecreasing state and observation order, and a
+strictly larger tree; a smaller size is rollback, while a different root at one
+size is equivocation. A bounded RFC 6962-shaped consistency path must reconstruct
+both signed roots from the trusted earlier root. Both tree-head signatures are
+verified again.
+
+Accepted transitions commit without replacement under deterministic log and
+generation filenames. Complete chain loading rechecks every transition back to
+the v1.485 anchor around publication, and exact retry of the latest evidence
+returns retained bytes. This establishes append-only consistency only for the
+selected views in one selected ledger. Independent observers can still receive
+split views, and the ledger can still be rolled back; global gossip or witness
+quorum and external ledger/time anchoring remain later milestones.
