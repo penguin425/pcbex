@@ -605,6 +605,28 @@ record. These mechanics do not protect the selected ledger from rollback or
 prove that one external tree head extends another; both claim flags remain
 false.
 
+## Factory-state external consistency limits
+
+The v1.489 verifier accepts one 64 KiB canonical consistency proof containing
+two complete v1.488-format signed tree heads and at most 64 RFC 6962-shaped
+nodes. Both tree sizes remain capped at 100,000. The recursively closed report
+embeds the exact v1.488 anchor, proof, identities, claims, and nonclaims under an
+8 MiB ceiling. One selected release/log/policy context admits at most 10,000
+durable consistency generations.
+
+The Unix-only command reuses the same absolute pinned `0700` ledger. It reloads
+the complete v1.484–v1.488 chain, authenticates both external heads before
+interpreting their relationship, requires a strict extension, verifies the
+current head against the v1.488 local age bound, and reloads the complete
+v1.489 predecessor chain around descriptor-relative no-replace publication.
+
+Generation 1 must name the retained v1.488 checkpoint generation. Later
+generations start from the exact latest retained v1.489 head. Exact proof retry
+returns retained bytes after expiry; an alternate branch cannot overwrite the
+winner. These mechanics prove selected-view prefix consistency only. Global
+non-equivocation, selected-ledger rollback resistance, and trusted time remain
+false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed
