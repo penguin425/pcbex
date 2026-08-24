@@ -229,8 +229,10 @@ standalone transparency policy and its independent pin at verification time.
 The command consumes a supplied receipt and performs no network request. Log
 submission and receipt acquisition remain external. Use
 [Factory-state Transparency Consistency](FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY.md)
-to prove append-only extension between retained views; gossip, trusted
-timestamping, and transport identity remain separate boundaries.
+to prove append-only extension between retained views, then use
+[Factory-state Transparency Witness Quorum](FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_QUORUM.md)
+for selected-observer agreement. Global non-equivocation, trusted timestamping,
+and transport identity remain separate boundaries.
 
 ## Schema discovery
 

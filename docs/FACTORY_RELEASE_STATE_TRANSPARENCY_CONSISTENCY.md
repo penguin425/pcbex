@@ -165,9 +165,10 @@ output appears.
 
 ## What remains
 
-The next trust step is independent gossip or witness quorum over signed tree
-heads. That can detect split views across observers; this local consistency
-chain alone cannot.
+Version 1.487 adds an independent witness quorum over the exact latest report
+and signed tree head. It can reject conflicting views inside the supplied,
+policy-selected organization set; this local consistency chain alone cannot.
 
-Ledger rollback resistance and trusted timestamps remain separate milestones.
-Keep those claims false until an external trust anchor proves them.
+Global non-equivocation, ledger rollback resistance, and trusted timestamps
+remain separate milestones. Keep those claims false until external trust
+anchors prove them.

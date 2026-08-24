@@ -86,6 +86,10 @@ boundary document for the artifact you plan to produce or trust.
   — prove strict append-only extension between retained signed views and keep a
   bounded no-replace checkpoint chain without claiming global non-equivocation.
 
+- [Factory-release State Transparency Witness Quorum](FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_QUORUM.md)
+  — require distinct policy-pinned organizations to sign the exact latest
+  consistency report and tree head without claiming global non-equivocation.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
