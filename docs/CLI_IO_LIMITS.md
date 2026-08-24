@@ -582,6 +582,29 @@ path-based replacement. Protection against a process that can write arbitrary
 entries inside the already-pinned directory still requires an OS sandbox or
 private directory permissions.
 
+## Factory-state external-anchor limits
+
+The v1.488 external-anchor verifier accepts a 64 KiB canonical policy and one
+64 KiB canonical inclusion proof. A policy contains 1–100 canonically ordered
+external logs and a local checkpoint-age bound of 1–604,800 seconds. The signed
+tree is limited to 100,000 leaves and the supplied audit path to 64 nodes. The
+self-contained verification report, including the complete v1.487 report,
+policy, and proof, is capped at 4 MiB.
+
+The durable command is Unix-only and reuses the existing absolute, pinned,
+effective-UID-owned `0700` release ledger. Direct policies and proof inputs must
+be bounded stable regular files outside that ledger and must not alias the new
+output. Before and around descriptor-relative no-replace publication, the
+verifier reloads the current monotonic head, complete transparency consistency
+chain, and exact latest witness-quorum record, then rereads every direct input.
+
+Exact retry returns the retained report bytes even after its original local
+freshness window. Another proof under the same release generation, witness
+policy, external log, and anchor policy conflicts instead of replacing the
+record. These mechanics do not protect the selected ledger from rollback or
+prove that one external tree head extends another; both claim flags remain
+false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

@@ -194,6 +194,7 @@ mod factory_release_adapter_monotonic_state;
 mod factory_release_adapter_response_authentication;
 mod factory_release_state_transparency;
 mod factory_release_state_transparency_consistency;
+mod factory_release_state_transparency_external_anchor;
 mod factory_release_state_transparency_witness_quorum;
 mod final_bom;
 mod final_cpl;
@@ -364,6 +365,25 @@ use factory_release_state_transparency_consistency::{
     MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY_REPORT_BYTES,
     factory_release_state_transparency_consistency_proof_json_schema,
     factory_release_state_transparency_consistency_report_json_schema,
+};
+#[cfg(unix)]
+use factory_release_state_transparency_external_anchor::{
+    FactoryReleaseStateTransparencyExternalAnchorVerificationReport,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_REPORT_BYTES,
+    factory_release_state_transparency_external_anchor_filename,
+    factory_release_state_transparency_external_anchor_policy_sha256,
+    parse_factory_release_state_transparency_external_anchor_policy,
+    parse_factory_release_state_transparency_external_anchor_proof,
+    parse_factory_release_state_transparency_external_anchor_report,
+    render_factory_release_state_transparency_external_anchor_report,
+    verify_factory_release_state_transparency_external_anchor,
+};
+use factory_release_state_transparency_external_anchor::{
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_POLICY_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_PROOF_BYTES,
+    factory_release_state_transparency_external_anchor_policy_json_schema,
+    factory_release_state_transparency_external_anchor_proof_json_schema,
+    factory_release_state_transparency_external_anchor_report_json_schema,
 };
 #[cfg(unix)]
 use factory_release_state_transparency_witness_quorum::{
@@ -1255,6 +1275,21 @@ enum Command {
     },
     /// Print the closed factory-release transparency witness-quorum report schema.
     FactoryReleaseStateTransparencyWitnessQuorumVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed external-anchor trust-policy JSON Schema.
+    FactoryReleaseStateTransparencyExternalAnchorPolicySchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed external-anchor inclusion-proof JSON Schema.
+    FactoryReleaseStateTransparencyExternalAnchorProofSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed external-anchor verification-report JSON Schema.
+    FactoryReleaseStateTransparencyExternalAnchorVerificationReportSchema {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
@@ -6218,6 +6253,60 @@ enum Command {
         #[arg(long)]
         require_accepted: bool,
     },
+    /// Verify and durably retain external signed-log inclusion of the latest witness quorum.
+    VerifyFactoryReleaseStateTransparencyExternalAnchor {
+        /// Existing absolute 0700 ledger containing the complete v1.484-v1.487 chains.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Deterministic idempotency key selecting the durable factory-release chain.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        idempotency_key: String,
+        /// Separately configured source transparency log identity selecting the v1.486 chain.
+        #[arg(long)]
+        log_id: String,
+        /// Exact v1.484 organization policy used to replay the monotonic state chain.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// Exact standalone policy pinning the source transparency log key and freshness.
+        #[arg(long)]
+        transparency_policy: CompactPath,
+        /// Independently configured canonical SHA-256 of the source transparency policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_transparency_policy_sha256: String,
+        /// Exact v1.487 policy pinning the selected witness organizations and keys.
+        #[arg(long)]
+        witness_policy: CompactPath,
+        /// Independently configured semantic SHA-256 of the witness policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_witness_policy_sha256: String,
+        /// Separate canonical policy pinning external signed-log identities, keys, and freshness.
+        #[arg(long)]
+        external_anchor_policy: CompactPath,
+        /// Independently configured semantic SHA-256 of the external-anchor policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_external_anchor_policy_sha256: String,
+        /// Separately configured external log identity selected from the anchor policy.
+        #[arg(long)]
+        external_log_id: String,
+        /// Canonical external signed-tree inclusion proof for the exact latest v1.487 report.
+        #[arg(long)]
+        anchor_proof: CompactPath,
+        /// New verification-report path; the durable ledger copy survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only deterministic evaluation time; production uses the current clock.
+        #[arg(long, hide = true)]
+        evaluated_at_unix: Option<u64>,
+        /// Fail after retention unless the externally anchored current state accepted the release.
+        #[arg(long)]
+        require_accepted: bool,
+    },
     /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
     FactorySubmit {
         package: PathBuf,
@@ -10070,6 +10159,80 @@ fn load_factory_release_transparency_consistency_chain(
 
 #[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
+fn load_factory_release_transparency_witness_quorum_report(
+    ledger: &anchored_io::PinnedDirectory,
+    idempotency_key: &str,
+    log_id: &str,
+    selected_head_sequence: u64,
+    policy: &OrganizationPolicyPack,
+    expected_policy_sha256: &str,
+    transparency_policy_source: &[u8],
+    expected_transparency_policy_sha256: &str,
+    witness_policy_source: &[u8],
+    expected_witness_policy_sha256: &str,
+) -> Result<(
+    FactoryReleaseStateTransparencyWitnessQuorumVerificationReport,
+    Vec<u8>,
+)> {
+    let witness_policy =
+        parse_factory_release_state_transparency_witness_policy(witness_policy_source)
+            .map_err(anyhow::Error::msg)?;
+    let actual_witness_policy_sha256 =
+        factory_release_state_transparency_witness_policy_sha256(&witness_policy)
+            .map_err(anyhow::Error::msg)?;
+    if actual_witness_policy_sha256 != expected_witness_policy_sha256 {
+        bail!("factory release transparency witness policy pin does not match");
+    }
+    let (consistency_report, consistency_source) =
+        load_factory_release_transparency_consistency_chain(
+            ledger,
+            idempotency_key,
+            log_id,
+            selected_head_sequence,
+            policy,
+            expected_policy_sha256,
+            transparency_policy_source,
+            expected_transparency_policy_sha256,
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "factory release transparency external anchoring requires a retained v1.486 checkpoint"
+            )
+        })?;
+    let report_name = factory_release_state_transparency_witness_quorum_filename(
+        idempotency_key,
+        log_id,
+        consistency_report.checkpoint_generation,
+        &actual_witness_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let source = ledger
+        .read_regular_file_with_limit(
+            &report_name,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_REPORT_BYTES,
+        )
+        .context("reading retained factory release transparency witness quorum report")?;
+    let report = parse_factory_release_state_transparency_witness_quorum_report(&source)
+        .map_err(anyhow::Error::msg)?;
+    if report.idempotency_key != idempotency_key
+        || report.log_id != log_id
+        || report.checkpoint_generation != consistency_report.checkpoint_generation
+        || report.current_state_sequence != selected_head_sequence
+        || report.consistency_report_artifact != exact_artifact_identity(&consistency_source)
+        || report.consistency_report != consistency_report
+        || report.witness_policy_artifact != exact_artifact_identity(witness_policy_source)
+        || report.witness_policy_sha256 != actual_witness_policy_sha256
+        || report.witness_policy != witness_policy
+    {
+        bail!(
+            "retained factory release transparency witness quorum report does not match its replayed ledger context"
+        );
+    }
+    Ok((report, source))
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 fn verify_factory_release_state_transparency_consistency_local(
     reservation_ledger: &Path,
     expected_ledger_id: &str,
@@ -10749,6 +10912,325 @@ fn verify_factory_release_state_transparency_witness_quorum_local(
     Ok(report)
 }
 
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_factory_release_state_transparency_external_anchor_local(
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    idempotency_key: &str,
+    log_id: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    transparency_policy_path: &Path,
+    expected_transparency_policy_sha256: &str,
+    witness_policy_path: &Path,
+    expected_witness_policy_sha256: &str,
+    external_anchor_policy_path: &Path,
+    expected_external_anchor_policy_sha256: &str,
+    external_log_id: &str,
+    anchor_proof_path: &Path,
+    output: &Path,
+    evaluated_at_unix: Option<u64>,
+) -> Result<FactoryReleaseStateTransparencyExternalAnchorVerificationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("factory release transparency external-anchor ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    let input_paths = [
+        policy_path,
+        transparency_policy_path,
+        witness_policy_path,
+        external_anchor_policy_path,
+        anchor_proof_path,
+    ];
+    reject_pipeline_output_aliases(
+        output,
+        &input_paths,
+        "factory release state transparency external-anchor output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &input_paths)?;
+
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory release transparency external-anchor organization policy pack",
+    )?;
+    let (_, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+    let (transparency_policy_source, transparency_policy_identity) = read_exact_artifact(
+        transparency_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+        "factory release transparency external-anchor source log policy",
+    )?;
+    let (witness_policy_source, witness_policy_identity) = read_exact_artifact(
+        witness_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_POLICY_BYTES,
+        "factory release transparency external-anchor witness policy",
+    )?;
+    let witness_policy =
+        parse_factory_release_state_transparency_witness_policy(&witness_policy_source)
+            .map_err(anyhow::Error::msg)?;
+    let actual_witness_policy_sha256 =
+        factory_release_state_transparency_witness_policy_sha256(&witness_policy)
+            .map_err(anyhow::Error::msg)?;
+    if actual_witness_policy_sha256 != expected_witness_policy_sha256 {
+        bail!("factory release transparency witness policy pin does not match");
+    }
+    let (external_anchor_policy_source, external_anchor_policy_identity) = read_exact_artifact(
+        external_anchor_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_POLICY_BYTES,
+        "factory release transparency external-anchor policy",
+    )?;
+    let external_anchor_policy = parse_factory_release_state_transparency_external_anchor_policy(
+        &external_anchor_policy_source,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let actual_external_anchor_policy_sha256 =
+        factory_release_state_transparency_external_anchor_policy_sha256(&external_anchor_policy)
+            .map_err(anyhow::Error::msg)?;
+    if actual_external_anchor_policy_sha256 != expected_external_anchor_policy_sha256 {
+        bail!("factory release transparency external-anchor policy pin does not match");
+    }
+    let (anchor_proof_source, anchor_proof_identity) = read_exact_artifact(
+        anchor_proof_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_PROOF_BYTES,
+        "factory release transparency external-anchor proof",
+    )?;
+    let anchor_proof =
+        parse_factory_release_state_transparency_external_anchor_proof(&anchor_proof_source)
+            .map_err(anyhow::Error::msg)?;
+
+    let intent_name = signed_factory_release_submission_intent_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let intent_source = ledger
+        .read_regular_file_with_limit(
+            &intent_name,
+            MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        )
+        .context("reading durable signed release submission intent")?;
+    let intent = parse_signed_factory_release_submission_intent(&intent_source)
+        .map_err(anyhow::Error::msg)?;
+    if intent.ledger_id != expected_ledger_id || intent.idempotency_key != idempotency_key {
+        bail!("durable signed release submission intent does not match the selected ledger key");
+    }
+    let (state, _) = load_monotonic_factory_release_state_chain(
+        &ledger,
+        idempotency_key,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "factory release transparency external anchoring requires a monotonic state head"
+        )
+    })?;
+    let (witness_report, witness_report_source) =
+        load_factory_release_transparency_witness_quorum_report(
+            &ledger,
+            idempotency_key,
+            log_id,
+            state.sequence,
+            &policy,
+            expected_policy_sha256,
+            &transparency_policy_source,
+            expected_transparency_policy_sha256,
+            &witness_policy_source,
+            expected_witness_policy_sha256,
+        )?;
+    let witness_report_identity = exact_artifact_identity(&witness_report_source);
+    let report_name = factory_release_state_transparency_external_anchor_filename(
+        idempotency_key,
+        log_id,
+        witness_report.checkpoint_generation,
+        &actual_witness_policy_sha256,
+        external_log_id,
+        &actual_external_anchor_policy_sha256,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let validate_context = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        let retained_head = load_monotonic_factory_release_state_chain(
+            &ledger,
+            idempotency_key,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_head.as_ref().map(|(candidate, _)| candidate) != Some(&state) {
+            return Err(io::Error::other(
+                "factory release transparency external-anchor state is no longer the selected head",
+            ));
+        }
+        let retained_witness = load_factory_release_transparency_witness_quorum_report(
+            &ledger,
+            idempotency_key,
+            log_id,
+            state.sequence,
+            &policy,
+            expected_policy_sha256,
+            &transparency_policy_source,
+            expected_transparency_policy_sha256,
+            &witness_policy_source,
+            expected_witness_policy_sha256,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_witness.0 != witness_report
+            || retained_witness.1.as_slice() != witness_report_source.as_slice()
+        {
+            return Err(io::Error::other(
+                "factory release transparency witness quorum changed during external anchoring",
+            ));
+        }
+        for (path, maximum, identity, label) in [
+            (
+                policy_path,
+                MAX_POLICY_PACK_BYTES,
+                &policy_identity,
+                "factory release transparency external-anchor organization policy pack",
+            ),
+            (
+                transparency_policy_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+                &transparency_policy_identity,
+                "factory release transparency external-anchor source log policy",
+            ),
+            (
+                witness_policy_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_POLICY_BYTES,
+                &witness_policy_identity,
+                "factory release transparency external-anchor witness policy",
+            ),
+            (
+                external_anchor_policy_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_POLICY_BYTES,
+                &external_anchor_policy_identity,
+                "factory release transparency external-anchor policy",
+            ),
+            (
+                anchor_proof_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_PROOF_BYTES,
+                &anchor_proof_identity,
+                "factory release transparency external-anchor proof",
+            ),
+        ] {
+            require_exact_artifact(path, maximum, identity, label)
+                .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        }
+        Ok(())
+    };
+
+    if let Some(retained_source) = read_optional_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_REPORT_BYTES,
+        "durable factory release transparency external-anchor report",
+    )? {
+        let retained =
+            parse_factory_release_state_transparency_external_anchor_report(&retained_source)
+                .map_err(anyhow::Error::msg)?;
+        if retained.idempotency_key != idempotency_key
+            || retained.source_log_id != log_id
+            || retained.checkpoint_generation != witness_report.checkpoint_generation
+            || retained.witness_policy_sha256 != actual_witness_policy_sha256
+            || retained.witness_quorum_report_artifact != witness_report_identity
+            || retained.witness_quorum_report != witness_report
+            || retained.external_anchor_policy_artifact != external_anchor_policy_identity
+            || retained.external_anchor_policy_sha256 != actual_external_anchor_policy_sha256
+            || retained.external_anchor_policy != external_anchor_policy
+            || retained.anchor_proof_artifact != anchor_proof_identity
+            || retained.anchor_proof != anchor_proof
+            || retained.external_log_id != external_log_id
+        {
+            bail!("durable factory release transparency external-anchor record conflicts");
+        }
+        validate_context().map_err(anyhow::Error::from)?;
+        let retained_again = ledger
+            .read_regular_file_with_limit(
+                &report_name,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_REPORT_BYTES,
+            )
+            .context("re-reading durable factory release transparency external-anchor report")?;
+        if retained_again != retained_source {
+            bail!("durable factory release transparency external-anchor replay changed");
+        }
+        persist_atomic_new_file_bytes(prepared_output, output, &retained_source)?;
+        return Ok(retained);
+    }
+
+    let report = verify_factory_release_state_transparency_external_anchor(
+        &witness_report_source,
+        &external_anchor_policy_source,
+        expected_external_anchor_policy_sha256,
+        external_log_id,
+        &anchor_proof_source,
+        evaluated_at_unix.unwrap_or(current_unix_seconds()?),
+    )
+    .map_err(anyhow::Error::msg)?;
+    if report.witness_quorum_report_artifact != witness_report_identity
+        || report.witness_quorum_report != witness_report
+        || report.external_anchor_policy_artifact != external_anchor_policy_identity
+        || report.external_anchor_policy != external_anchor_policy
+        || report.anchor_proof_artifact != anchor_proof_identity
+        || report.anchor_proof != anchor_proof
+    {
+        bail!("factory release transparency external anchoring selected different evidence");
+    }
+    let report_source = render_factory_release_state_transparency_external_anchor_report(&report)
+        .map_err(anyhow::Error::msg)?;
+    validate_context().map_err(anyhow::Error::from)?;
+    let outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        &report_source,
+        ".pcbex-factory-release-state-transparency-external-anchor-",
+        "factory release transparency external-anchor verification",
+        &validate_context,
+    )?;
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            let existing = ledger
+                .read_regular_file_with_limit(
+                    &report_name,
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_REPORT_BYTES,
+                )
+                .context("reading concurrently committed transparency external-anchor report")?;
+            if existing != report_source {
+                bail!(
+                    "concurrently committed factory release transparency external-anchor report conflicts"
+                );
+            }
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "factory release transparency external-anchor report may have committed, but durable completion failed; retry the same evidence: {error}"
+            )
+        }
+    }
+    validate_context().map_err(anyhow::Error::from)?;
+    persist_atomic_new_file_bytes(prepared_output, output, &report_source)?;
+    Ok(report)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -11267,6 +11749,29 @@ fn run_cli() -> Result<()> {
                 &factory_release_state_transparency_witness_quorum_report_json_schema(),
                 output.as_deref(),
                 "factory release state transparency witness quorum report schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyExternalAnchorPolicySchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_anchor_policy_json_schema(),
+                output.as_deref(),
+                "factory release state transparency external-anchor policy schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyExternalAnchorProofSchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_anchor_proof_json_schema(),
+                output.as_deref(),
+                "factory release state transparency external-anchor proof schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyExternalAnchorVerificationReportSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_anchor_report_json_schema(),
+                output.as_deref(),
+                "factory release state transparency external-anchor report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -24223,6 +24728,93 @@ fn run_cli() -> Result<()> {
                 {
                     bail!(
                         "witness-quorum-backed transparent current factory state has not accepted the release"
+                    );
+                }
+            }
+        }
+        Command::VerifyFactoryReleaseStateTransparencyExternalAnchor {
+            reservation_ledger,
+            expected_ledger_id,
+            idempotency_key,
+            log_id,
+            policy_pack,
+            expected_policy_sha256,
+            transparency_policy,
+            expected_transparency_policy_sha256,
+            witness_policy,
+            expected_witness_policy_sha256,
+            external_anchor_policy,
+            expected_external_anchor_policy_sha256,
+            external_log_id,
+            anchor_proof,
+            output,
+            evaluated_at_unix,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    reservation_ledger,
+                    expected_ledger_id,
+                    idempotency_key,
+                    log_id,
+                    policy_pack,
+                    expected_policy_sha256,
+                    transparency_policy,
+                    expected_transparency_policy_sha256,
+                    witness_policy,
+                    expected_witness_policy_sha256,
+                    external_anchor_policy,
+                    expected_external_anchor_policy_sha256,
+                    external_log_id,
+                    anchor_proof,
+                    output,
+                    evaluated_at_unix,
+                    require_accepted,
+                );
+                bail!(
+                    "durable factory release state transparency external-anchor verification is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report = verify_factory_release_state_transparency_external_anchor_local(
+                    &reservation_ledger,
+                    &expected_ledger_id,
+                    &idempotency_key,
+                    &log_id,
+                    &policy_pack,
+                    &expected_policy_sha256,
+                    &transparency_policy,
+                    &expected_transparency_policy_sha256,
+                    &witness_policy,
+                    &expected_witness_policy_sha256,
+                    &external_anchor_policy,
+                    &expected_external_anchor_policy_sha256,
+                    &external_log_id,
+                    &anchor_proof,
+                    &output,
+                    evaluated_at_unix,
+                )?;
+                eprintln!(
+                    "factory release transparency external anchor: verified={}; source_log={}; generation={}; external_log={}; external_tree_size={}; report={}",
+                    report.external_anchor_verified,
+                    report.source_log_id,
+                    report.checkpoint_generation,
+                    report.external_log_id,
+                    report.external_tree_size,
+                    output.display(),
+                );
+                if require_accepted
+                    && report
+                        .witness_quorum_report
+                        .consistency_report
+                        .current_transparency_report
+                        .state_status
+                        != FactoryReleaseAdapterStatus::AdapterAccepted
+                {
+                    bail!(
+                        "externally anchored witness-quorum-backed current factory state has not accepted the release"
                     );
                 }
             }
