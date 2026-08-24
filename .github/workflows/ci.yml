@@ -1940,7 +1940,7 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
-      - name: Run cross-platform v1.485-v1.487 factory-state transparency boundaries
+      - name: Run cross-platform v1.485-v1.488 factory-state transparency boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
@@ -2057,7 +2057,7 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
-      - name: Run Windows v1.485-v1.487 factory-state transparency boundaries
+      - name: Run Windows v1.485-v1.488 factory-state transparency boundaries
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_state_transparency

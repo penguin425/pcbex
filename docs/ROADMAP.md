@@ -200,6 +200,7 @@ auditable release.
 | v1.485.0 | Policy-pinned factory-release state transparency | Fully reverify the unchanged v1.484 chain, bind its exact current state entry into a bounded Merkle leaf, and verify one supplied inclusion receipt under a separately digest-pinned Ed25519 log policy before durable no-replace retention, without claiming global non-equivocation, inter-view consistency, ledger rollback resistance, trusted time, transport identity, ordering, payment, or exactly-once execution |
 | v1.486.0 | Factory-release transparency checkpoint consistency | Fully reverify two v1.485 inclusion reports and every retained predecessor, require the same policy-pinned log/key and release subject, reject rollback, same-size equivocation, time reversal, and non-strict replay, reconstruct both signed roots from one bounded RFC 6962-shaped consistency path, and retain each transition in a generation-keyed no-replace chain without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.487.0 | Factory-release transparency witness quorum | Fully reload the latest v1.486 chain, require an externally digest-pinned policy with unique organization, witness, and non-weak Ed25519 key tuples, verify a threshold of fresh receipts over the exact canonical consistency report and embedded signed tree head, reject selected-set split views and duplicate trust, and retain one policy/generation-keyed no-replace report without claiming global non-equivocation, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
+| v1.488.0 | Factory-release transparency external-log anchoring | Fully reload the latest v1.487 witness report, require a separately digest-pinned policy with canonically ordered non-weak Ed25519 external-log keys disjoint from every inner log and witness role, authenticate one bounded signed tree head before reconstructing a domain-separated exact-report inclusion path, and retain one context-keyed no-replace report without claiming external-log consistency, global non-equivocation, selected-ledger rollback resistance, trusted time, real organizational independence, transport/legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1831,7 +1832,7 @@ selected views in one selected ledger. Independent observers can still receive
 split views, and the ledger can still be rolled back; global gossip or witness
 quorum and external ledger/time anchoring remain later milestones.
 
-The current v1.487.0 milestone adds a selected witness quorum without changing
+The released v1.487.0 milestone adds a selected witness quorum without changing
 any v1.484 state, v1.485 inclusion, or v1.486 consistency byte. A separate
 canonical policy and independently configured semantic SHA-256 select 2–100
 canonically ordered organization, witness, and non-weak Ed25519 key tuples, a
@@ -1854,4 +1855,33 @@ digest; exact receipt-set retry returns retained bytes. This detects a conflicti
 view only inside the supplied policy-selected set. Global non-equivocation,
 real organizational independence, selected-ledger rollback resistance, trusted
 time, transport/legal identity, capacity, order, payment, and exactly-once
-execution remain false; external ledger anchoring remains a later milestone.
+execution remain false.
+
+The current v1.488.0 milestone anchors that exact latest witness report without
+changing any v1.484 state, v1.485 inclusion, v1.486 consistency, or v1.487
+witness byte. A separate canonical policy and independently configured semantic
+SHA-256 select 1–100 canonically ordered external log IDs, non-weak Ed25519
+keys, and one bounded local checkpoint-age interval. Every configured external
+log ID and key must remain distinct from the inner transparency log and every
+witness organization, identity, and key.
+
+The external operator derives a domain-separated leaf from the exact canonical
+v1.487 report SHA-256 and binding, release key, source log, checkpoint
+generation, current state and tree-head identities, witness-policy digest,
+external-policy digest, and selected external log. A bounded RFC 6962-shaped
+audit path must reconstruct the supplied signed root. The tree-head signature
+binds its dedicated domain, schema and scope, external log ID, tree size, root,
+observation instant, algorithm, and public key. Authentication precedes proof
+interpretation.
+
+The Unix verifier reloads the complete v1.484–v1.487 chain and accepts only the
+exact latest retained witness report. It checks the external observation is no
+earlier than that report and locally fresh at evaluation, then retains the
+self-contained result under a bounded context-digest filename through guarded
+no-replace publication. Exact proof retry returns retained bytes after expiry;
+another proof conflicts. This proves inclusion in one selected external signed
+view only. External-log append-only consistency, global non-equivocation,
+selected-ledger rollback resistance, trusted time, real organizational
+independence, transport/legal identity, capacity, order, payment, and
+exactly-once execution remain false. External-log consistency is the next
+independent milestone.

@@ -969,6 +969,11 @@
     {
       "id": "factory-release-transparency-witness-quorum",
       "release": "v1.487.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-log-anchoring",
+      "release": "v1.488.0",
       "status": "current"
     }
   ]

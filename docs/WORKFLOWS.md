@@ -22,6 +22,7 @@ evidence your next consumer actually needs.
 | Current factory state plus external transparency receipt | Policy-pinned inclusion evidence | complete v1.484 chain replay → exact current head → supplied signed Merkle receipt → durable v1.485 report |
 | Retained and newer transparency checkpoints | Selected-log append-only evidence | retained v1.485 anchor → supplied newer receipt and RFC 6962-shaped consistency path → durable v1.486 chain |
 | Latest consistent checkpoint plus witness receipts | Selected-witness checkpoint agreement | complete v1.486 chain replay → externally pinned witness policy → distinct-organization Ed25519 quorum → durable v1.487 report |
+| Latest witness-backed checkpoint plus external inclusion proof | Separately anchored checkpoint evidence | complete v1.487 replay → independently pinned external log → signed tree head and bounded Merkle path → durable v1.488 report |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
