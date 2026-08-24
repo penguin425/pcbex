@@ -59,8 +59,9 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Authenticate adapter responses:** Verify RFC 9421 Ed25519 signatures and
   RFC 9530 content digests against exact policy-pinned factory keys.
 
-- **Reject factory-state rollback:** Chain authenticated adapter states to one
-  retained ledger and detect rollback, equivocation, gaps, forks, and terminal mutation.
+- **Verify factory-state history:** Chain authenticated adapter states to one
+  retained ledger, reject rollback and forks, then verify the current head in a
+  separately pinned signed Merkle view.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
@@ -238,6 +239,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Durable signed-release submission v1 | Commit one idempotency-keyed adapter intent, retain its result, and reconcile by GET without retransmitting the ZIP | `pcbex signed-factory-release-adapter-receipt-schema` |
 | Authenticated factory response v1 | Verify the exact adapter acknowledgement, status, request binding, and body digest under a policy-pinned Ed25519 key | `pcbex factory-release-adapter-response-authentication-report-schema` |
 | Monotonic factory state v1 | Bind signed adapter states to the accepted local head and reject rollback, equivocation, gaps, forks, or terminal mutation | `pcbex factory-release-adapter-monotonic-observation-report-schema` |
+| Factory-state transparency v1 | Verify the exact current monotonic head in one separately policy-pinned signed Merkle view | `pcbex factory-release-state-transparency-verification-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

@@ -197,6 +197,7 @@ auditable release.
 | v1.482.0 | Durable idempotency-keyed signed factory-release submission and reconciliation | Consume one exact v1.481 ledger marker and manufacturing ZIP, durably commit a deterministic adapter intent before one POST, retain the bounded result, and reconcile pending or uncertain outcomes through GET without retransmitting the ZIP or claiming server-side idempotency, legal identity, capacity, order, payment, or exactly-once execution |
 | v1.483.0 | Policy-pinned signed factory-release adapter responses | Preserve the exact v1.482 intent and receipt while authenticating each bounded POST or GET response with a strict RFC 9421 Ed25519 profile, RFC 9530 content digest, covered request context, and role-disjoint factory key from an externally pinned policy; retain positive or closed negative evidence before gating without claiming trusted time, TLS, legal identity, capacity, order, payment, or exactly-once execution |
 | v1.484.0 | Authenticated monotonic factory-release adapter state | Preserve every v1.482/v1.483 wire contract while adding a separate signed sequence/predecessor/state profile that binds the client's accepted head, admits only genesis, exact replay, or one linked successor, rejects rollback/equivocation/gaps/forks/terminal mutation, and durably repairs a bounded local chain without claiming global non-equivocation, ledger rollback resistance, trusted time, capacity, order, payment, or exactly-once execution |
+| v1.485.0 | Policy-pinned factory-release state transparency | Fully reverify the unchanged v1.484 chain, bind its exact current state entry into a bounded Merkle leaf, and verify one supplied inclusion receipt under a separately digest-pinned Ed25519 log policy before durable no-replace retention, without claiming global non-equivocation, inter-view consistency, ledger rollback resistance, trusted time, transport identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1750,7 +1751,7 @@ a trusted timestamp, the HTTP signature does not authenticate legal identity or
 TLS, and server-side idempotency, capacity, order placement, payment, and global
 exactly-once execution remain false.
 
-The current v1.484.0 milestone authenticates state history without changing a
+The released v1.484.0 milestone authenticates state history without changing a
 byte of the v1.482 intent, acknowledgement, or receipt formats or the v1.483
 signature profile. A separate RFC 9421 profile signs response sequence,
 predecessor, and semantic state digests together with the client's exact
@@ -1776,5 +1777,32 @@ This is continuity relative to one selected, retained Unix ledger. It does not
 prove global non-equivocation or protect against rollback of the ledger itself.
 Legal identity, TLS authenticity, trusted time, server-side idempotency,
 capacity, order placement, payment, and exactly-once execution remain false.
-Transparency receipts, trusted timestamps, transport identity, and actual order
-authority remain later independent milestones.
+Trusted timestamps, transport identity, and actual order authority remain later
+independent milestones.
+
+The current v1.485.0 milestone adds a supplied transparency receipt without
+changing any v1.484 state, observation, signature, organization-policy, or
+policy-digest byte. A standalone canonical policy and independently configured
+SHA-256 select 1–100 role-disjoint Ed25519 log keys and one bounded checkpoint
+freshness interval. Existing v1.484 ledgers therefore require no migration.
+
+The verifier reloads the complete monotonic chain, selects its exact current
+state entry and observation, and derives a domain-separated leaf from their
+identities plus the stable factory-state projection. A custom-domain leaf and
+RFC 6962-shaped bounded audit path must reconstruct the signed root. The tree
+head signature binds log ID, tree size, root, and observation instant; that
+instant is fresh only relative to the local evaluation clock, so trusted time
+remains false.
+
+One canonical report binds both policy digests, exact state and receipt
+identities, the embedded receipt, tree-head digest, all claim flags, and the
+evaluation instant. It is retained without replacement under the selected
+state sequence and log ID; exact retries replay locally. The pre-commit report
+cannot truthfully attest its own later durable write, so its selected-ledger
+commitment flag remains false.
+
+This milestone proves inclusion in one policy-selected signed view. It does not
+prove that the log showed the same view to every observer, that later tree heads
+extend earlier ones, or that the selected local ledger cannot be rolled back.
+Consistency proofs, independent gossip, trusted timestamping, transport/legal
+identity, and actual order authority remain later independent milestones.

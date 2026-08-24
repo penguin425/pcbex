@@ -811,8 +811,12 @@ fn schemas_and_authenticated_commands_are_public() {
         "factory-release-adapter-monotonic-http-message-signature-schema",
         "factory-release-adapter-monotonic-state-entry-schema",
         "factory-release-adapter-monotonic-observation-report-schema",
+        "factory-release-state-transparency-policy-schema",
+        "factory-release-state-transparency-receipt-schema",
+        "factory-release-state-transparency-verification-report-schema",
         "submit-monotonic-authenticated-signed-factory-receipt-release",
         "reconcile-monotonic-authenticated-signed-factory-receipt-release",
+        "verify-factory-release-state-transparency-receipt",
     ] {
         assert!(help.contains(command), "missing {command}");
     }
@@ -823,6 +827,9 @@ fn schemas_and_authenticated_commands_are_public() {
         "factory-release-adapter-monotonic-http-message-signature-schema",
         "factory-release-adapter-monotonic-state-entry-schema",
         "factory-release-adapter-monotonic-observation-report-schema",
+        "factory-release-state-transparency-policy-schema",
+        "factory-release-state-transparency-receipt-schema",
+        "factory-release-state-transparency-verification-report-schema",
     ] {
         let output = Command::new(pcbex()).arg(command).output().unwrap();
         assert!(output.status.success());

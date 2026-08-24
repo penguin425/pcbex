@@ -699,6 +699,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
             "          factory_release_adapter_monotonic_state"
         )
+        factory_state_transparency_command = (
+            "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
+            "          factory_release_state_transparency"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -737,8 +741,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(signed_release_submission_command, boundaries)
         self.assertEqual(document.count(authenticated_factory_response_command), 1)
         self.assertIn(authenticated_factory_response_command, boundaries)
-        self.assertEqual(document.count(monotonic_factory_state_command), 1)
+        self.assertEqual(document.count(monotonic_factory_state_command), 2)
         self.assertIn(monotonic_factory_state_command, boundaries)
+        self.assertEqual(document.count(factory_state_transparency_command), 2)
+        self.assertIn(factory_state_transparency_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
@@ -754,7 +760,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(signed_release_reservation_rust_command, rust_windows)
         self.assertNotIn(signed_release_submission_command, rust_windows)
         self.assertNotIn(authenticated_factory_response_command, rust_windows)
-        self.assertNotIn(monotonic_factory_state_command, rust_windows)
+        self.assertIn(monotonic_factory_state_command, rust_windows)
+        self.assertIn(factory_state_transparency_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -777,6 +784,22 @@ class CiExecutionPolicyTests(unittest.TestCase):
             ),
             rust_windows.index(
                 "- name: Run Windows factory-receipt cryptographic boundaries"
+            ),
+        )
+        self.assertLess(
+            rust_windows.index(
+                "- name: Run Windows factory-receipt cryptographic boundaries"
+            ),
+            rust_windows.index(
+                "- name: Run Windows monotonic factory-state boundaries"
+            ),
+        )
+        self.assertLess(
+            rust_windows.index(
+                "- name: Run Windows monotonic factory-state boundaries"
+            ),
+            rust_windows.index(
+                "- name: Run Windows factory-state transparency boundaries"
             ),
         )
         self.assertIn("runs-on: windows-latest", rust_windows)
@@ -849,6 +872,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         monotonic_factory_state_step = boundaries.index(
             "- name: Run cross-platform v1.484 monotonic factory-state boundaries"
+        )
+        factory_state_transparency_step = boundaries.index(
+            "- name: Run cross-platform v1.485 factory-state transparency boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -1014,11 +1040,26 @@ class CiExecutionPolicyTests(unittest.TestCase):
             authenticated_factory_response_block,
         )
         monotonic_factory_state_block = boundaries[
-            monotonic_factory_state_step:toolchain_step
+            monotonic_factory_state_step:factory_state_transparency_step
         ]
         self.assertIn(
             monotonic_factory_state_command,
             monotonic_factory_state_block,
+        )
+        self.assertIn(
+            "if: ${{ runner.os != 'Windows' }}",
+            monotonic_factory_state_block,
+        )
+        factory_state_transparency_block = boundaries[
+            factory_state_transparency_step:toolchain_step
+        ]
+        self.assertIn(
+            factory_state_transparency_command,
+            factory_state_transparency_block,
+        )
+        self.assertIn(
+            "if: ${{ runner.os != 'Windows' }}",
+            factory_state_transparency_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -1075,7 +1116,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
             authenticated_factory_response_step,
             monotonic_factory_state_step,
         )
-        self.assertLess(monotonic_factory_state_step, toolchain_step)
+        self.assertLess(monotonic_factory_state_step, factory_state_transparency_step)
+        self.assertLess(factory_state_transparency_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

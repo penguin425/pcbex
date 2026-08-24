@@ -2947,7 +2947,14 @@ mod tests {
                 evidence.state_sequence = "2".into();
             } else if case == "signature" {
                 let offset = evidence.signature.find(":").expect("signature framing") + 1;
-                evidence.signature.replace_range(offset..=offset, "A");
+                let replacement = if evidence.signature.as_bytes()[offset] == b'A' {
+                    "B"
+                } else {
+                    "A"
+                };
+                evidence
+                    .signature
+                    .replace_range(offset..=offset, replacement);
             }
             let server = serve_once(listener, sent_body, header_lines(&evidence));
             let (_, report) = reconcile_monotonic_factory_release_adapter(
