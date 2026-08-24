@@ -199,6 +199,7 @@ auditable release.
 | v1.484.0 | Authenticated monotonic factory-release adapter state | Preserve every v1.482/v1.483 wire contract while adding a separate signed sequence/predecessor/state profile that binds the client's accepted head, admits only genesis, exact replay, or one linked successor, rejects rollback/equivocation/gaps/forks/terminal mutation, and durably repairs a bounded local chain without claiming global non-equivocation, ledger rollback resistance, trusted time, capacity, order, payment, or exactly-once execution |
 | v1.485.0 | Policy-pinned factory-release state transparency | Fully reverify the unchanged v1.484 chain, bind its exact current state entry into a bounded Merkle leaf, and verify one supplied inclusion receipt under a separately digest-pinned Ed25519 log policy before durable no-replace retention, without claiming global non-equivocation, inter-view consistency, ledger rollback resistance, trusted time, transport identity, ordering, payment, or exactly-once execution |
 | v1.486.0 | Factory-release transparency checkpoint consistency | Fully reverify two v1.485 inclusion reports and every retained predecessor, require the same policy-pinned log/key and release subject, reject rollback, same-size equivocation, time reversal, and non-strict replay, reconstruct both signed roots from one bounded RFC 6962-shaped consistency path, and retain each transition in a generation-keyed no-replace chain without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
+| v1.487.0 | Factory-release transparency witness quorum | Fully reload the latest v1.486 chain, require an externally digest-pinned policy with unique organization, witness, and non-weak Ed25519 key tuples, verify a threshold of fresh receipts over the exact canonical consistency report and embedded signed tree head, reject selected-set split views and duplicate trust, and retain one policy/generation-keyed no-replace report without claiming global non-equivocation, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1808,7 +1809,7 @@ extend earlier ones, or that the selected local ledger cannot be rolled back.
 Independent gossip, trusted timestamping, transport/legal identity, and actual
 order authority remain later independent milestones.
 
-The current v1.486.0 milestone adds append-only comparison without changing any
+The released v1.486.0 milestone adds append-only comparison without changing any
 v1.484 state or v1.485 policy, receipt, or report byte. Generation 1 selects an
 exact retained v1.485 report by state sequence and log ID. Every later
 generation names the exact preceding v1.486 report, while both embedded
@@ -1829,3 +1830,28 @@ returns retained bytes. This establishes append-only consistency only for the
 selected views in one selected ledger. Independent observers can still receive
 split views, and the ledger can still be rolled back; global gossip or witness
 quorum and external ledger/time anchoring remain later milestones.
+
+The current v1.487.0 milestone adds a selected witness quorum without changing
+any v1.484 state, v1.485 inclusion, or v1.486 consistency byte. A separate
+canonical policy and independently configured semantic SHA-256 select 2–100
+canonically ordered organization, witness, and non-weak Ed25519 key tuples, a
+2–100 organization threshold, and one bounded local receipt-age interval.
+
+Each witness signs a domain-separated payload over its policy digest and trust
+tuple, the release idempotency key, exact v1.486 generation and canonical
+report SHA-256, the complete current signed tree head, and a bounded validity
+window. Witness and log keys must differ. The Unix verifier reloads the complete
+v1.484–v1.486 chain, selects only its latest head, verifies every receipt and
+local freshness comparison, rejects duplicate organizations, IDs, keys, or
+receipt artifacts, and requires exact checkpoint agreement before threshold
+acceptance.
+
+The canonical report embeds the complete consistency report, witness policy,
+sorted signed receipts, exact artifact identities, threshold and freshness
+extrema, positive claims, and explicit nonclaims. It commits without replacement
+under the selected idempotency key, log, checkpoint generation, and policy
+digest; exact receipt-set retry returns retained bytes. This detects a conflicting
+view only inside the supplied policy-selected set. Global non-equivocation,
+real organizational independence, selected-ledger rollback resistance, trusted
+time, transport/legal identity, capacity, order, payment, and exactly-once
+execution remain false; external ledger anchoring remains a later milestone.

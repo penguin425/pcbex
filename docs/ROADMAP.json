@@ -964,6 +964,11 @@
     {
       "id": "factory-release-transparency-checkpoint-consistency",
       "release": "v1.486.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-witness-quorum",
+      "release": "v1.487.0",
       "status": "current"
     }
   ]

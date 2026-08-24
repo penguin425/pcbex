@@ -3171,11 +3171,434 @@ for schema_path in (proof_schema_path, report_schema_path):
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.487 requires independently keyed receipts from distinct configured
+# organizations over the exact latest v1.486 report and signed tree head.
+factory_transparency_witness_policy_schema="$output_directory/factory-release-transparency-witness-policy.schema.json"
+factory_transparency_witness_receipt_schema="$output_directory/factory-release-transparency-witness-receipt.schema.json"
+factory_transparency_witness_report_schema="$output_directory/factory-release-transparency-witness-report.schema.json"
+factory_transparency_witness_policy="$output_directory/factory-release-transparency-witness.policy.json"
+factory_transparency_witness_policy_digest_file="$output_directory/factory-release-transparency-witness.policy.sha256"
+factory_transparency_witness_receipt_a="$output_directory/factory-release-transparency-witness-a.receipt.json"
+factory_transparency_witness_receipt_b="$output_directory/factory-release-transparency-witness-b.receipt.json"
+factory_transparency_witness_receipt_b_alternate="$output_directory/factory-release-transparency-witness-b-alternate.receipt.json"
+factory_transparency_witness_unauthenticated_split_receipt="$output_directory/factory-release-transparency-witness-unauthenticated-split.receipt.json"
+factory_transparency_witness_split_receipt="$output_directory/factory-release-transparency-witness-split.receipt.json"
+factory_transparency_witness_report="$output_directory/factory-release-transparency-witness.report.json"
+factory_transparency_witness_replay="$output_directory/factory-release-transparency-witness.replay.json"
+factory_transparency_witness_insufficient_output="$output_directory/factory-release-transparency-witness-insufficient.report.json"
+factory_transparency_witness_insufficient_error="$output_directory/factory-release-transparency-witness-insufficient.stderr"
+factory_transparency_witness_unauthenticated_split_output="$output_directory/factory-release-transparency-witness-unauthenticated-split.report.json"
+factory_transparency_witness_unauthenticated_split_error="$output_directory/factory-release-transparency-witness-unauthenticated-split.stderr"
+factory_transparency_witness_split_output="$output_directory/factory-release-transparency-witness-split.report.json"
+factory_transparency_witness_split_error="$output_directory/factory-release-transparency-witness-split.stderr"
+factory_transparency_witness_conflict_output="$output_directory/factory-release-transparency-witness-conflict.report.json"
+factory_transparency_witness_conflict_error="$output_directory/factory-release-transparency-witness-conflict.stderr"
+factory_witness_secret_directory="$(mktemp -d)"
+factory_transparency_witness_private_a="$factory_witness_secret_directory/witness-a.private.hex"
+factory_transparency_witness_private_b="$factory_witness_secret_directory/witness-b.private.hex"
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der" "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b"; rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory" 2>/dev/null || true' EXIT
+
+"$pcbex_binary" factory-release-state-transparency-witness-policy-schema \
+  --output "$factory_transparency_witness_policy_schema"
+"$pcbex_binary" factory-release-state-transparency-witness-receipt-schema \
+  --output "$factory_transparency_witness_receipt_schema"
+"$pcbex_binary" factory-release-state-transparency-witness-quorum-verification-report-schema \
+  --output "$factory_transparency_witness_report_schema"
+
+python3 - \
+  "$factory_transparency_witness_policy" \
+  "$factory_transparency_witness_policy_digest_file" \
+  "$factory_transparency_witness_private_a" \
+  "$factory_transparency_witness_private_b" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+policy_path, digest_path, private_a_path, private_b_path = map(Path, sys.argv[1:])
+seed_a = bytes([31]) * 32
+seed_b = bytes([47]) * 32
+
+def public_key(seed):
+    return Ed25519PrivateKey.from_private_bytes(seed).public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    ).hex()
+
+policy = {
+    "schema_version": 1,
+    "policy_scope": "factory-release-state-transparency-witness-policy-v1",
+    "policy_id": "kicad-e2e-release-witnesses",
+    "minimum_organizations": 2,
+    "maximum_receipt_age_seconds": 300,
+    "trusted_witnesses": [
+        {
+            "organization_id": "independent-org-a",
+            "witness_id": "release-witness-a",
+            "algorithm": "ed25519",
+            "public_key": public_key(seed_a),
+        },
+        {
+            "organization_id": "independent-org-b",
+            "witness_id": "release-witness-b",
+            "algorithm": "ed25519",
+            "public_key": public_key(seed_b),
+        },
+    ],
+}
+policy_path.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+semantic = json.dumps(policy, separators=(",", ":")).encode("ascii")
+digest_path.write_text(hashlib.sha256(semantic).hexdigest() + "\n", encoding="ascii")
+private_a_path.write_text(seed_a.hex() + "\n", encoding="ascii")
+private_b_path.write_text(seed_b.hex() + "\n", encoding="ascii")
+PY
+factory_transparency_witness_policy_digest="$(tr -d '\r\n' < "$factory_transparency_witness_policy_digest_file")"
+factory_transparency_witness_time="$((factory_transparency_consistency_time_two + 1))"
+factory_transparency_witness_expiry="$((factory_transparency_witness_time + 300))"
+
+"$pcbex_binary" sign-factory-release-state-transparency-witness-receipt \
+  --consistency-report "$factory_transparency_consistency_report_two" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --organization-id independent-org-a \
+  --witness-id release-witness-a \
+  --private-key "$factory_transparency_witness_private_a" \
+  --witnessed-at-unix "$factory_transparency_witness_time" \
+  --expires-at-unix "$factory_transparency_witness_expiry" \
+  --output "$factory_transparency_witness_receipt_a"
+"$pcbex_binary" sign-factory-release-state-transparency-witness-receipt \
+  --consistency-report "$factory_transparency_consistency_report_two" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --organization-id independent-org-b \
+  --witness-id release-witness-b \
+  --private-key "$factory_transparency_witness_private_b" \
+  --witnessed-at-unix "$factory_transparency_witness_time" \
+  --expires-at-unix "$factory_transparency_witness_expiry" \
+  --output "$factory_transparency_witness_receipt_b"
+"$pcbex_binary" sign-factory-release-state-transparency-witness-receipt \
+  --consistency-report "$factory_transparency_consistency_report_two" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --organization-id independent-org-b \
+  --witness-id release-witness-b \
+  --private-key "$factory_transparency_witness_private_b" \
+  --witnessed-at-unix "$((factory_transparency_witness_time + 1))" \
+  --expires-at-unix "$((factory_transparency_witness_expiry + 1))" \
+  --output "$factory_transparency_witness_receipt_b_alternate"
+
+python3 - \
+  "$factory_transparency_witness_receipt_a" \
+  "$factory_transparency_witness_unauthenticated_split_receipt" \
+  "$factory_transparency_witness_split_receipt" \
+  "$factory_transparency_witness_private_a" \
+  "$factory_transparency_private_key" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+receipt_path, unauthenticated_path, split_path, private_path, log_private_path = \
+    map(Path, sys.argv[1:])
+receipt = json.loads(receipt_path.read_bytes())
+receipt["tree_head"]["root_sha256"] = "1" * 64
+seed = bytes.fromhex(private_path.read_text(encoding="ascii").strip())
+
+def sign_witness(value):
+    value["tree_head_sha256"] = hashlib.sha256(
+        json.dumps(value["tree_head"], separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+    payload = {
+        "domain": "pcbex-factory-release-state-transparency-witness-receipt-v1",
+        "schema_version": value["schema_version"],
+        "receipt_scope": value["receipt_scope"],
+        "witness_policy_sha256": value["witness_policy_sha256"],
+        "organization_id": value["organization_id"],
+        "witness_id": value["witness_id"],
+        "idempotency_key": value["idempotency_key"],
+        "checkpoint_generation": value["checkpoint_generation"],
+        "consistency_report_sha256": value["consistency_report_sha256"],
+        "tree_head_sha256": value["tree_head_sha256"],
+        "tree_head": value["tree_head"],
+        "witnessed_at_unix": value["witnessed_at_unix"],
+        "expires_at_unix": value["expires_at_unix"],
+        "algorithm": value["algorithm"],
+        "witness_public_key": value["witness_public_key"],
+    }
+    value["signature"] = Ed25519PrivateKey.from_private_bytes(seed).sign(
+        json.dumps(payload, separators=(",", ":")).encode("ascii")
+    ).hex()
+
+unauthenticated = copy.deepcopy(receipt)
+sign_witness(unauthenticated)
+unauthenticated_path.write_text(
+    json.dumps(unauthenticated, indent=2) + "\n", encoding="utf-8"
+)
+
+head = receipt["tree_head"]
+head_payload = {
+    "domain": "pcbex-factory-release-state-transparency-tree-head-v1",
+    "tree_head_scope": head["tree_head_scope"],
+    "log_id": head["log_id"],
+    "tree_size": head["tree_size"],
+    "root_sha256": head["root_sha256"],
+    "observed_at_unix": head["observed_at_unix"],
+}
+with tempfile.NamedTemporaryFile() as source:
+    source.write(json.dumps(head_payload, separators=(",", ":")).encode("ascii"))
+    source.flush()
+    head["signature"] = subprocess.run(
+        [
+            "openssl", "pkeyutl", "-sign", "-rawin", "-inkey",
+            log_private_path, "-in", source.name,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout.hex()
+sign_witness(receipt)
+split_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+PY
+
+if "$pcbex_binary" verify-factory-release-state-transparency-witness-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --witness-receipt "$factory_transparency_witness_receipt_a" \
+  --evaluated-at-unix "$factory_transparency_witness_time" \
+  --output "$factory_transparency_witness_insufficient_output" \
+  2>"$factory_transparency_witness_insufficient_error"; then
+  echo "expected an insufficient factory transparency witness quorum to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_witness_insufficient_output"
+grep -Fq 'requires 2 to 100 receipts' \
+  "$factory_transparency_witness_insufficient_error"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-witness-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --witness-receipt "$factory_transparency_witness_unauthenticated_split_receipt" \
+  --witness-receipt "$factory_transparency_witness_receipt_b" \
+  --evaluated-at-unix "$factory_transparency_witness_time" \
+  --output "$factory_transparency_witness_unauthenticated_split_output" \
+  2>"$factory_transparency_witness_unauthenticated_split_error"; then
+  echo "expected an unauthenticated factory transparency split view to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_witness_unauthenticated_split_output"
+grep -Fq 'invalid factory release transparency tree-head signature' \
+  "$factory_transparency_witness_unauthenticated_split_error"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-witness-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --witness-receipt "$factory_transparency_witness_split_receipt" \
+  --witness-receipt "$factory_transparency_witness_receipt_b" \
+  --evaluated-at-unix "$factory_transparency_witness_time" \
+  --output "$factory_transparency_witness_split_output" \
+  2>"$factory_transparency_witness_split_error"; then
+  echo "expected a split factory transparency witness view to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_witness_split_output"
+grep -Fq 'detected a split-view root at the selected tree size' \
+  "$factory_transparency_witness_split_error"
+
+"$pcbex_binary" verify-factory-release-state-transparency-witness-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --witness-receipt "$factory_transparency_witness_receipt_b" \
+  --witness-receipt "$factory_transparency_witness_receipt_a" \
+  --evaluated-at-unix "$factory_transparency_witness_time" \
+  --output "$factory_transparency_witness_report" \
+  --require-accepted
+"$pcbex_binary" verify-factory-release-state-transparency-witness-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --witness-receipt "$factory_transparency_witness_receipt_a" \
+  --witness-receipt "$factory_transparency_witness_receipt_b" \
+  --evaluated-at-unix "$((factory_transparency_witness_expiry + 10000))" \
+  --output "$factory_transparency_witness_replay" \
+  --require-accepted
+cmp "$factory_transparency_witness_report" \
+  "$factory_transparency_witness_replay"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-witness-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --witness-receipt "$factory_transparency_witness_receipt_a" \
+  --witness-receipt "$factory_transparency_witness_receipt_b_alternate" \
+  --evaluated-at-unix "$((factory_transparency_witness_time + 1))" \
+  --output "$factory_transparency_witness_conflict_output" \
+  2>"$factory_transparency_witness_conflict_error"; then
+  echo "expected conflicting factory transparency witness evidence to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_witness_conflict_output"
+grep -Fq 'witness quorum record conflicts' \
+  "$factory_transparency_witness_conflict_error"
+
+python3 - \
+  "$factory_transparency_witness_report" \
+  "$factory_transparency_consistency_report_two" \
+  "$factory_transparency_witness_policy" \
+  "$factory_transparency_witness_receipt_a" \
+  "$factory_transparency_witness_receipt_b" \
+  "$factory_transparency_witness_policy_schema" \
+  "$factory_transparency_witness_receipt_schema" \
+  "$factory_transparency_witness_report_schema" \
+  "$monotonic_release_ledger" "$monotonic_key" \
+  "$factory_transparency_witness_policy_digest" \
+  "$factory_transparency_witness_private_a" \
+  "$factory_transparency_witness_private_b" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+report_path, consistency_path, policy_path, receipt_a_path, receipt_b_path, \
+    policy_schema_path, receipt_schema_path, report_schema_path, ledger_path = \
+    map(Path, sys.argv[1:10])
+key, policy_digest, private_a_path, private_b_path = sys.argv[10:]
+report = json.loads(report_path.read_bytes())
+assert report["status"] == "verified"
+for claim in (
+    "monotonic_state_chain_verified",
+    "current_checkpoint_inclusion_verified",
+    "complete_consistency_chain_verified",
+    "selected_log_append_only_consistency_verified",
+    "consistency_report_identity_verified",
+    "witness_policy_pin_matched",
+    "witness_log_key_role_separation_verified",
+    "witness_receipt_signatures_verified",
+    "distinct_organization_quorum_verified",
+    "selected_witness_checkpoint_agreement_verified",
+):
+    assert report[claim] is True, claim
+for claim in (
+    "selected_witness_split_view_detected",
+    "selected_ledger_witness_quorum_report_committed",
+    "global_non_equivocation_verified",
+    "selected_ledger_rollback_resistance_verified",
+    "trusted_time_verified",
+    "independent_organization_operation_verified",
+    "endpoint_transport_authenticity_verified",
+    "factory_legal_identity_verified",
+    "server_side_idempotency_enforced",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "exactly_once_execution_verified",
+):
+    assert report[claim] is False, claim
+assert report["checkpoint_generation"] == 2
+assert report["minimum_organizations"] == 2
+assert report["valid_receipts"] == 2
+assert report["distinct_organizations"] == 2
+assert [member["organization_id"] for member in report["members"]] == [
+    "independent-org-a", "independent-org-b"
+]
+assert report["consistency_report"] == json.loads(consistency_path.read_bytes())
+assert report["consistency_report_artifact"] == {
+    "bytes": len(consistency_path.read_bytes()),
+    "sha256": hashlib.sha256(consistency_path.read_bytes()).hexdigest(),
+}
+assert report["witness_policy"] == json.loads(policy_path.read_bytes())
+assert report["witness_policy_sha256"] == policy_digest
+expected_receipts = {
+    hashlib.sha256(receipt_a_path.read_bytes()).hexdigest(),
+    hashlib.sha256(receipt_b_path.read_bytes()).hexdigest(),
+}
+assert {member["receipt_artifact"]["sha256"] for member in report["members"]} == \
+    expected_receipts
+name = (
+    f"factory-release-state-transparency-witness-quorum-v1-{key}-"
+    f"kicad-e2e-factory-release-log-0002-{policy_digest}.json"
+)
+assert (ledger_path / name).read_bytes() == report_path.read_bytes()
+secret_a = Path(private_a_path).read_text(encoding="ascii").strip().encode()
+secret_b = Path(private_b_path).read_text(encoding="ascii").strip().encode()
+for path in [report_path, *ledger_path.iterdir()]:
+    source = path.read_bytes()
+    assert secret_a not in source, path
+    assert secret_b not in source, path
+for schema_path in (policy_schema_path, receipt_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
 rm -f -- \
   "$factory_response_private_key" "$factory_response_public_der" \
-  "$factory_transparency_private_key" "$factory_transparency_public_der"
-rmdir -- "$factory_response_secret_directory"
+  "$factory_transparency_private_key" "$factory_transparency_public_der" \
+  "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b"
+rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory"
 trap - EXIT
 
 # Reuse the same real Rust binary through the Python saved-generation
