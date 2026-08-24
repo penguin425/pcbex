@@ -196,6 +196,7 @@ mod factory_release_state_transparency;
 mod factory_release_state_transparency_consistency;
 mod factory_release_state_transparency_external_anchor;
 mod factory_release_state_transparency_external_consistency;
+mod factory_release_state_transparency_external_gossip;
 mod factory_release_state_transparency_witness_quorum;
 mod final_bom;
 mod final_cpl;
@@ -401,6 +402,21 @@ use factory_release_state_transparency_external_consistency::{
 use factory_release_state_transparency_external_consistency::{
     factory_release_state_transparency_external_consistency_proof_json_schema,
     factory_release_state_transparency_external_consistency_report_json_schema,
+};
+#[cfg(unix)]
+use factory_release_state_transparency_external_gossip::{
+    FactoryReleaseStateTransparencyExternalGossipVerificationReport,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_RECEIPT_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REPORT_BYTES,
+    factory_release_state_transparency_external_gossip_filename,
+    parse_factory_release_state_transparency_external_gossip_receipt,
+    parse_factory_release_state_transparency_external_gossip_report,
+    render_factory_release_state_transparency_external_gossip_report,
+    verify_factory_release_state_transparency_external_gossip,
+};
+use factory_release_state_transparency_external_gossip::{
+    factory_release_state_transparency_external_gossip_receipt_json_schema,
+    factory_release_state_transparency_external_gossip_report_json_schema,
 };
 #[cfg(unix)]
 use factory_release_state_transparency_witness_quorum::{
@@ -1317,6 +1333,16 @@ enum Command {
     },
     /// Print the closed external-log consistency verification-report JSON Schema.
     FactoryReleaseStateTransparencyExternalConsistencyVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed signed external-log gossip receipt JSON Schema.
+    FactoryReleaseStateTransparencyExternalGossipReceiptSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed external-log gossip verification-report JSON Schema.
+    FactoryReleaseStateTransparencyExternalGossipVerificationReportSchema {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
@@ -6388,6 +6414,69 @@ enum Command {
         #[arg(long, hide = true)]
         evaluated_at_unix: Option<u64>,
         /// Fail after retention unless the externally consistent factory state was accepted.
+        #[arg(long)]
+        require_accepted: bool,
+    },
+    /// Compare and retain the latest external-log head with an independent signed observation.
+    VerifyFactoryReleaseStateTransparencyExternalGossip {
+        /// Existing absolute 0700 ledger containing the complete v1.484-v1.489 chains.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Independently configured lowercase SHA-256 identity of the fixed ledger manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Deterministic idempotency key selecting the durable factory-release chain.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        idempotency_key: String,
+        /// Separately configured source transparency log identity selecting the v1.486 chain.
+        #[arg(long)]
+        log_id: String,
+        /// Exact v1.484 organization policy used to replay the monotonic state chain.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Independently configured canonical SHA-256 of the organization policy pack.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_sha256: String,
+        /// Exact standalone policy pinning the source transparency log key and freshness.
+        #[arg(long)]
+        transparency_policy: CompactPath,
+        /// Independently configured canonical SHA-256 of the source transparency policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_transparency_policy_sha256: String,
+        /// Exact v1.487 policy pinning the selected witness organizations and keys.
+        #[arg(long)]
+        witness_policy: CompactPath,
+        /// Independently configured semantic SHA-256 of the witness policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_witness_policy_sha256: String,
+        /// Exact v1.488 policy pinning the selected external log identity and key.
+        #[arg(long)]
+        external_anchor_policy: CompactPath,
+        /// Independently configured semantic SHA-256 of the external-anchor policy.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_external_anchor_policy_sha256: String,
+        /// Separately configured external log identity selected from the anchor policy.
+        #[arg(long)]
+        external_log_id: String,
+        /// Independently configured observer identity, distinct from log, witness, and factory roles.
+        #[arg(long)]
+        observer_id: String,
+        /// Independently configured lowercase Ed25519 public key for the observer.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_observer_public_key: String,
+        /// Canonical observer-signed receipt containing an external signed-tree head.
+        #[arg(long)]
+        gossip_receipt: CompactPath,
+        /// RFC 6962-shaped proof between unequal local and observer tree sizes.
+        #[arg(long)]
+        consistency_proof: Option<CompactPath>,
+        /// New verification-report path; the durable ledger copy survives publication failure.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Test-only deterministic evaluation time; production uses the current clock.
+        #[arg(long, hide = true)]
+        evaluated_at_unix: Option<u64>,
+        /// Fail after retention unless the gossip-backed current factory state was accepted.
         #[arg(long)]
         require_accepted: bool,
     },
@@ -11949,6 +12038,417 @@ fn verify_factory_release_state_transparency_external_consistency_local(
     Ok(report)
 }
 
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn verify_factory_release_state_transparency_external_gossip_local(
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+    idempotency_key: &str,
+    source_log_id: &str,
+    policy_path: &Path,
+    expected_policy_sha256: &str,
+    transparency_policy_path: &Path,
+    expected_transparency_policy_sha256: &str,
+    witness_policy_path: &Path,
+    expected_witness_policy_sha256: &str,
+    external_anchor_policy_path: &Path,
+    expected_external_anchor_policy_sha256: &str,
+    external_log_id: &str,
+    observer_id: &str,
+    expected_observer_public_key: &str,
+    gossip_receipt_path: &Path,
+    consistency_proof_path: Option<&Path>,
+    output: &Path,
+    evaluated_at_unix: Option<u64>,
+) -> Result<FactoryReleaseStateTransparencyExternalGossipVerificationReport> {
+    if !reservation_ledger.is_absolute() {
+        bail!("factory release transparency external gossip ledger path must be absolute");
+    }
+    reject_signed_release_adapter_output_ledger_overlap(reservation_ledger, output)?;
+    let mut input_paths = vec![
+        policy_path,
+        transparency_policy_path,
+        witness_policy_path,
+        external_anchor_policy_path,
+        gossip_receipt_path,
+    ];
+    if let Some(path) = consistency_proof_path {
+        input_paths.push(path);
+    }
+    reject_pipeline_output_aliases(
+        output,
+        &input_paths,
+        "factory release state transparency external gossip output",
+    )?;
+    let prepared_output = prepare_atomic_new_file(output)?;
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local signed factory receipt release reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_signed_factory_receipt_release_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_signed_release_reservation_ledger_input_overlap(&ledger, &input_paths)?;
+
+    let (policy_source, policy_identity) = read_exact_artifact(
+        policy_path,
+        MAX_POLICY_PACK_BYTES,
+        "factory release transparency external gossip organization policy pack",
+    )?;
+    let (_, policy) =
+        capture_factory_release_adapter_response_policy(&policy_source, expected_policy_sha256)
+            .map_err(anyhow::Error::msg)?;
+    let (transparency_policy_source, transparency_policy_identity) = read_exact_artifact(
+        transparency_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+        "factory release transparency external gossip source log policy",
+    )?;
+    let (witness_policy_source, witness_policy_identity) = read_exact_artifact(
+        witness_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_POLICY_BYTES,
+        "factory release transparency external gossip witness policy",
+    )?;
+    let witness_policy =
+        parse_factory_release_state_transparency_witness_policy(&witness_policy_source)
+            .map_err(anyhow::Error::msg)?;
+    let actual_witness_policy_sha256 =
+        factory_release_state_transparency_witness_policy_sha256(&witness_policy)
+            .map_err(anyhow::Error::msg)?;
+    if actual_witness_policy_sha256 != expected_witness_policy_sha256 {
+        bail!("factory release transparency witness policy pin does not match");
+    }
+    let (external_anchor_policy_source, external_anchor_policy_identity) = read_exact_artifact(
+        external_anchor_policy_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_POLICY_BYTES,
+        "factory release transparency external gossip anchor policy",
+    )?;
+    let external_anchor_policy = parse_factory_release_state_transparency_external_anchor_policy(
+        &external_anchor_policy_source,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let actual_external_anchor_policy_sha256 =
+        factory_release_state_transparency_external_anchor_policy_sha256(&external_anchor_policy)
+            .map_err(anyhow::Error::msg)?;
+    if actual_external_anchor_policy_sha256 != expected_external_anchor_policy_sha256 {
+        bail!("factory release transparency external-anchor policy pin does not match");
+    }
+    let (receipt_source, receipt_identity) = read_exact_artifact(
+        gossip_receipt_path,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_RECEIPT_BYTES,
+        "factory release transparency external gossip receipt",
+    )?;
+    let receipt = parse_factory_release_state_transparency_external_gossip_receipt(&receipt_source)
+        .map_err(anyhow::Error::msg)?;
+    let proof_evidence = if let Some(path) = consistency_proof_path {
+        let (source, identity) = read_exact_artifact(
+            path,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_CONSISTENCY_PROOF_BYTES,
+            "factory release transparency external gossip consistency proof",
+        )?;
+        let proof = parse_factory_release_state_transparency_external_consistency_proof(&source)
+            .map_err(anyhow::Error::msg)?;
+        Some((source, identity, proof))
+    } else {
+        None
+    };
+
+    let intent_name = signed_factory_release_submission_intent_filename(idempotency_key)
+        .map_err(anyhow::Error::msg)?;
+    let intent_source = ledger
+        .read_regular_file_with_limit(
+            &intent_name,
+            MAX_SIGNED_FACTORY_RELEASE_SUBMISSION_INTENT_BYTES,
+        )
+        .context("reading durable signed release submission intent")?;
+    let intent = parse_signed_factory_release_submission_intent(&intent_source)
+        .map_err(anyhow::Error::msg)?;
+    if intent.ledger_id != expected_ledger_id || intent.idempotency_key != idempotency_key {
+        bail!("durable signed release submission intent does not match the selected ledger key");
+    }
+    let (state, _) = load_monotonic_factory_release_state_chain(
+        &ledger,
+        idempotency_key,
+        &intent,
+        &policy_source,
+        expected_policy_sha256,
+    )?
+    .ok_or_else(|| {
+        anyhow::anyhow!(
+            "factory release transparency external gossip requires a monotonic state head"
+        )
+    })?;
+    let (anchor_report, anchor_source) = load_factory_release_transparency_external_anchor_report(
+        &ledger,
+        idempotency_key,
+        source_log_id,
+        state.sequence,
+        &policy,
+        expected_policy_sha256,
+        &transparency_policy_source,
+        expected_transparency_policy_sha256,
+        &witness_policy_source,
+        expected_witness_policy_sha256,
+        &external_anchor_policy_source,
+        expected_external_anchor_policy_sha256,
+        external_log_id,
+    )?;
+    let (local_report, local_report_source) =
+        load_factory_release_transparency_external_consistency_chain(
+            &ledger,
+            idempotency_key,
+            &anchor_report,
+            &anchor_source,
+        )?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "factory release transparency external gossip requires a retained external consistency report"
+            )
+        })?;
+    let local_report_identity = exact_artifact_identity(&local_report_source);
+    let report_name = factory_release_state_transparency_external_gossip_filename(
+        idempotency_key,
+        source_log_id,
+        &actual_witness_policy_sha256,
+        external_log_id,
+        &actual_external_anchor_policy_sha256,
+        local_report.external_consistency_generation,
+        observer_id,
+        expected_observer_public_key,
+    )
+    .map_err(anyhow::Error::msg)?;
+
+    let retained_gossip = read_optional_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REPORT_BYTES,
+        "durable factory release transparency external gossip report",
+    )?;
+    let (report, report_source, replay) = if let Some(source) = retained_gossip {
+        let retained = parse_factory_release_state_transparency_external_gossip_report(&source)
+            .map_err(anyhow::Error::msg)?;
+        if retained.idempotency_key != idempotency_key
+            || retained.source_log_id != source_log_id
+            || retained.witness_policy_sha256 != actual_witness_policy_sha256
+            || retained.external_anchor_policy_sha256 != actual_external_anchor_policy_sha256
+            || retained.external_log_id != external_log_id
+            || retained.local_external_consistency_generation
+                != local_report.external_consistency_generation
+            || retained.observer_id != observer_id
+            || retained.observer_public_key != expected_observer_public_key
+            || retained.local_external_consistency_report_artifact != local_report_identity
+            || retained.local_external_consistency_report != local_report
+            || retained.external_anchor_policy_artifact != external_anchor_policy_identity
+        {
+            bail!(
+                "durable factory release transparency external gossip report does not match its ledger name or local chain"
+            );
+        }
+        let proof_identity = proof_evidence
+            .as_ref()
+            .map(|(_, identity, _)| identity.clone());
+        let proof = proof_evidence.as_ref().map(|(_, _, proof)| proof);
+        if retained.gossip_receipt_artifact != receipt_identity
+            || retained.gossip_receipt != receipt
+            || retained.consistency_proof_artifact != proof_identity
+            || retained.consistency_proof.as_ref() != proof
+        {
+            bail!("durable factory release transparency external gossip record conflicts");
+        }
+        (retained, source, true)
+    } else {
+        let report = verify_factory_release_state_transparency_external_gossip(
+            &local_report_source,
+            &external_anchor_policy_source,
+            expected_external_anchor_policy_sha256,
+            external_log_id,
+            true,
+            true,
+            observer_id,
+            expected_observer_public_key,
+            &receipt_source,
+            proof_evidence
+                .as_ref()
+                .map(|(source, _, _)| source.as_slice()),
+            evaluated_at_unix.unwrap_or(current_unix_seconds()?),
+        )
+        .map_err(anyhow::Error::msg)?;
+        let proof_identity = proof_evidence
+            .as_ref()
+            .map(|(_, identity, _)| identity.clone());
+        let proof = proof_evidence.as_ref().map(|(_, _, proof)| proof);
+        if report.local_external_consistency_report_artifact != local_report_identity
+            || report.local_external_consistency_report != local_report
+            || report.external_anchor_policy_artifact != external_anchor_policy_identity
+            || report.gossip_receipt_artifact != receipt_identity
+            || report.gossip_receipt != receipt
+            || report.consistency_proof_artifact != proof_identity
+            || report.consistency_proof.as_ref() != proof
+        {
+            bail!("factory release transparency external gossip selected different evidence");
+        }
+        let source = render_factory_release_state_transparency_external_gossip_report(&report)
+            .map_err(anyhow::Error::msg)?;
+        (report, source, false)
+    };
+
+    let guard = || -> io::Result<()> {
+        validate_signed_release_adapter_record_guard(
+            &ledger,
+            expected_ledger_id,
+            None,
+            None,
+            Some(&intent_name),
+            Some(&intent_source),
+        )?;
+        let retained_head = load_monotonic_factory_release_state_chain(
+            &ledger,
+            idempotency_key,
+            &intent,
+            &policy_source,
+            expected_policy_sha256,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_head.as_ref().map(|(candidate, _)| candidate) != Some(&state) {
+            return Err(io::Error::other(
+                "factory release transparency external gossip state is no longer the selected head",
+            ));
+        }
+        let retained_anchor = load_factory_release_transparency_external_anchor_report(
+            &ledger,
+            idempotency_key,
+            source_log_id,
+            state.sequence,
+            &policy,
+            expected_policy_sha256,
+            &transparency_policy_source,
+            expected_transparency_policy_sha256,
+            &witness_policy_source,
+            expected_witness_policy_sha256,
+            &external_anchor_policy_source,
+            expected_external_anchor_policy_sha256,
+            external_log_id,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_anchor.0 != anchor_report || retained_anchor.1 != anchor_source {
+            return Err(io::Error::other(
+                "factory release transparency external anchor changed during gossip verification",
+            ));
+        }
+        let retained_local = load_factory_release_transparency_external_consistency_chain(
+            &ledger,
+            idempotency_key,
+            &anchor_report,
+            &anchor_source,
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        if retained_local.as_ref().map(|(candidate, _)| candidate) != Some(&local_report)
+            || retained_local.as_ref().map(|(_, source)| source) != Some(&local_report_source)
+        {
+            return Err(io::Error::other(
+                "factory release transparency external consistency head changed during gossip verification",
+            ));
+        }
+        if let Some(existing) = read_optional_signed_release_ledger_record(
+            &ledger,
+            &report_name,
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REPORT_BYTES,
+            "durable factory release transparency external gossip report",
+        )
+        .map_err(|error| io::Error::other(format!("{error:#}")))?
+            && existing != report_source
+        {
+            return Err(io::Error::other(
+                "factory release transparency external gossip report conflicts during verification",
+            ));
+        }
+        for (path, maximum, identity, label) in [
+            (
+                policy_path,
+                MAX_POLICY_PACK_BYTES,
+                &policy_identity,
+                "factory release transparency external gossip organization policy pack",
+            ),
+            (
+                transparency_policy_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_POLICY_BYTES,
+                &transparency_policy_identity,
+                "factory release transparency external gossip source log policy",
+            ),
+            (
+                witness_policy_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_POLICY_BYTES,
+                &witness_policy_identity,
+                "factory release transparency external gossip witness policy",
+            ),
+            (
+                external_anchor_policy_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR_POLICY_BYTES,
+                &external_anchor_policy_identity,
+                "factory release transparency external gossip anchor policy",
+            ),
+            (
+                gossip_receipt_path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_RECEIPT_BYTES,
+                &receipt_identity,
+                "factory release transparency external gossip receipt",
+            ),
+        ] {
+            require_exact_artifact(path, maximum, identity, label)
+                .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        }
+        if let (Some(path), Some((_, identity, _))) =
+            (consistency_proof_path, proof_evidence.as_ref())
+        {
+            require_exact_artifact(
+                path,
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_CONSISTENCY_PROOF_BYTES,
+                identity,
+                "factory release transparency external gossip consistency proof",
+            )
+            .map_err(|error| io::Error::other(format!("{error:#}")))?;
+        }
+        Ok(())
+    };
+
+    guard().map_err(anyhow::Error::from)?;
+    if replay {
+        persist_atomic_new_file_bytes(prepared_output, output, &report_source)?;
+        return Ok(report);
+    }
+    let outcome = persist_signed_release_ledger_record(
+        &ledger,
+        &report_name,
+        &report_source,
+        ".pcbex-factory-release-state-transparency-external-gossip-",
+        "factory release transparency external gossip verification",
+        &guard,
+    )?;
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {}
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            let existing = ledger
+                .read_regular_file_with_limit(
+                    &report_name,
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REPORT_BYTES,
+                )
+                .context("reading concurrently committed transparency external gossip report")?;
+            if existing != report_source {
+                bail!(
+                    "concurrently committed factory release transparency external gossip report conflicts"
+                );
+            }
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "factory release transparency external gossip report may have committed, but durable completion failed; retry the same evidence: {error}"
+            )
+        }
+    }
+    guard().map_err(anyhow::Error::from)?;
+    persist_atomic_new_file_bytes(prepared_output, output, &report_source)?;
+    Ok(report)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -12508,6 +13008,22 @@ fn run_cli() -> Result<()> {
                 &factory_release_state_transparency_external_consistency_report_json_schema(),
                 output.as_deref(),
                 "factory release state transparency external consistency report schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyExternalGossipReceiptSchema { output } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_gossip_receipt_json_schema(),
+                output.as_deref(),
+                "factory release state transparency external gossip receipt schema output",
+            )?;
+        }
+        Command::FactoryReleaseStateTransparencyExternalGossipVerificationReportSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_gossip_report_json_schema(),
+                output.as_deref(),
+                "factory release state transparency external gossip report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -25645,6 +26161,105 @@ fn run_cli() -> Result<()> {
                 {
                     bail!(
                         "externally consistent anchored factory state has not accepted the release"
+                    );
+                }
+            }
+        }
+        Command::VerifyFactoryReleaseStateTransparencyExternalGossip {
+            reservation_ledger,
+            expected_ledger_id,
+            idempotency_key,
+            log_id,
+            policy_pack,
+            expected_policy_sha256,
+            transparency_policy,
+            expected_transparency_policy_sha256,
+            witness_policy,
+            expected_witness_policy_sha256,
+            external_anchor_policy,
+            expected_external_anchor_policy_sha256,
+            external_log_id,
+            observer_id,
+            expected_observer_public_key,
+            gossip_receipt,
+            consistency_proof,
+            output,
+            evaluated_at_unix,
+            require_accepted,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    reservation_ledger,
+                    expected_ledger_id,
+                    idempotency_key,
+                    log_id,
+                    policy_pack,
+                    expected_policy_sha256,
+                    transparency_policy,
+                    expected_transparency_policy_sha256,
+                    witness_policy,
+                    expected_witness_policy_sha256,
+                    external_anchor_policy,
+                    expected_external_anchor_policy_sha256,
+                    external_log_id,
+                    observer_id,
+                    expected_observer_public_key,
+                    gossip_receipt,
+                    consistency_proof,
+                    output,
+                    evaluated_at_unix,
+                    require_accepted,
+                );
+                bail!(
+                    "durable factory release state transparency external gossip verification is supported only on Unix"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let report = verify_factory_release_state_transparency_external_gossip_local(
+                    &reservation_ledger,
+                    &expected_ledger_id,
+                    &idempotency_key,
+                    &log_id,
+                    &policy_pack,
+                    &expected_policy_sha256,
+                    &transparency_policy,
+                    &expected_transparency_policy_sha256,
+                    &witness_policy,
+                    &expected_witness_policy_sha256,
+                    &external_anchor_policy,
+                    &expected_external_anchor_policy_sha256,
+                    &external_log_id,
+                    &observer_id,
+                    &expected_observer_public_key,
+                    &gossip_receipt,
+                    consistency_proof.as_deref(),
+                    &output,
+                    evaluated_at_unix,
+                )?;
+                eprintln!(
+                    "factory release transparency external gossip: verified={}; observer={}; external_log={}; relationship={}; tree_size={} -> {}; report={}",
+                    report.selected_observer_view_consistency_verified,
+                    report.observer_id,
+                    report.external_log_id,
+                    report.relationship,
+                    report.local_external_tree_size,
+                    report.observed_external_tree_size,
+                    output.display(),
+                );
+                if require_accepted
+                    && report
+                        .local_external_consistency_report
+                        .external_anchor_report
+                        .witness_quorum_report
+                        .consistency_report
+                        .current_transparency_report
+                        .state_status
+                        != FactoryReleaseAdapterStatus::AdapterAccepted
+                {
+                    bail!(
+                        "external-gossip-backed factory state has not accepted the release"
                     );
                 }
             }

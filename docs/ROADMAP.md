@@ -201,6 +201,8 @@ auditable release.
 | v1.486.0 | Factory-release transparency checkpoint consistency | Fully reverify two v1.485 inclusion reports and every retained predecessor, require the same policy-pinned log/key and release subject, reject rollback, same-size equivocation, time reversal, and non-strict replay, reconstruct both signed roots from one bounded RFC 6962-shaped consistency path, and retain each transition in a generation-keyed no-replace chain without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.487.0 | Factory-release transparency witness quorum | Fully reload the latest v1.486 chain, require an externally digest-pinned policy with unique organization, witness, and non-weak Ed25519 key tuples, verify a threshold of fresh receipts over the exact canonical consistency report and embedded signed tree head, reject selected-set split views and duplicate trust, and retain one policy/generation-keyed no-replace report without claiming global non-equivocation, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.488.0 | Factory-release transparency external-log anchoring | Fully reload the latest v1.487 witness report, require a separately digest-pinned policy with canonically ordered non-weak Ed25519 external-log keys disjoint from every inner log and witness role, authenticate one bounded signed tree head before reconstructing a domain-separated exact-report inclusion path, and retain one context-keyed no-replace report without claiming external-log consistency, global non-equivocation, selected-ledger rollback resistance, trusted time, real organizational independence, transport/legal identity, ordering, payment, or exactly-once execution |
+| v1.489.0 | Factory-release transparency external-log consistency | Fully reload the exact v1.488 anchor and complete retained predecessor chain, authenticate both external signed heads before interpreting one bounded RFC 6962-shaped consistency path, require strict append-only growth under one log/key/policy context, and retain up to 10,000 no-replace generations without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, real organizational independence, transport/legal identity, ordering, payment, or exactly-once execution |
+| v1.490.0 | Factory-release transparency external-log gossip | Fully reload the latest complete v1.489 head, verify one independently pinned observer receipt only after authenticating both external-log views, accept identical trees or a bounded consistency proof in either direction, reject same-size divergent roots and observer role reuse, and retain one local-generation/observer-keyed no-replace comparison without claiming global non-equivocation, observer quorum, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1885,7 +1887,7 @@ selected-ledger rollback resistance, trusted time, real organizational
 independence, transport/legal identity, capacity, order, payment, and
 exactly-once execution remain false.
 
-The current v1.489.0 milestone proves strict append-only extension from that
+The v1.489.0 milestone proves strict append-only extension from that
 retained external anchor without changing any v1.484–v1.488 wire byte. Each
 canonical proof carries the exact pinned external policy and log identities,
 both complete v1.488-format signed tree heads and their compact identities, and
@@ -1906,4 +1908,26 @@ cannot replace the winner. This proves prefix consistency only for selected
 views in one selected ledger. Global non-equivocation, selected-ledger rollback
 resistance, trusted time, real organizational independence, transport/legal
 identity, capacity, order, payment, and exactly-once execution remain false.
-Independent external-log gossip is the next milestone.
+
+The current v1.490.0 milestone adds one independently pinned observer view
+without changing any v1.484–v1.489 wire byte. A canonical receipt embeds a
+policy-matched external signed head, its exact identity, an observer ID and
+non-weak Ed25519 key, a bounded receipt window, and a domain-separated observer
+signature. The observer identity and key cannot reuse selected log, witness, or
+factory roles, although real organizational separation and key custody remain
+unverified.
+
+The verifier authenticates both external-log heads and the observer receipt
+before interpreting size, time, or Merkle relationships. Equal size and root
+establish the same tree without a proof; unequal sizes require one exact v1.489
+consistency proof ordered from the smaller tree to the larger tree; equal-size
+different roots fail closed as a selected split view. A behind observer remains
+valid evidence when its older head consistently precedes the latest local head.
+
+The Unix boundary reloads the complete v1.484–v1.489 chain and always selects
+the latest retained external-consistency generation. Its no-replace filename
+binds that generation plus the observer ID and key, so different observers can
+coexist while competing evidence for one observer conflicts. Exact retry
+returns retained bytes after receipt expiry. Remote bounded acquisition and an
+observer threshold are next; observer key rotation and a governed organization
+registry remain later trust boundaries.

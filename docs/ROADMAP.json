@@ -979,6 +979,11 @@
     {
       "id": "factory-release-transparency-external-log-consistency",
       "release": "v1.489.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-log-gossip",
+      "release": "v1.490.0",
       "status": "current"
     }
   ]

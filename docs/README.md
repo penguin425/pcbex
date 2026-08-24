@@ -99,6 +99,10 @@ boundary document for the artifact you plan to produce or trust.
   — prove later signed views strictly extend the retained external anchor and
   retain a bounded no-replace chain without claiming global non-equivocation.
 
+- [Factory-release State Transparency External Gossip](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP.md)
+  — compare the exact latest external-log head with a separately pinned
+  observer receipt and reject selected split views.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

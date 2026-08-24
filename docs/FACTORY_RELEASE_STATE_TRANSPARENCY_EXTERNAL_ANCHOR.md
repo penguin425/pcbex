@@ -261,9 +261,9 @@ input/output or input/ledger overlap fail before public output appears.
 ## What remains
 
 One inclusion proof does not show that a later external tree extends an earlier
-one. Version 1.489 adds that strict external-log consistency chain;
-independent gossip remains the next boundary for comparing views that do not
-share one retained baseline.
+one. Version 1.489 adds that strict external-log consistency chain, and v1.490
+compares its latest head with one separately pinned observer view. Remote
+observer acquisition, threshold agreement, and key rotation remain separate.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain
