@@ -627,6 +627,30 @@ winner. These mechanics prove selected-view prefix consistency only. Global
 non-equivocation, selected-ledger rollback resistance, and trusted time remain
 false.
 
+## Factory-state external gossip limits
+
+The v1.490 verifier accepts one canonical observer receipt up to 64 KiB. The
+receipt embeds one complete external signed tree head and a separate Ed25519
+observer signature, names an independently pinned observer ID and key, and has
+a positive lifetime no longer than 604,800 seconds.
+
+The verifier always selects the exact latest complete v1.489 report. Identical
+tree size and root need no proof; unequal sizes require one canonical 64 KiB
+v1.489 consistency proof with at most 64 nodes; equal sizes with different roots
+fail as a split view. Both trees remain capped at 100,000 leaves.
+
+The recursively closed self-contained report embeds the exact v1.489 report,
+receipt, optional proof, identities, claims, and nonclaims under a 16 MiB
+ceiling. Its deterministic filename binds the local generation and one observer
+ID/key pair, so separately pinned observers do not collide.
+
+The Unix-only command reloads the complete v1.484–v1.489 chain and rereads every
+direct input around descriptor-relative no-replace publication. Exact evidence
+retry returns retained bytes after receipt expiry; different receipt or proof
+bytes for the same local generation and observer pin conflict. Global
+non-equivocation, observer quorum, real organizational independence,
+selected-ledger rollback resistance, and trusted time remain false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

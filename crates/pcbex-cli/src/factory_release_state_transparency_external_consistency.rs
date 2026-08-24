@@ -449,7 +449,7 @@ pub(crate) fn factory_release_state_transparency_external_consistency_filename(
     ))
 }
 
-fn validate_head_pair(
+pub(crate) fn validate_head_pair(
     previous: &SignedFactoryReleaseTransparencyExternalTreeHead,
     current: &SignedFactoryReleaseTransparencyExternalTreeHead,
 ) -> Result<(), String> {
@@ -485,7 +485,7 @@ fn validate_head_pair(
     Ok(())
 }
 
-fn verify_consistency_path(
+pub(crate) fn verify_consistency_path(
     previous: &SignedFactoryReleaseTransparencyExternalTreeHead,
     current: &SignedFactoryReleaseTransparencyExternalTreeHead,
     encoded_path: &[String],

@@ -229,9 +229,9 @@ closed off Unix; schema and capability discovery remain cross-platform.
 ## What remains
 
 A retained prefix proof still cannot show that independent consumers received
-the same view. External-log gossip is the next boundary: compare fresh signed
-heads obtained by independent observers without assuming a shared local
-baseline.
+the same view. Version 1.490 compares the latest retained head with one
+separately pinned observer receipt; remote acquisition, an observer threshold,
+and key rotation remain separate boundaries.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain

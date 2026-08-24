@@ -3198,7 +3198,8 @@ factory_witness_secret_directory="$(mktemp -d)"
 factory_transparency_witness_private_a="$factory_witness_secret_directory/witness-a.private.hex"
 factory_transparency_witness_private_b="$factory_witness_secret_directory/witness-b.private.hex"
 factory_transparency_external_anchor_private="$factory_witness_secret_directory/external-anchor.private.hex"
-trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der" "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b" "$factory_transparency_external_anchor_private"; rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory" 2>/dev/null || true' EXIT
+factory_transparency_external_gossip_private="$factory_witness_secret_directory/external-gossip.private.hex"
+trap 'kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der" "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b" "$factory_transparency_external_anchor_private" "$factory_transparency_external_gossip_private"; rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory" 2>/dev/null || true' EXIT
 
 "$pcbex_binary" factory-release-state-transparency-witness-policy-schema \
   --output "$factory_transparency_witness_policy_schema"
@@ -4555,12 +4556,496 @@ for schema_path in (proof_schema_path, report_schema_path):
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.490 compares the exact latest v1.489 external-log head with a separately
+# keyed observer receipt. Unequal sizes require a bounded consistency proof;
+# equal-size divergent roots fail closed as a split view.
+factory_transparency_external_gossip_receipt_schema="$output_directory/factory-release-transparency-external-gossip-receipt.schema.json"
+factory_transparency_external_gossip_report_schema="$output_directory/factory-release-transparency-external-gossip-report.schema.json"
+factory_transparency_external_gossip_receipt="$output_directory/factory-release-transparency-external-gossip.receipt.json"
+factory_transparency_external_gossip_tampered_receipt="$output_directory/factory-release-transparency-external-gossip-tampered.receipt.json"
+factory_transparency_external_gossip_split_receipt="$output_directory/factory-release-transparency-external-gossip-split.receipt.json"
+factory_transparency_external_gossip_role_collision_receipt="$output_directory/factory-release-transparency-external-gossip-role-collision.receipt.json"
+factory_transparency_external_gossip_competing_receipt="$output_directory/factory-release-transparency-external-gossip-competing.receipt.json"
+factory_transparency_external_gossip_proof="$output_directory/factory-release-transparency-external-gossip.proof.json"
+factory_transparency_external_gossip_public_key_file="$output_directory/factory-release-transparency-external-gossip.public.hex"
+factory_transparency_external_gossip_report="$output_directory/factory-release-transparency-external-gossip.report.json"
+factory_transparency_external_gossip_replay="$output_directory/factory-release-transparency-external-gossip.replay.json"
+factory_transparency_external_gossip_tampered_output="$output_directory/factory-release-transparency-external-gossip-tampered.report.json"
+factory_transparency_external_gossip_tampered_error="$output_directory/factory-release-transparency-external-gossip-tampered.stderr"
+factory_transparency_external_gossip_split_output="$output_directory/factory-release-transparency-external-gossip-split.report.json"
+factory_transparency_external_gossip_split_error="$output_directory/factory-release-transparency-external-gossip-split.stderr"
+factory_transparency_external_gossip_missing_proof_output="$output_directory/factory-release-transparency-external-gossip-missing-proof.report.json"
+factory_transparency_external_gossip_missing_proof_error="$output_directory/factory-release-transparency-external-gossip-missing-proof.stderr"
+factory_transparency_external_gossip_role_collision_output="$output_directory/factory-release-transparency-external-gossip-role-collision.report.json"
+factory_transparency_external_gossip_role_collision_error="$output_directory/factory-release-transparency-external-gossip-role-collision.stderr"
+factory_transparency_external_gossip_conflict_output="$output_directory/factory-release-transparency-external-gossip-conflict.report.json"
+factory_transparency_external_gossip_conflict_error="$output_directory/factory-release-transparency-external-gossip-conflict.stderr"
+
+"$pcbex_binary" factory-release-state-transparency-external-gossip-receipt-schema \
+  --output "$factory_transparency_external_gossip_receipt_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-verification-report-schema \
+  --output "$factory_transparency_external_gossip_report_schema"
+
+python3 - \
+  "$factory_transparency_external_consistency_report_2" \
+  "$factory_transparency_external_anchor_private" \
+  "$factory_transparency_external_gossip_private" \
+  "$factory_transparency_external_gossip_public_key_file" \
+  "$factory_transparency_external_gossip_receipt" \
+  "$factory_transparency_external_gossip_tampered_receipt" \
+  "$factory_transparency_external_gossip_split_receipt" \
+  "$factory_transparency_external_gossip_role_collision_receipt" \
+  "$factory_transparency_external_gossip_competing_receipt" \
+  "$factory_transparency_external_gossip_proof" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+local_report_path, external_private_path, observer_private_path, observer_public_path, \
+    receipt_path, tampered_path, split_path, role_collision_path, competing_path, \
+    proof_path = map(Path, sys.argv[1:])
+local_report = json.loads(local_report_path.read_bytes())
+local_head = local_report["consistency_proof"]["current_tree_head"]
+anchor_proof = local_report["external_anchor_report"]["anchor_proof"]
+external_seed = bytes.fromhex(
+    external_private_path.read_text(encoding="ascii").strip()
+)
+external_private = Ed25519PrivateKey.from_private_bytes(external_seed)
+observer_seed = bytes([71]) * 32
+observer_private = Ed25519PrivateKey.from_private_bytes(observer_seed)
+observer_public = observer_private.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+).hex()
+observer_private_path.write_text(observer_seed.hex() + "\n", encoding="ascii")
+observer_public_path.write_text(observer_public + "\n", encoding="ascii")
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":")).encode("ascii")
+
+def write(path, value):
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+def merkle_leaf(digest):
+    return hashlib.sha256(
+        b"\x00" +
+        b"pcbex:factory-release-state-transparency-external-anchor-merkle-leaf:v1\0" +
+        bytes.fromhex(digest)
+    ).digest()
+
+def merkle_node(left, right):
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+def merkle_root(leaves):
+    if len(leaves) == 1:
+        return leaves[0]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    return merkle_node(merkle_root(leaves[:split]), merkle_root(leaves[split:]))
+
+def consistency_subproof(old_size, leaves, complete_subtree):
+    if old_size == len(leaves):
+        return [] if complete_subtree else [merkle_root(leaves)]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    if old_size <= split:
+        return consistency_subproof(
+            old_size, leaves[:split], complete_subtree
+        ) + [merkle_root(leaves[split:])]
+    return consistency_subproof(
+        old_size - split, leaves[split:], False
+    ) + [merkle_root(leaves[:split])]
+
+def sign_head(head):
+    payload = {
+        "domain": "pcbex-factory-release-state-transparency-external-anchor-tree-head-v1",
+        "schema_version": head["schema_version"],
+        "tree_head_scope": head["tree_head_scope"],
+        "log_id": head["log_id"],
+        "tree_size": head["tree_size"],
+        "root_sha256": head["root_sha256"],
+        "observed_at_unix": head["observed_at_unix"],
+        "algorithm": head["algorithm"],
+        "public_key": head["public_key"],
+    }
+    head["signature"] = external_private.sign(compact(payload)).hex()
+
+def head_sha256(head):
+    return hashlib.sha256(compact(head)).hexdigest()
+
+def signed_head(leaves, observed_at):
+    head = {
+        "schema_version": 1,
+        "tree_head_scope":
+            "signed-factory-release-state-transparency-external-anchor-tree-head-v1",
+        "log_id": local_head["log_id"],
+        "tree_size": len(leaves),
+        "root_sha256": merkle_root(leaves).hex(),
+        "observed_at_unix": observed_at,
+        "algorithm": "ed25519",
+        "public_key": local_head["public_key"],
+        "signature": "",
+    }
+    sign_head(head)
+    return head
+
+def signed_receipt(head, observer_id, expires_at):
+    received_at = head["observed_at_unix"]
+    receipt = {
+        "schema_version": 1,
+        "receipt_scope":
+            "factory-release-state-transparency-external-log-gossip-receipt-v1",
+        "external_anchor_policy_sha256":
+            local_report["external_anchor_policy_sha256"],
+        "external_log_id": local_report["external_log_id"],
+        "observer_id": observer_id,
+        "observed_tree_head_sha256": head_sha256(head),
+        "observed_tree_head": head,
+        "received_at_unix": received_at,
+        "expires_at_unix": expires_at,
+        "algorithm": "ed25519",
+        "observer_public_key": observer_public,
+        "signature": "",
+    }
+    payload = {
+        "domain":
+            "pcbex-factory-release-state-transparency-external-log-gossip-receipt-v1",
+        "schema_version": receipt["schema_version"],
+        "receipt_scope": receipt["receipt_scope"],
+        "external_anchor_policy_sha256":
+            receipt["external_anchor_policy_sha256"],
+        "external_log_id": receipt["external_log_id"],
+        "observer_id": receipt["observer_id"],
+        "observed_tree_head_sha256": receipt["observed_tree_head_sha256"],
+        "observed_tree_size": head["tree_size"],
+        "observed_root_sha256": head["root_sha256"],
+        "observed_tree_head_observed_at_unix": head["observed_at_unix"],
+        "external_log_public_key": head["public_key"],
+        "received_at_unix": receipt["received_at_unix"],
+        "expires_at_unix": receipt["expires_at_unix"],
+        "algorithm": receipt["algorithm"],
+        "observer_public_key": receipt["observer_public_key"],
+    }
+    receipt["signature"] = observer_private.sign(compact(payload)).hex()
+    return receipt
+
+anchor_leaf = merkle_leaf(anchor_proof["leaf_sha256"])
+leaves_3 = [
+    bytes.fromhex(anchor_proof["audit_path"][0]),
+    anchor_leaf,
+    bytes.fromhex(anchor_proof["audit_path"][1]),
+]
+leaves_5 = leaves_3 + [merkle_leaf("66" * 32), merkle_leaf("88" * 32)]
+assert merkle_root(leaves_5).hex() == local_head["root_sha256"]
+leaves_6 = leaves_5 + [merkle_leaf("99" * 32)]
+observed_head = signed_head(leaves_6, local_head["observed_at_unix"] + 1)
+receipt = signed_receipt(
+    observed_head, "independent-observer-a", observed_head["observed_at_unix"] + 120
+)
+write(receipt_path, receipt)
+
+tampered = copy.deepcopy(receipt)
+tampered["signature"] = "00" * 64
+write(tampered_path, tampered)
+
+split_leaves = leaves_3 + [merkle_leaf("66" * 32), merkle_leaf("77" * 32)]
+split_head = signed_head(split_leaves, observed_head["observed_at_unix"])
+split_receipt = signed_receipt(
+    split_head, "independent-observer-a", observed_head["observed_at_unix"] + 120
+)
+write(split_path, split_receipt)
+
+role_collision = signed_receipt(
+    observed_head,
+    local_report["external_log_id"],
+    observed_head["observed_at_unix"] + 120,
+)
+write(role_collision_path, role_collision)
+
+competing = signed_receipt(
+    observed_head, "independent-observer-a", observed_head["observed_at_unix"] + 121
+)
+write(competing_path, competing)
+
+proof = {
+    "schema_version": 1,
+    "proof_scope":
+        "factory-release-state-transparency-external-log-consistency-proof-v1",
+    "external_anchor_policy_sha256":
+        local_report["external_anchor_policy_sha256"],
+    "external_log_id": local_report["external_log_id"],
+    "previous_tree_head_sha256": head_sha256(local_head),
+    "current_tree_head_sha256": head_sha256(observed_head),
+    "previous_tree_head": local_head,
+    "current_tree_head": observed_head,
+    "consistency_path": [
+        node.hex()
+        for node in consistency_subproof(len(leaves_5), leaves_6, True)
+    ],
+}
+write(proof_path, proof)
+PY
+
+factory_transparency_external_gossip_public_key="$(tr -d '\r\n' < "$factory_transparency_external_gossip_public_key_file")"
+factory_transparency_external_gossip_time="$((factory_transparency_external_consistency_time + 2))"
+
+verify_factory_transparency_external_gossip() {
+  "$pcbex_binary" verify-factory-release-state-transparency-external-gossip \
+    --reservation-ledger "$monotonic_release_ledger" \
+    --expected-ledger-id "$signed_release_reservation_id" \
+    --idempotency-key "$monotonic_key" \
+    --log-id kicad-e2e-factory-release-log \
+    --policy-pack "$factory_receipt_policy" \
+    --expected-policy-sha256 "$fabrication_release_policy_digest" \
+    --transparency-policy "$factory_transparency_policy" \
+    --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+    --witness-policy "$factory_transparency_witness_policy" \
+    --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+    --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+    --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+    --external-log-id kicad-e2e-external-anchor-log \
+    --observer-id independent-observer-a \
+    --expected-observer-public-key "$factory_transparency_external_gossip_public_key" \
+    "$@"
+}
+
+if verify_factory_transparency_external_gossip \
+  --gossip-receipt "$factory_transparency_external_gossip_tampered_receipt" \
+  --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_tampered_output" \
+  2>"$factory_transparency_external_gossip_tampered_error"; then
+  echo "expected a tampered external gossip receipt to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_tampered_output"
+grep -Fq 'invalid factory release transparency external gossip receipt signature' \
+  "$factory_transparency_external_gossip_tampered_error"
+
+if verify_factory_transparency_external_gossip \
+  --gossip-receipt "$factory_transparency_external_gossip_split_receipt" \
+  --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_split_output" \
+  2>"$factory_transparency_external_gossip_split_error"; then
+  echo "expected an equal-size external-log split view to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_split_output"
+grep -Fq 'detected split-view roots at one tree size' \
+  "$factory_transparency_external_gossip_split_error"
+
+if verify_factory_transparency_external_gossip \
+  --gossip-receipt "$factory_transparency_external_gossip_receipt" \
+  --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_missing_proof_output" \
+  2>"$factory_transparency_external_gossip_missing_proof_error"; then
+  echo "expected unequal external-log heads without a proof to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_missing_proof_output"
+grep -Fq 'requires a consistency proof for different tree sizes' \
+  "$factory_transparency_external_gossip_missing_proof_error"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-gossip \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --observer-id kicad-e2e-external-anchor-log \
+  --expected-observer-public-key "$factory_transparency_external_gossip_public_key" \
+  --gossip-receipt "$factory_transparency_external_gossip_role_collision_receipt" \
+  --consistency-proof "$factory_transparency_external_gossip_proof" \
+  --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_role_collision_output" \
+  2>"$factory_transparency_external_gossip_role_collision_error"; then
+  echo "expected an observer assigned to the external-log role to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_role_collision_output"
+grep -Fq 'observer identity is assigned to a log, witness, or factory role' \
+  "$factory_transparency_external_gossip_role_collision_error"
+
+verify_factory_transparency_external_gossip \
+  --gossip-receipt "$factory_transparency_external_gossip_receipt" \
+  --consistency-proof "$factory_transparency_external_gossip_proof" \
+  --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_report" \
+  --require-accepted
+
+if verify_factory_transparency_external_gossip \
+  --gossip-receipt "$factory_transparency_external_gossip_competing_receipt" \
+  --consistency-proof "$factory_transparency_external_gossip_proof" \
+  --evaluated-at-unix "$((factory_transparency_external_gossip_time + 1))" \
+  --output "$factory_transparency_external_gossip_conflict_output" \
+  2>"$factory_transparency_external_gossip_conflict_error"; then
+  echo "expected a competing observer receipt for one local generation to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_conflict_output"
+grep -Fq 'external gossip record conflicts' \
+  "$factory_transparency_external_gossip_conflict_error"
+
+verify_factory_transparency_external_gossip \
+  --gossip-receipt "$factory_transparency_external_gossip_receipt" \
+  --consistency-proof "$factory_transparency_external_gossip_proof" \
+  --evaluated-at-unix "$((factory_transparency_external_gossip_time + 10000))" \
+  --output "$factory_transparency_external_gossip_replay" \
+  --require-accepted
+cmp "$factory_transparency_external_gossip_report" \
+  "$factory_transparency_external_gossip_replay"
+
+python3 - \
+  "$factory_transparency_external_gossip_report" \
+  "$factory_transparency_external_gossip_receipt" \
+  "$factory_transparency_external_gossip_proof" \
+  "$factory_transparency_external_consistency_report_2" \
+  "$factory_transparency_external_anchor_policy" \
+  "$factory_transparency_external_gossip_receipt_schema" \
+  "$factory_transparency_external_gossip_report_schema" \
+  "$monotonic_release_ledger" "$monotonic_key" \
+  "$factory_transparency_external_anchor_private" \
+  "$factory_transparency_external_gossip_private" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+report_path, receipt_path, proof_path, local_report_path, policy_path, \
+    receipt_schema_path, report_schema_path, ledger_path = map(Path, sys.argv[1:9])
+key, external_private_path, observer_private_path = sys.argv[9:]
+report_source = report_path.read_bytes()
+receipt_source = receipt_path.read_bytes()
+proof_source = proof_path.read_bytes()
+local_source = local_report_path.read_bytes()
+policy_source = policy_path.read_bytes()
+report = json.loads(report_source)
+receipt = json.loads(receipt_source)
+proof = json.loads(proof_source)
+local_report = json.loads(local_source)
+
+assert report["status"] == "verified"
+assert report["relationship"] == "local_precedes_observed"
+assert report["local_external_tree_size"] == 5
+assert report["observed_external_tree_size"] == 6
+assert report["local_external_consistency_generation"] == 2
+assert report["observer_id"] == "independent-observer-a"
+assert report["local_external_consistency_report"] == local_report
+assert report["gossip_receipt"] == receipt
+assert report["consistency_proof"] == proof
+for claim in (
+    "monotonic_state_chain_verified",
+    "source_checkpoint_inclusion_verified",
+    "complete_source_consistency_chain_verified",
+    "source_log_append_only_consistency_verified",
+    "witness_quorum_verified",
+    "external_anchor_verified",
+    "complete_external_consistency_chain_verified",
+    "external_log_append_only_consistency_verified",
+    "local_external_consistency_report_identity_verified",
+    "gossip_receipt_identity_verified",
+    "external_anchor_policy_pin_matched",
+    "external_log_policy_matched",
+    "local_external_tree_head_signature_verified",
+    "observed_external_tree_head_signature_verified",
+    "observer_pin_matched",
+    "observer_receipt_signature_verified",
+    "observer_log_and_witness_role_separation_verified",
+    "external_tree_relationship_verified",
+    "selected_observer_view_consistency_verified",
+    "observed_external_checkpoint_fresh_at_evaluation",
+    "external_consistency_proof_required",
+    "external_consistency_proof_verified",
+    "local_external_consistency_extension_available",
+):
+    assert report[claim] is True, claim
+for claim in (
+    "split_view_detected",
+    "selected_ledger_external_gossip_report_committed",
+    "global_non_equivocation_verified",
+    "selected_ledger_rollback_resistance_verified",
+    "trusted_time_verified",
+    "independent_organization_operation_verified",
+    "endpoint_transport_authenticity_verified",
+    "factory_legal_identity_verified",
+    "server_side_idempotency_enforced",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "exactly_once_execution_verified",
+):
+    assert report[claim] is False, claim
+
+def identity(source):
+    return {
+        "bytes": len(source),
+        "sha256": hashlib.sha256(source).hexdigest(),
+    }
+
+assert report["local_external_consistency_report_artifact"] == identity(local_source)
+assert report["external_anchor_policy_artifact"] == identity(policy_source)
+assert report["gossip_receipt_artifact"] == identity(receipt_source)
+assert report["consistency_proof_artifact"] == identity(proof_source)
+filename_context = {
+    "source_log_id": report["source_log_id"],
+    "witness_policy_sha256": report["witness_policy_sha256"],
+    "external_log_id": report["external_log_id"],
+    "external_anchor_policy_sha256": report["external_anchor_policy_sha256"],
+    "local_external_consistency_generation":
+        report["local_external_consistency_generation"],
+    "observer_id": report["observer_id"],
+    "observer_public_key": report["observer_public_key"],
+}
+context_sha256 = hashlib.sha256(
+    b"pcbex:factory-release-state-transparency-external-gossip-filename:v1\0" +
+    json.dumps(filename_context, separators=(",", ":")).encode("ascii")
+).hexdigest()
+name = (
+    f"factory-release-state-transparency-external-gossip-v1-{key}-"
+    f"{report['local_external_consistency_generation']:04}-{context_sha256[:32]}.json"
+)
+assert (ledger_path / name).read_bytes() == report_source
+
+secrets = [
+    Path(external_private_path).read_text(encoding="ascii").strip().encode(),
+    Path(observer_private_path).read_text(encoding="ascii").strip().encode(),
+]
+for path in [report_path, *ledger_path.iterdir()]:
+    source = path.read_bytes()
+    for secret in secrets:
+        assert secret not in source, path
+for schema_path in (receipt_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
 rm -f -- \
   "$factory_response_private_key" "$factory_response_public_der" \
   "$factory_transparency_private_key" "$factory_transparency_public_der" \
   "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b" \
-  "$factory_transparency_external_anchor_private"
+  "$factory_transparency_external_anchor_private" \
+  "$factory_transparency_external_gossip_private"
 rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory"
 trap - EXIT
 
