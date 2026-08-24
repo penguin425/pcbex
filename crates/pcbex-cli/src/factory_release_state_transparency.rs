@@ -630,7 +630,7 @@ fn validate_report_against_sources(
     Ok(())
 }
 
-fn validate_report_shape(
+pub(crate) fn validate_report_shape(
     report: &FactoryReleaseStateTransparencyVerificationReport,
 ) -> Result<(), String> {
     let positive = report.monotonic_state_chain_verified
@@ -740,7 +740,7 @@ fn validate_receipt_shape(receipt: &FactoryReleaseStateTransparencyReceipt) -> R
     Ok(())
 }
 
-fn validate_tree_head_shape(
+pub(crate) fn validate_tree_head_shape(
     head: &SignedFactoryReleaseStateTransparencyTreeHead,
 ) -> Result<(), String> {
     if head.schema_version != FACTORY_RELEASE_STATE_TRANSPARENCY_SCHEMA_VERSION
@@ -768,7 +768,7 @@ fn validate_tree_head_shape(
     Ok(())
 }
 
-fn verify_tree_head_signature(
+pub(crate) fn verify_tree_head_signature(
     head: &SignedFactoryReleaseStateTransparencyTreeHead,
 ) -> Result<(), String> {
     validate_tree_head_shape(head)?;
@@ -830,7 +830,7 @@ fn tree_head_signature_payload(
     .map_err(|error| format!("serializing factory release transparency tree head: {error}"))
 }
 
-fn tree_head_sha256(
+pub(crate) fn tree_head_sha256(
     head: &SignedFactoryReleaseStateTransparencyTreeHead,
 ) -> Result<String, String> {
     validate_tree_head_shape(head)?;

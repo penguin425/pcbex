@@ -18,7 +18,7 @@ and are never cancelled during publication.
 | CI Rust | 45 minutes |
 | CI Python | 20 minutes |
 | CI Python boundary matrix | 45 minutes |
-| CI Rust Windows boundaries | 30 minutes |
+| CI Rust Windows boundaries | 45 minutes |
 | CodeQL language matrix | 30 minutes |
 | Fuzz target matrix | 30 minutes |
 | KiCad end-to-end | 45 minutes |

@@ -61,7 +61,8 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 
 - **Verify factory-state history:** Chain authenticated adapter states to one
   retained ledger, reject rollback and forks, then verify the current head in a
-  separately pinned signed Merkle view.
+  separately pinned signed Merkle view and prove strict append-only extension
+  between retained checkpoints.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
@@ -240,6 +241,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Authenticated factory response v1 | Verify the exact adapter acknowledgement, status, request binding, and body digest under a policy-pinned Ed25519 key | `pcbex factory-release-adapter-response-authentication-report-schema` |
 | Monotonic factory state v1 | Bind signed adapter states to the accepted local head and reject rollback, equivocation, gaps, forks, or terminal mutation | `pcbex factory-release-adapter-monotonic-observation-report-schema` |
 | Factory-state transparency v1 | Verify the exact current monotonic head in one separately policy-pinned signed Merkle view | `pcbex factory-release-state-transparency-verification-report-schema` |
+| Factory-state transparency consistency v1 | Prove one retained signed view strictly extends another and retain the transition in a no-replace chain | `pcbex factory-release-state-transparency-consistency-verification-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -289,6 +291,7 @@ the security model for each adapter.
 | [Integrations](docs/INTEGRATIONS.md) | Configure GitHub Actions, MCP, KiCad, or the Python agent |
 | [Trust Model](docs/TRUST_MODEL.md) | Distinguish deterministic evidence from external authority |
 | [Monotonic Factory State](docs/MONOTONIC_FACTORY_RELEASE_ADAPTER_STATE.md) | Integrate the signed state-chain profile and its durable retry rules |
+| [Transparency Consistency](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY.md) | Verify append-only extension between retained factory-state log views |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the

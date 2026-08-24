@@ -2859,6 +2859,318 @@ for schema_path in (policy_schema_path, receipt_schema_path, report_schema_path)
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.486 proves that two retained signed views from the same log are related by
+# strict append-only extension. Two generations exercise both the v1.485
+# bootstrap anchor and the durable v1.486 predecessor link.
+factory_transparency_consistency_proof_schema="$output_directory/factory-release-transparency-consistency-proof.schema.json"
+factory_transparency_consistency_report_schema="$output_directory/factory-release-transparency-consistency-report.schema.json"
+factory_transparency_receipt_three="$output_directory/factory-release-transparency.tree-3.receipt.json"
+factory_transparency_receipt_four="$output_directory/factory-release-transparency.tree-4.receipt.json"
+factory_transparency_consistency_proof_one="$output_directory/factory-release-transparency.consistency-1.proof.json"
+factory_transparency_consistency_proof_two="$output_directory/factory-release-transparency.consistency-2.proof.json"
+factory_transparency_consistency_tampered_proof="$output_directory/factory-release-transparency.consistency-tampered.proof.json"
+factory_transparency_consistency_tampered_output="$output_directory/factory-release-transparency.consistency-tampered.report.json"
+factory_transparency_consistency_tampered_error="$output_directory/factory-release-transparency.consistency-tampered.stderr"
+factory_transparency_consistency_report_one="$output_directory/factory-release-transparency.consistency-1.report.json"
+factory_transparency_consistency_replay="$output_directory/factory-release-transparency.consistency-1.replay.json"
+factory_transparency_consistency_report_two="$output_directory/factory-release-transparency.consistency-2.report.json"
+factory_transparency_consistency_times="$output_directory/factory-release-transparency.consistency-times"
+
+"$pcbex_binary" factory-release-state-transparency-consistency-proof-schema \
+  --output "$factory_transparency_consistency_proof_schema"
+"$pcbex_binary" factory-release-state-transparency-consistency-verification-report-schema \
+  --output "$factory_transparency_consistency_report_schema"
+
+python3 - \
+  "$factory_transparency_receipt" "$factory_transparency_private_key" \
+  "$factory_transparency_receipt_three" "$factory_transparency_receipt_four" \
+  "$factory_transparency_consistency_proof_one" \
+  "$factory_transparency_consistency_proof_two" \
+  "$factory_transparency_consistency_tampered_proof" \
+  "$factory_transparency_consistency_times" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+old_receipt_path, private_key, receipt_three_path, receipt_four_path, \
+    proof_one_path, proof_two_path, tampered_path, times_path = sys.argv[1:]
+old_receipt = json.loads(Path(old_receipt_path).read_bytes())
+old_head = old_receipt["tree_head"]
+assert old_head["tree_size"] == 1
+
+def node(left, right):
+    return hashlib.sha256(b"\x01" + left + right).digest()
+
+def root(leaves):
+    if len(leaves) == 1:
+        return leaves[0]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    return node(root(leaves[:split]), root(leaves[split:]))
+
+def audit_path(leaves, index):
+    if len(leaves) == 1:
+        return []
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    if index < split:
+        return audit_path(leaves[:split], index) + [root(leaves[split:])]
+    return audit_path(leaves[split:], index - split) + [root(leaves[:split])]
+
+def subproof(old_size, leaves, complete):
+    if old_size == len(leaves):
+        return [] if complete else [root(leaves)]
+    split = 1 << ((len(leaves) - 1).bit_length() - 1)
+    if old_size <= split:
+        return subproof(old_size, leaves[:split], complete) + [root(leaves[split:])]
+    return subproof(old_size - split, leaves[split:], False) + [root(leaves[:split])]
+
+def compact_sha(value):
+    return hashlib.sha256(
+        json.dumps(value, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+
+def sign_head(leaves, observed_at):
+    head = {
+        "schema_version": 1,
+        "tree_head_scope": "signed-factory-release-state-transparency-tree-head-v1",
+        "log_id": old_head["log_id"],
+        "tree_size": len(leaves),
+        "root_sha256": root(leaves).hex(),
+        "observed_at_unix": observed_at,
+        "algorithm": "ed25519",
+        "public_key": old_head["public_key"],
+        "signature": "",
+    }
+    payload = {
+        "domain": "pcbex-factory-release-state-transparency-tree-head-v1",
+        "tree_head_scope": head["tree_head_scope"],
+        "log_id": head["log_id"],
+        "tree_size": head["tree_size"],
+        "root_sha256": head["root_sha256"],
+        "observed_at_unix": head["observed_at_unix"],
+    }
+    with tempfile.NamedTemporaryFile() as source:
+        source.write(json.dumps(payload, separators=(",", ":")).encode("ascii"))
+        source.flush()
+        signature = subprocess.run(
+            [
+                "openssl", "pkeyutl", "-sign", "-rawin", "-inkey", private_key,
+                "-in", source.name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        ).stdout
+    head["signature"] = signature.hex()
+    return head
+
+def receipt(head, leaves):
+    value = copy.deepcopy(old_receipt)
+    value["audit_path"] = [item.hex() for item in audit_path(leaves, 0)]
+    value["tree_head"] = head
+    return value
+
+old_leaf = bytes.fromhex(old_head["root_sha256"])
+leaves_three = [old_leaf, hashlib.sha256(b"v1.486-e2e-leaf-1").digest(), hashlib.sha256(b"v1.486-e2e-leaf-2").digest()]
+leaves_four = leaves_three + [hashlib.sha256(b"v1.486-e2e-leaf-3").digest()]
+head_three = sign_head(leaves_three, old_head["observed_at_unix"] + 10)
+head_four = sign_head(leaves_four, old_head["observed_at_unix"] + 20)
+receipt_three = receipt(head_three, leaves_three)
+receipt_four = receipt(head_four, leaves_four)
+proof_one = {
+    "schema_version": 1,
+    "proof_scope": "factory-release-state-transparency-consistency-proof-v1",
+    "previous_tree_head_sha256": compact_sha(old_head),
+    "current_tree_head_sha256": compact_sha(head_three),
+    "consistency_path": [item.hex() for item in subproof(1, leaves_three, True)],
+}
+proof_two = {
+    "schema_version": 1,
+    "proof_scope": "factory-release-state-transparency-consistency-proof-v1",
+    "previous_tree_head_sha256": compact_sha(head_three),
+    "current_tree_head_sha256": compact_sha(head_four),
+    "consistency_path": [item.hex() for item in subproof(3, leaves_four, True)],
+}
+tampered = copy.deepcopy(proof_one)
+tampered["consistency_path"][0] = "0" * 64
+for path, value in (
+    (receipt_three_path, receipt_three),
+    (receipt_four_path, receipt_four),
+    (proof_one_path, proof_one),
+    (proof_two_path, proof_two),
+    (tampered_path, tampered),
+):
+    Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+Path(times_path).write_text(
+    f"{head_three['observed_at_unix'] + 1} {head_four['observed_at_unix'] + 1}\n",
+    encoding="ascii",
+)
+PY
+read -r factory_transparency_consistency_time_one factory_transparency_consistency_time_two \
+  < "$factory_transparency_consistency_times"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_receipt_three" \
+  --consistency-proof "$factory_transparency_consistency_tampered_proof" \
+  --anchor-state-sequence 1 \
+  --evaluated-at-unix "$factory_transparency_consistency_time_one" \
+  --output "$factory_transparency_consistency_tampered_output" \
+  2>"$factory_transparency_consistency_tampered_error"; then
+  echo "expected a tampered factory transparency consistency proof to fail closed" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_consistency_tampered_output"
+grep -Fq 'does not reconstruct both signed roots' \
+  "$factory_transparency_consistency_tampered_error"
+
+"$pcbex_binary" verify-factory-release-state-transparency-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_receipt_three" \
+  --consistency-proof "$factory_transparency_consistency_proof_one" \
+  --anchor-state-sequence 1 \
+  --evaluated-at-unix "$factory_transparency_consistency_time_one" \
+  --output "$factory_transparency_consistency_report_one" \
+  --require-accepted
+"$pcbex_binary" verify-factory-release-state-transparency-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_receipt_three" \
+  --consistency-proof "$factory_transparency_consistency_proof_one" \
+  --anchor-state-sequence 1 \
+  --evaluated-at-unix "$((factory_transparency_consistency_time_one + 10000))" \
+  --output "$factory_transparency_consistency_replay" \
+  --require-accepted
+cmp "$factory_transparency_consistency_report_one" \
+  "$factory_transparency_consistency_replay"
+
+"$pcbex_binary" verify-factory-release-state-transparency-consistency \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --receipt "$factory_transparency_receipt_four" \
+  --consistency-proof "$factory_transparency_consistency_proof_two" \
+  --evaluated-at-unix "$factory_transparency_consistency_time_two" \
+  --output "$factory_transparency_consistency_report_two" \
+  --require-accepted
+
+python3 - \
+  "$factory_transparency_consistency_report_one" \
+  "$factory_transparency_consistency_report_two" \
+  "$factory_transparency_consistency_proof_one" \
+  "$factory_transparency_consistency_proof_two" \
+  "$factory_transparency_consistency_proof_schema" \
+  "$factory_transparency_consistency_report_schema" \
+  "$factory_transparency_report" "$monotonic_release_ledger" \
+  "$monotonic_key" "$signed_release_adapter_token" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+report_one_path, report_two_path, proof_one_path, proof_two_path, \
+    proof_schema_path, report_schema_path, anchor_path, ledger_path = \
+    map(Path, sys.argv[1:9])
+key, token = sys.argv[9:]
+report_one = json.loads(report_one_path.read_bytes())
+report_two = json.loads(report_two_path.read_bytes())
+proof_one = json.loads(proof_one_path.read_bytes())
+proof_two = json.loads(proof_two_path.read_bytes())
+for report in (report_one, report_two):
+    assert report["status"] == "verified"
+    for claim in (
+        "monotonic_state_chain_verified",
+        "previous_checkpoint_inclusion_verified",
+        "current_checkpoint_inclusion_verified",
+        "same_log_and_key_verified",
+        "tree_head_signatures_verified",
+        "strict_tree_extension_verified",
+        "consistency_proof_verified",
+        "complete_consistency_chain_verified",
+        "selected_log_append_only_consistency_verified",
+    ):
+        assert report[claim] is True, claim
+    for claim in (
+        "selected_ledger_consistency_report_committed",
+        "global_non_equivocation_verified",
+        "selected_ledger_rollback_resistance_verified",
+        "trusted_time_verified",
+        "endpoint_transport_authenticity_verified",
+        "factory_legal_identity_verified",
+        "server_side_idempotency_enforced",
+        "capacity_reserved",
+        "order_placed",
+        "payment_performed",
+        "exactly_once_execution_verified",
+    ):
+        assert report[claim] is False, claim
+assert report_one["checkpoint_generation"] == 1
+assert report_one["previous_tree_size"] == 1
+assert report_one["current_tree_size"] == 3
+assert report_one["anchor_transparency_report_artifact"] == {
+    "bytes": len(anchor_path.read_bytes()),
+    "sha256": hashlib.sha256(anchor_path.read_bytes()).hexdigest(),
+}
+assert report_one["previous_consistency_report_artifact"] is None
+assert report_one["consistency_proof"] == proof_one
+assert report_two["checkpoint_generation"] == 2
+assert report_two["previous_tree_size"] == 3
+assert report_two["current_tree_size"] == 4
+assert report_two["anchor_transparency_report_artifact"] is None
+assert report_two["previous_consistency_report_artifact"] == {
+    "bytes": len(report_one_path.read_bytes()),
+    "sha256": hashlib.sha256(report_one_path.read_bytes()).hexdigest(),
+}
+assert report_two["previous_transparency_report"] == \
+    report_one["current_transparency_report"]
+assert report_two["consistency_proof"] == proof_two
+for generation, path in ((1, report_one_path), (2, report_two_path)):
+    name = (
+        f"factory-release-state-transparency-consistency-v1-{key}-"
+        f"kicad-e2e-factory-release-log-{generation:04}.json"
+    )
+    assert (ledger_path / name).read_bytes() == path.read_bytes()
+for path in [report_one_path, report_two_path, *ledger_path.iterdir()]:
+    assert token.encode() not in path.read_bytes(), path
+for schema_path in (proof_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 unset PCBEX_E2E_SIGNED_RELEASE_ADAPTER_TOKEN
 rm -f -- \
   "$factory_response_private_key" "$factory_response_public_der" \
