@@ -288,6 +288,111 @@ fn apply_authority_rotation(
     ])
 }
 
+fn sign_governance(
+    registry: &Path,
+    root_secret: &Path,
+    minimum_approvals: &str,
+    authorities: &[(&str, &Path)],
+    issued_at_unix: &str,
+    output: &Path,
+) -> Output {
+    let mut command = Command::new(binary());
+    command.args([
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-governance",
+        "--registry-state",
+        path(registry),
+        "--registry-authority-private-key",
+        path(root_secret),
+        "--minimum-approvals",
+        minimum_approvals,
+    ]);
+    for (authority_id, public_key) in authorities {
+        command.args([
+            "--authority-id",
+            authority_id,
+            "--authority-public-key",
+            path(public_key),
+        ]);
+    }
+    command.args(["--issued-at-unix", issued_at_unix, "--output", path(output)]);
+    command.output().unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_threshold_transition(
+    registry: &Path,
+    governance: &Path,
+    signers: &[(&str, &Path)],
+    action: &str,
+    organization_id: &str,
+    observer_trust: Option<&Path>,
+    effective_at_unix: &str,
+    output: &Path,
+) -> Output {
+    let mut command = Command::new(binary());
+    command.args([
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition",
+        "--registry-state",
+        path(registry),
+        "--governance",
+        path(governance),
+    ]);
+    for (authority_id, private_key) in signers {
+        command.args([
+            "--authority-id",
+            authority_id,
+            "--authority-private-key",
+            path(private_key),
+        ]);
+    }
+    command.args(["--action", action, "--organization-id", organization_id]);
+    if let Some(observer_trust) = observer_trust {
+        command.args(["--observer-trust-state", path(observer_trust)]);
+    }
+    let reason = "b".repeat(64);
+    command.args([
+        "--reason-sha256",
+        &reason,
+        "--effective-at-unix",
+        effective_at_unix,
+        "--output",
+        path(output),
+    ]);
+    command.output().unwrap()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_threshold_transition(
+    ledger: &Path,
+    ledger_id: &str,
+    policy: &Path,
+    policy_sha256: &str,
+    genesis: &Path,
+    genesis_sha256: &str,
+    transition: &Path,
+    output: &Path,
+) -> Output {
+    run(&[
+        "apply-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition",
+        "--reservation-ledger",
+        path(ledger),
+        "--expected-ledger-id",
+        ledger_id,
+        "--base-observer-quorum-policy",
+        path(policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        policy_sha256,
+        "--registry-genesis",
+        path(genesis),
+        "--expected-registry-genesis-sha256",
+        genesis_sha256,
+        "--transition",
+        path(transition),
+        "--output",
+        path(output),
+    ])
+}
+
 fn assert_closed_and_bounded(value: &Value) {
     match value {
         Value::Object(object) => {
@@ -1142,6 +1247,437 @@ fn rotates_registry_authority_with_dual_signatures_and_exact_ledger_convergence(
 }
 
 #[test]
+fn activates_threshold_governance_and_rejects_root_only_registry_mutation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let (ledger, ledger_id) = create_ledger(&root);
+    let policy = root.join("base-policy.json");
+    let policy_sha256 = write_policy(&policy);
+    let root_secret = root.join("registry-root-secret.hex");
+    let root_public = root.join("registry-root-public.hex");
+    write_hex(&root_secret, [31; 32], 0o600);
+    write_hex(
+        &root_public,
+        SigningKey::from_bytes(&[31; 32]).verifying_key().to_bytes(),
+        0o644,
+    );
+    let authority_a_secret = root.join("governance-a-secret.hex");
+    let authority_b_secret = root.join("governance-b-secret.hex");
+    let authority_c_secret = root.join("governance-c-secret.hex");
+    let authority_a_public = root.join("governance-a-public.hex");
+    let authority_b_public = root.join("governance-b-public.hex");
+    let authority_c_public = root.join("governance-c-public.hex");
+    for (secret_path, public_path, secret) in [
+        (&authority_a_secret, &authority_a_public, [61; 32]),
+        (&authority_b_secret, &authority_b_public, [62; 32]),
+        (&authority_c_secret, &authority_c_public, [63; 32]),
+    ] {
+        write_hex(secret_path, secret, 0o600);
+        write_hex(
+            public_path,
+            SigningKey::from_bytes(&secret).verifying_key().to_bytes(),
+            0o644,
+        );
+    }
+
+    let genesis = root.join("registry-genesis.json");
+    let genesis_digest = root.join("registry-genesis.sha256");
+    successful(&[
+        "init-factory-release-state-transparency-external-gossip-organization-registry",
+        "--base-observer-quorum-policy",
+        path(&policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        &policy_sha256,
+        "--registry-id",
+        "production-observers",
+        "--authority-public-key",
+        path(&root_public),
+        "--output",
+        path(&genesis),
+        "--digest-output",
+        path(&genesis_digest),
+    ]);
+    let genesis_sha256 = fs::read_to_string(&genesis_digest).unwrap();
+    let genesis_sha256 = genesis_sha256.trim();
+    let initial = root.join("registry-initial.json");
+    export_registry(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &initial,
+    );
+    let observer_a = root.join("observer-a.json");
+    export_observer(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        "lab-a",
+        "observer-a",
+        &observer_a,
+    );
+
+    let duplicate_governance = root.join("duplicate-governance.json");
+    let duplicate = sign_governance(
+        &initial,
+        &root_secret,
+        "2",
+        &[
+            ("authority-a", &authority_a_public),
+            ("authority-b", &authority_a_public),
+        ],
+        "1000",
+        &duplicate_governance,
+    );
+    assert!(!duplicate.status.success());
+    assert!(!duplicate_governance.exists());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("distinct"));
+
+    let governance = root.join("governance.json");
+    let signed = sign_governance(
+        &initial,
+        &root_secret,
+        "2",
+        &[
+            ("authority-c", &authority_c_public),
+            ("authority-a", &authority_a_public),
+            ("authority-b", &authority_b_public),
+        ],
+        "1000",
+        &governance,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let governance_value: Value = serde_json::from_slice(&fs::read(&governance).unwrap()).unwrap();
+    assert_eq!(governance_value["minimum_approvals"], 2);
+    assert_eq!(
+        governance_value["authorities"][0]["authority_id"],
+        "authority-a"
+    );
+    assert_eq!(
+        governance_value["authorities"][2]["authority_id"],
+        "authority-c"
+    );
+
+    let insufficient_transition = root.join("insufficient-threshold-transition.json");
+    let insufficient = sign_threshold_transition(
+        &initial,
+        &governance,
+        &[("authority-a", &authority_a_secret)],
+        "admit-observer",
+        "lab-a",
+        Some(&observer_a),
+        "1100",
+        &insufficient_transition,
+    );
+    assert!(!insufficient.status.success());
+    assert!(!insufficient_transition.exists());
+    assert!(String::from_utf8_lossy(&insufficient.stderr).contains("threshold"));
+
+    let substituted_transition = root.join("substituted-threshold-transition.json");
+    let substituted = sign_threshold_transition(
+        &initial,
+        &governance,
+        &[
+            ("authority-a", &authority_b_secret),
+            ("authority-c", &authority_c_secret),
+        ],
+        "admit-observer",
+        "lab-a",
+        Some(&observer_a),
+        "1100",
+        &substituted_transition,
+    );
+    assert!(!substituted.status.success());
+    assert!(!substituted_transition.exists());
+    assert!(String::from_utf8_lossy(&substituted.stderr).contains("does not match governance"));
+
+    let observer_collision_secret = root.join("observer-collision-secret.hex");
+    let observer_collision_public = root.join("observer-collision-public.hex");
+    write_hex(&observer_collision_secret, [11; 32], 0o600);
+    write_hex(
+        &observer_collision_public,
+        SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes(),
+        0o644,
+    );
+    let collision_governance = root.join("collision-governance.json");
+    assert!(
+        sign_governance(
+            &initial,
+            &root_secret,
+            "2",
+            &[
+                ("observer-collision", &observer_collision_public),
+                ("authority-b", &authority_b_public),
+            ],
+            "1000",
+            &collision_governance,
+        )
+        .status
+        .success()
+    );
+    let collision_transition = root.join("collision-threshold-transition.json");
+    assert!(
+        sign_threshold_transition(
+            &initial,
+            &collision_governance,
+            &[
+                ("observer-collision", &observer_collision_secret),
+                ("authority-b", &authority_b_secret),
+            ],
+            "admit-observer",
+            "lab-a",
+            Some(&observer_a),
+            "1100",
+            &collision_transition,
+        )
+        .status
+        .success()
+    );
+    let collision_output = root.join("collision-output.json");
+    let collision = apply_threshold_transition(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &collision_transition,
+        &collision_output,
+    );
+    assert!(!collision.status.success());
+    assert!(!collision_output.exists());
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("not role-disjoint"));
+
+    let admission = root.join("threshold-admission.json");
+    let signed = sign_threshold_transition(
+        &initial,
+        &governance,
+        &[
+            ("authority-b", &authority_b_secret),
+            ("authority-a", &authority_a_secret),
+        ],
+        "admit-observer",
+        "lab-a",
+        Some(&observer_a),
+        "1100",
+        &admission,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let admission_value: Value = serde_json::from_slice(&fs::read(&admission).unwrap()).unwrap();
+    assert_eq!(
+        admission_value["approvals"][0]["authority_id"],
+        "authority-a"
+    );
+    assert_eq!(
+        admission_value["approvals"][1]["authority_id"],
+        "authority-b"
+    );
+
+    let tampered_admission = root.join("tampered-threshold-admission.json");
+    let source = fs::read_to_string(&admission).unwrap();
+    let approval_signature = admission_value["approvals"][0]["signature"]
+        .as_str()
+        .unwrap();
+    fs::write(
+        &tampered_admission,
+        source.replacen(approval_signature, &"0".repeat(128), 1),
+    )
+    .unwrap();
+    let tampered_output = root.join("tampered-threshold-output.json");
+    let tampered = apply_threshold_transition(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &tampered_admission,
+        &tampered_output,
+    );
+    assert!(!tampered.status.success());
+    assert!(!tampered_output.exists());
+    assert!(String::from_utf8_lossy(&tampered.stderr).contains("approval verification failed"));
+
+    let applied_a = root.join("threshold-applied-a.json");
+    let applied_b = root.join("threshold-applied-b.json");
+    let common = [
+        "apply-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition",
+        "--reservation-ledger",
+        path(&ledger),
+        "--expected-ledger-id",
+        &ledger_id,
+        "--base-observer-quorum-policy",
+        path(&policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        &policy_sha256,
+        "--registry-genesis",
+        path(&genesis),
+        "--expected-registry-genesis-sha256",
+        genesis_sha256,
+        "--transition",
+        path(&admission),
+        "--output",
+    ];
+    let mut first = Command::new(binary())
+        .args(common)
+        .arg(&applied_a)
+        .spawn()
+        .unwrap();
+    let mut second = Command::new(binary())
+        .args(common)
+        .arg(&applied_b)
+        .spawn()
+        .unwrap();
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+    assert_eq!(fs::read(&applied_a).unwrap(), fs::read(&applied_b).unwrap());
+    let governed: Value = serde_json::from_slice(&fs::read(&applied_a).unwrap()).unwrap();
+    assert_eq!(governed["generation"], 1);
+    assert_eq!(governed["organizations"][0]["status"], "active");
+    assert_eq!(
+        governed["active_governance_sha256"].as_str().unwrap().len(),
+        64
+    );
+
+    let retry_output = root.join("threshold-exact-retry.json");
+    assert!(
+        apply_threshold_transition(
+            &ledger,
+            &ledger_id,
+            &policy,
+            &policy_sha256,
+            &genesis,
+            genesis_sha256,
+            &admission,
+            &retry_output,
+        )
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read(&applied_a).unwrap(),
+        fs::read(&retry_output).unwrap()
+    );
+
+    let root_only_transition = root.join("root-only-transition.json");
+    let root_only = sign_transition(
+        &applied_a,
+        &root_secret,
+        "suspend-organization",
+        "lab-a",
+        None,
+        "1200",
+        &root_only_transition,
+    );
+    assert!(!root_only.status.success());
+    assert!(!root_only_transition.exists());
+    assert!(String::from_utf8_lossy(&root_only.stderr).contains("root-only"));
+    let successor_root = root.join("successor-root.hex");
+    write_hex(&successor_root, [71; 32], 0o600);
+    let root_rotation = root.join("root-only-rotation.json");
+    let root_rotation_result = sign_authority_rotation(
+        &applied_a,
+        &root_secret,
+        &successor_root,
+        "1200",
+        &root_rotation,
+    );
+    assert!(!root_rotation_result.status.success());
+    assert!(!root_rotation.exists());
+    assert!(String::from_utf8_lossy(&root_rotation_result.stderr).contains("root-only"));
+
+    let suspension = root.join("threshold-suspension.json");
+    assert!(
+        sign_threshold_transition(
+            &applied_a,
+            &governance,
+            &[
+                ("authority-c", &authority_c_secret),
+                ("authority-a", &authority_a_secret),
+            ],
+            "suspend-organization",
+            "lab-a",
+            None,
+            "1200",
+            &suspension,
+        )
+        .status
+        .success()
+    );
+    let suspended_output = root.join("threshold-suspended.json");
+    let suspended = apply_threshold_transition(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &suspension,
+        &suspended_output,
+    );
+    assert!(
+        suspended.status.success(),
+        "{}",
+        String::from_utf8_lossy(&suspended.stderr)
+    );
+    let suspended_value: Value =
+        serde_json::from_slice(&fs::read(&suspended_output).unwrap()).unwrap();
+    assert_eq!(suspended_value["generation"], 2);
+    assert_eq!(suspended_value["organizations"][0]["status"], "suspended");
+
+    let exported = root.join("threshold-exported.json");
+    export_registry(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &exported,
+    );
+    assert_eq!(
+        fs::read(&suspended_output).unwrap(),
+        fs::read(&exported).unwrap()
+    );
+    let threshold_records = fs::read_dir(&ledger)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            entry.file_name().to_string_lossy().starts_with(
+                "factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-v1-",
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(threshold_records.len(), 2);
+    for entry in fs::read_dir(&ledger).unwrap() {
+        let source = fs::read(entry.unwrap().path()).unwrap();
+        for secret in [
+            hex::encode([31; 32]),
+            hex::encode([61; 32]),
+            hex::encode([62; 32]),
+            hex::encode([63; 32]),
+        ] {
+            assert!(
+                !source
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes())
+            );
+        }
+    }
+}
+
+#[test]
 fn publishes_closed_bounded_registry_schemas() {
     let temporary = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(temporary.path()).unwrap();
@@ -1159,12 +1695,24 @@ fn publishes_closed_bounded_registry_schemas() {
             "authority-rotation.schema.json",
         ),
         (
+            "signed-factory-release-state-transparency-external-gossip-organization-registry-governance-schema",
+            "governance.schema.json",
+        ),
+        (
+            "signed-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-schema",
+            "threshold-transition.schema.json",
+        ),
+        (
             "factory-release-state-transparency-external-gossip-organization-registry-verification-report-schema",
             "report.schema.json",
         ),
         (
             "factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-verification-report-schema",
             "authority-rotation-report.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-verification-report-schema",
+            "threshold-governance-report.schema.json",
         ),
     ] {
         let output = root.join(filename);
