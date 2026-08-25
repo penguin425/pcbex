@@ -111,6 +111,10 @@ boundary document for the artifact you plan to produce or trust.
   — dual-sign generation- and digest-chained successor keys, retain the latest
   histories, and derive the unchanged v1.491 quorum policy used in production.
 
+- [External-gossip Organization Registry](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY.md)
+  — admit exact current observer trust and suspend or permanently revoke
+  organizations through an independently pinned authority-signed history.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

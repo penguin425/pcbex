@@ -252,7 +252,7 @@ other observers received. Version 1.491 adds bounded remote acquisition and an
 exact-head threshold across multiple independently pinned observer receipts.
 
 Version 1.492 adds policy-bound observer key rotation around that unchanged
-quorum contract. A governed observer-organization trust registry remains
-separate. Trusted timestamping, ledger rollback protection, legal identity,
-capacity, order authority, payment, and exactly-once execution also remain
-outside this contract.
+quorum contract. Version 1.493 adds the separate governed
+observer-organization registry. Trusted timestamping, ledger rollback
+protection, legal identity, capacity, order authority, payment, and
+exactly-once execution also remain outside this contract.

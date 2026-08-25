@@ -712,6 +712,34 @@ global non-equivocation, trusted time, real organizational independence,
 endpoint/legal identity, ordering, payment, and exactly-once execution remain
 false.
 
+## Factory-state external gossip organization-registry limits
+
+The v1.493 generation-zero registry is capped at 256 KiB. Each canonical
+authority-signed transition is capped at 16 KiB, and one registry may advance
+through generations 1–4,096 while retaining no more than 100 organizations and
+100 observer admissions under the unchanged v1.491 policy bound.
+
+Every transition advances exactly one generation and binds the immutable base
+policy digest, policy ID, registry ID, prior transition digest, action,
+organization, optional exact v1.492 trust-state digest, reason digest,
+nondecreasing explicit time, authority key, and algorithm. Admission requires
+the latest selected-ledger observer trust state. Suspension and permanent
+revocation carry no observer state.
+
+Transition filenames use a domain-separated digest of the registry genesis,
+base policy, and registry ID plus the exact generation. Unix export, apply, and
+verification reload the complete registry and observer histories around
+descriptor-relative no-replace publication. Exact concurrent writers converge;
+fork, gap, stale trust, signature mutation, role reuse, and input races fail
+closed.
+
+The 128 MiB recursively closed report embeds the exact genesis, every
+transition, current registry, and exact self-contained v1.492 trust report. A
+met quorum is retained; below-threshold evidence remains output-only. The
+registry timestamp is ordered but not trusted, and host-ledger rollback
+resistance, global non-equivocation, real organizational independence, legal
+identity, ordering, payment, and exactly-once execution remain false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

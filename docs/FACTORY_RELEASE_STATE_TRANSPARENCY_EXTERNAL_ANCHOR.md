@@ -265,6 +265,8 @@ one. Version 1.489 adds that strict external-log consistency chain, and v1.490
 compares its latest head with one separately pinned observer view. Version
 1.491 adds bounded remote acquisition and exact-head threshold agreement.
 Version 1.492 binds that quorum to selected-ledger observer key histories.
+Version 1.493 additionally requires selected members to remain active in an
+independently pinned authority-governed organization registry.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain
