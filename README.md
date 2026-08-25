@@ -59,15 +59,13 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Authenticate adapter responses:** Verify RFC 9421 Ed25519 signatures and
   RFC 9530 content digests against exact policy-pinned factory keys.
 
-- **Verify factory-state history:** Chain authenticated adapter states to one
-  retained ledger, reject rollback and forks, then verify the current head in a
-  separately pinned signed Merkle view and prove strict append-only extension
-  between retained checkpoints. Require distinct policy-pinned witness
-  organizations to endorse the exact latest checkpoint, then anchor that exact
-  quorum report in a separately trusted external signed Merkle view and prove
-  later external views strictly extend the retained anchor. Compare the latest
-  retained external head with a separately pinned observer-signed view and
-  reject same-size split roots.
+- **Verify factory-state history:** Recheck one monotonic local chain, its signed
+  Merkle checkpoints, witness quorum, and independently anchored external-log
+  extensions.
+
+- **Detect split views:** Compare observer-signed views with the exact latest
+  external head, acquire bounded remote observations, and require policy-pinned
+  organizations to agree on one exact signed head.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
@@ -251,6 +249,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Factory-state transparency external anchor v1 | Prove the exact latest v1.487 quorum report appears in one separately policy-pinned external signed Merkle view | `pcbex factory-release-state-transparency-external-anchor-verification-report-schema` |
 | Factory-state transparency external consistency v1 | Prove later signed views strictly extend the retained external anchor and keep a bounded no-replace chain | `pcbex factory-release-state-transparency-external-consistency-verification-report-schema` |
 | Factory-state transparency external gossip v1 | Compare the latest retained external head with one independently pinned observer view | `pcbex factory-release-state-transparency-external-gossip-verification-report-schema` |
+| Factory-state transparency external gossip quorum v1 | Acquire bounded observations and require distinct policy-pinned organizations to agree on one exact external head | `pcbex factory-release-state-transparency-external-gossip-quorum-verification-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -303,6 +302,7 @@ the security model for each adapter.
 | [Transparency Consistency](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_CONSISTENCY.md) | Verify append-only extension between retained factory-state log views |
 | [Transparency Witness Quorum](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_QUORUM.md) | Require independent configured organizations to endorse one exact latest checkpoint |
 | [Transparency External Anchor](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR.md) | Anchor the exact witness-quorum report in a separately trusted signed Merkle view |
+| [Transparency External Gossip Quorum](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_QUORUM.md) | Acquire remote views safely and require exact-head agreement across observer organizations |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the

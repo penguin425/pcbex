@@ -248,10 +248,10 @@ capability, and help discovery remain cross-platform.
 ## What remains
 
 One observer comparison detects a selected split view but cannot establish what
-other observers received. The next useful layer is bounded remote acquisition
-and a threshold across multiple independently pinned observer receipts.
+other observers received. Version 1.491 adds bounded remote acquisition and an
+exact-head threshold across multiple independently pinned observer receipts.
 
-Observer key rotation and a governed observer-organization trust registry remain
-separate boundaries. Trusted timestamping, ledger rollback protection, legal
-identity, capacity, order authority, payment, and exactly-once execution also
-remain outside this contract.
+Observer key rotation and a governed observer-organization trust registry
+remain separate boundaries. Trusted timestamping, ledger rollback protection,
+legal identity, capacity, order authority, payment, and exactly-once execution
+also remain outside this contract.

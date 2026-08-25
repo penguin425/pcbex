@@ -103,6 +103,10 @@ boundary document for the artifact you plan to produce or trust.
   — compare the exact latest external-log head with a separately pinned
   observer receipt and reject selected split views.
 
+- [Factory-release State Transparency External Gossip Quorum](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_QUORUM.md)
+  — acquire canonical observations over bounded remote transport and require
+  distinct configured organizations to agree on one exact signed external head.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

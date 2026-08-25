@@ -651,6 +651,39 @@ bytes for the same local generation and observer pin conflict. Global
 non-equivocation, observer quorum, real organizational independence,
 selected-ledger rollback resistance, and trusted time remain false.
 
+## Factory-state external gossip quorum limits
+
+The v1.491 acquisition command sends one canonical request to a query-free,
+userinfo-free HTTPS endpoint, follows no redirects, and accepts only HTTP 200
+`application/json` responses up to 1 MiB. Its aggregate timeout is configurable
+from 1 to 600 seconds. A hidden loopback-only HTTP escape exists for the real
+transport regression and is not exposed by the public CLI.
+
+Each response must be one canonical observation envelope no larger than 256
+KiB. The envelope carries one unchanged v1.490 observer receipt and an optional
+unchanged v1.489 consistency proof. The create-new 64 KiB transport receipt
+binds request and response identities, byte counts, exact local head, policy,
+organization, observer, key, and local evaluation window. Optional Bearer
+credentials are read only from the selected environment variable and are never
+retained.
+
+The static canonical quorum policy is capped at 64 KiB and 100 distinct,
+sorted organization/observer/key tuples. Its threshold is 2–100 organizations,
+and its additional receipt-age ceiling is 1–86,400 seconds. The Unix-only
+verifier reloads the complete v1.484–v1.489 chain, replays the v1.490 verifier
+for every selected observation, rejects duplicate roles or evidence, and
+requires all selected observers to name the same exact signed head before
+counting organizations.
+
+The recursively closed report is capped at 32 MiB. Below-threshold evidence is
+written only to the requested create-new output; a met quorum is also retained
+through the existing descriptor-pinned no-replace ledger boundary. Exact retry
+may reorder paired observations and returns retained bytes after expiry.
+Alternate evidence for the same local generation and policy digest conflicts.
+Global non-equivocation, real organizational independence or key custody,
+endpoint authenticity, selected-ledger rollback resistance, trusted time,
+server idempotency, and exactly-once execution remain false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

@@ -203,6 +203,7 @@ auditable release.
 | v1.488.0 | Factory-release transparency external-log anchoring | Fully reload the latest v1.487 witness report, require a separately digest-pinned policy with canonically ordered non-weak Ed25519 external-log keys disjoint from every inner log and witness role, authenticate one bounded signed tree head before reconstructing a domain-separated exact-report inclusion path, and retain one context-keyed no-replace report without claiming external-log consistency, global non-equivocation, selected-ledger rollback resistance, trusted time, real organizational independence, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.489.0 | Factory-release transparency external-log consistency | Fully reload the exact v1.488 anchor and complete retained predecessor chain, authenticate both external signed heads before interpreting one bounded RFC 6962-shaped consistency path, require strict append-only growth under one log/key/policy context, and retain up to 10,000 no-replace generations without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, real organizational independence, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.490.0 | Factory-release transparency external-log gossip | Fully reload the latest complete v1.489 head, verify one independently pinned observer receipt only after authenticating both external-log views, accept identical trees or a bounded consistency proof in either direction, reject same-size divergent roots and observer role reuse, and retain one local-generation/observer-keyed no-replace comparison without claiming global non-equivocation, observer quorum, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
+| v1.491.0 | Factory-release transparency external-log gossip quorum | Acquire canonical v1.490 observation envelopes through bounded no-redirect HTTPS with hash-bound transport receipts, fully replay every selected observation against the exact latest v1.489 head, require a digest-pinned threshold of distinct organization/observer/key tuples to agree on one exact signed external head, reject later forks that merely share the local prefix, and durably retain one local-generation/policy-keyed no-replace report without claiming global non-equivocation, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1909,7 +1910,7 @@ views in one selected ledger. Global non-equivocation, selected-ledger rollback
 resistance, trusted time, real organizational independence, transport/legal
 identity, capacity, order, payment, and exactly-once execution remain false.
 
-The current v1.490.0 milestone adds one independently pinned observer view
+The released v1.490.0 milestone adds one independently pinned observer view
 without changing any v1.484–v1.489 wire byte. A canonical receipt embeds a
 policy-matched external signed head, its exact identity, an observer ID and
 non-weak Ed25519 key, a bounded receipt window, and a domain-separated observer
@@ -1928,6 +1929,29 @@ The Unix boundary reloads the complete v1.484–v1.489 chain and always selects
 the latest retained external-consistency generation. Its no-replace filename
 binds that generation plus the observer ID and key, so different observers can
 coexist while competing evidence for one observer conflicts. Exact retry
-returns retained bytes after receipt expiry. Remote bounded acquisition and an
-observer threshold are next; observer key rotation and a governed organization
-registry remain later trust boundaries.
+returns retained bytes after receipt expiry.
+
+The current v1.491.0 milestone adds bounded remote acquisition and a static
+observer-organization threshold without changing any v1.484–v1.490 wire byte.
+The HTTPS adapter rejects redirects, queries, userinfo, non-JSON responses,
+responses above 1 MiB, and timeouts outside 1–600 seconds. Optional bearer
+credentials come only from a named environment variable and never enter the
+observation, transport receipt, quorum report, or selected ledger.
+
+Each canonical observation envelope pairs one v1.490 signed receipt with its
+optional v1.489 consistency proof. A hash-bound transport receipt records the
+exact request, response, local head, policy, organization, observer, and key.
+The Unix verifier then reloads the complete latest v1.489 chain and replays the
+v1.490 signature, freshness, role-separation, and Merkle checks for every
+selected observation instead of trusting the transport receipt.
+
+The digest-pinned policy admits 2–100 canonically ordered, distinct
+organization, observer, and non-weak Ed25519-key tuples. All selected observers
+must agree on the same exact signed external head before any organization
+counts toward the threshold. This deliberately rejects two later forks even
+when each is independently consistent with the same local prefix. A below-
+threshold report is published only to the requested output; a met quorum is
+also retained under one local-generation/policy-keyed no-replace name. Exact
+retry returns the retained bytes after expiry, while alternate evidence
+conflicts. Observer key rotation and a governed organization registry remain
+later trust boundaries.
