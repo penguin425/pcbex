@@ -446,6 +446,7 @@ fn retains_dual_signed_rotations_and_derives_the_current_policy() {
 #[test]
 fn publishes_closed_bounded_rotation_schemas() {
     let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
     for (command, filename) in [
         (
             "factory-release-state-transparency-external-gossip-observer-trust-state-schema",
@@ -460,7 +461,7 @@ fn publishes_closed_bounded_rotation_schemas() {
             "report.schema.json",
         ),
     ] {
-        let output = temporary.path().join(filename);
+        let output = root.join(filename);
         successful(&[command, "--output", path(&output)]);
         let schema: Value = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
         assert_closed_and_bounded(&schema);
