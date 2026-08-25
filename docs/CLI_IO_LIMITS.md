@@ -762,6 +762,34 @@ Authority threshold governance, host-ledger rollback resistance, global
 non-equivocation, trusted time, real organizational independence, legal
 identity, ordering, payment, and exactly-once execution remain false.
 
+## Factory-state external gossip registry threshold-governance limits
+
+The v1.495 root-signed governance document is capped at 32 KiB. It contains
+2–100 ordered, distinct authority identities and non-weak Ed25519 public keys;
+`minimum_approvals` is bounded from 2 through the authority count.
+
+Each self-contained threshold transition is capped at 128 KiB. It embeds the
+exact governance document, one admission/suspension/revocation payload, and an
+ordered set of distinct approvals. The event shares the existing 4,096-event
+registry history ceiling. The threshold-aware report remains capped at
+128 MiB.
+
+Governance binds the exact pre-activation registry generation and semantic
+state digest. Its first accepted transition stores the governance digest in
+registry state; later root-only transitions and authority rotations fail
+closed. Governance, registry-root, and every initial, historical, and current
+observer key must remain role-disjoint at the selected-ledger boundary.
+
+Legacy, authority-rotation, and threshold apply commands serialize on the same
+descriptor-pinned ledger manifest. Identical retries converge, while competing
+event types select one no-replace generation winner. The v1.493 and v1.494
+verifiers reject threshold-governed history.
+
+The report proves cryptographic threshold satisfaction, not independent
+control of the configured keys. Governance rotation, host-ledger rollback
+resistance, global non-equivocation, trusted time, legal identity, ordering,
+payment, and exactly-once execution remain false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

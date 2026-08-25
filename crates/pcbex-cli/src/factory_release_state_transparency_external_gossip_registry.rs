@@ -4,7 +4,9 @@
 //! It adds an independently pinned generation-zero registry and retains each
 //! authority-signed admission, suspension, or permanent revocation. v1.494
 //! preserves those artifacts while adding dual-signed authority rotation and
-//! typed mixed-history verification in the same selected ledger.
+//! typed mixed-history verification in the same selected ledger. v1.495 adds
+//! root-authorized threshold governance, locks out root-only mutations after
+//! activation, and replays all three event types from the pinned genesis.
 
 use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
 use crate::factory_release_state_transparency_external_gossip_quorum::{
@@ -37,19 +39,31 @@ pub(crate) const SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGIS
     &str = "signed-factory-release-state-transparency-external-gossip-organization-registry-transition-v1";
 pub(crate) const SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_SCOPE:
     &str = "signed-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1";
+pub(crate) const SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_SCOPE:
+    &str = "signed-factory-release-state-transparency-external-gossip-organization-registry-governance-v1";
+pub(crate) const SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_SCOPE:
+    &str = "signed-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-v1";
 pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_VERIFICATION_SCOPE:
     &str = "verified-factory-release-state-transparency-external-gossip-organization-registry-v1";
 pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_VERIFICATION_SCOPE:
     &str = "verified-factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-v1";
+pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_VERIFICATION_SCOPE:
+    &str = "verified-factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-v1";
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_BYTES: u64 =
     256 * 1024;
 pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_BYTES:
     u64 = 16 * 1024;
 pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES:
     u64 = 16 * 1024;
+pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_BYTES:
+    u64 = 32 * 1024;
+pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_BYTES:
+    u64 = 128 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_REPORT_BYTES: u64 =
     128 * 1024 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_REPORT_BYTES:
+    u64 = 128 * 1024 * 1024;
+pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_REPORT_BYTES:
     u64 = 128 * 1024 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS:
     usize = 4_096;
@@ -60,18 +74,28 @@ const MAX_TIMESTAMP: u64 = 999_999_999_999_999;
 const TRANSITION_DOMAIN: &str =
     "pcbex-factory-release-state-transparency-external-gossip-organization-registry-transition-v1";
 const AUTHORITY_KEY_ROTATION_DOMAIN: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1";
+const GOVERNANCE_DOMAIN: &str =
+    "pcbex-factory-release-state-transparency-external-gossip-organization-registry-governance-v1";
+const THRESHOLD_TRANSITION_DOMAIN: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-v1";
+const MAXIMUM_GOVERNANCE_AUTHORITIES: usize = 100;
 const REPORT_BINDING_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-report:v1\0";
 const AUTHORITY_ROTATION_REPORT_BINDING_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-report:v1\0";
+const THRESHOLD_GOVERNANCE_REPORT_BINDING_DOMAIN: &[u8] =
+    b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-report:v1\0";
 const TRANSITION_FILENAME_CONTEXT_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-transition-filename:v1\0";
 const AUTHORITY_KEY_ROTATION_FILENAME_CONTEXT_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-filename:v1\0";
+const THRESHOLD_TRANSITION_FILENAME_CONTEXT_DOMAIN: &[u8] =
+    b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-filename:v1\0";
 const REPORT_FILENAME_CONTEXT_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-report-filename:v1\0";
 const AUTHORITY_ROTATION_REPORT_FILENAME_CONTEXT_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-report-filename:v1\0";
+const THRESHOLD_GOVERNANCE_REPORT_FILENAME_CONTEXT_DOMAIN: &[u8] =
+    b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-report-filename:v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +133,8 @@ pub(crate) struct FactoryReleaseStateTransparencyExternalGossipOrganizationRegis
     pub(crate) registry_id: String,
     pub(crate) generation: u64,
     pub(crate) authority_public_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) active_governance_sha256: Option<String>,
     pub(crate) last_transition_sha256: Option<String>,
     pub(crate) last_updated_at_unix: Option<u64>,
     pub(crate) organizations:
@@ -168,6 +194,67 @@ pub(crate) struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizatio
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority {
+    pub(crate) authority_id: String,
+    pub(crate) public_key: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance
+{
+    pub(crate) schema_version: u32,
+    pub(crate) governance_scope: String,
+    pub(crate) base_observer_quorum_policy_sha256: String,
+    pub(crate) policy_id: String,
+    pub(crate) registry_id: String,
+    pub(crate) registry_generation: u64,
+    pub(crate) registry_state_sha256: String,
+    pub(crate) registry_authority_public_key: String,
+    pub(crate) minimum_approvals: u32,
+    pub(crate) authorities:
+        Vec<FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority>,
+    pub(crate) issued_at_unix: u64,
+    pub(crate) algorithm: String,
+    pub(crate) signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryThresholdApproval {
+    pub(crate) authority_id: String,
+    pub(crate) public_key: String,
+    pub(crate) signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition
+{
+    pub(crate) schema_version: u32,
+    pub(crate) transition_scope: String,
+    pub(crate) base_observer_quorum_policy_sha256: String,
+    pub(crate) policy_id: String,
+    pub(crate) registry_id: String,
+    pub(crate) from_generation: u64,
+    pub(crate) to_generation: u64,
+    pub(crate) previous_transition_sha256: Option<String>,
+    pub(crate) governance_sha256: String,
+    pub(crate) governance:
+        SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+    pub(crate) action: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction,
+    pub(crate) organization_id: String,
+    pub(crate) observer_id: Option<String>,
+    pub(crate) observer_trust_state_sha256: Option<String>,
+    pub(crate) reason_sha256: String,
+    pub(crate) effective_at_unix: u64,
+    pub(crate) algorithm: String,
+    pub(crate) approvals:
+        Vec<FactoryReleaseStateTransparencyExternalGossipRegistryThresholdApproval>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryTransitionEvidence {
     pub(crate) artifact: ExactArtifactIdentity,
     pub(crate) transition:
@@ -186,6 +273,27 @@ pub(crate) enum FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEven
         artifact: ExactArtifactIdentity,
         rotation:
             SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence
+{
+    OrganizationTransition {
+        artifact: ExactArtifactIdentity,
+        transition:
+            SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition,
+    },
+    AuthorityKeyRotation {
+        artifact: ExactArtifactIdentity,
+        rotation:
+            SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+    },
+    ThresholdTransition {
+        artifact: ExactArtifactIdentity,
+        transition:
+            Box<SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition>,
     },
 }
 
@@ -285,6 +393,67 @@ pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryAuthority
     pub(crate) binding_sha256: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport
+{
+    pub(crate) schema_version: u32,
+    pub(crate) verification_scope: String,
+    pub(crate) status: String,
+    pub(crate) registry_genesis_pin_matched: bool,
+    pub(crate) complete_registry_history_verified: bool,
+    pub(crate) registry_authority_transition_signatures_verified: bool,
+    pub(crate) registry_authority_rotation_dual_signatures_verified: bool,
+    pub(crate) registry_authority_successor_possession_verified: bool,
+    pub(crate) registry_authority_key_history_unique: bool,
+    pub(crate) governance_root_signature_verified: bool,
+    pub(crate) governance_authority_identities_unique: bool,
+    pub(crate) governance_authority_keys_unique: bool,
+    pub(crate) governance_threshold_approvals_verified: bool,
+    pub(crate) root_only_registry_mutations_locked_out: bool,
+    pub(crate) registry_generation_chain_verified: bool,
+    pub(crate) registry_digest_chain_verified: bool,
+    pub(crate) registry_timestamps_monotonic: bool,
+    pub(crate) registry_authority_role_separation_verified: bool,
+    pub(crate) current_observer_trust_admissions_verified: bool,
+    pub(crate) selected_observer_organizations_active: bool,
+    pub(crate) registry_effective_before_quorum_evaluation_verified: bool,
+    pub(crate) selected_ledger_latest_registry_verified: bool,
+    pub(crate) selected_ledger_observer_trust_report_verified: bool,
+    pub(crate) selected_ledger_latest_observer_rotations_verified: bool,
+    pub(crate) selected_ledger_registry_bound_report_committed: bool,
+    pub(crate) selected_ledger_rollback_resistance_verified: bool,
+    pub(crate) authority_threshold_governance_verified: bool,
+    pub(crate) global_non_equivocation_verified: bool,
+    pub(crate) trusted_time_verified: bool,
+    pub(crate) independent_organization_operation_verified: bool,
+    pub(crate) factory_legal_identity_verified: bool,
+    pub(crate) capacity_reserved: bool,
+    pub(crate) order_placed: bool,
+    pub(crate) payment_performed: bool,
+    pub(crate) exactly_once_execution_verified: bool,
+    pub(crate) quorum_met: bool,
+    pub(crate) registry_genesis_artifact: ExactArtifactIdentity,
+    pub(crate) registry_genesis_sha256: String,
+    pub(crate) registry_genesis: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    pub(crate) registry_history_event_count: u32,
+    pub(crate) registry_authority_rotation_count: u32,
+    pub(crate) registry_threshold_transition_count: u32,
+    pub(crate) registry_history_events: Vec<
+        FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence,
+    >,
+    pub(crate) active_governance_sha256: String,
+    pub(crate) active_governance:
+        SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+    pub(crate) current_registry: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    pub(crate) current_registry_sha256: String,
+    pub(crate) observer_trust_report_artifact: ExactArtifactIdentity,
+    pub(crate) observer_trust_report:
+        FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
+    pub(crate) evaluated_at_unix: u64,
+    pub(crate) binding_sha256: String,
+}
+
 #[derive(Serialize)]
 struct TransitionPayload<'a> {
     domain: &'static str,
@@ -320,6 +489,44 @@ struct AuthorityKeyRotationPayload<'a> {
     old_public_key: &'a str,
     new_public_key: &'a str,
     rotated_at_unix: u64,
+    algorithm: &'static str,
+}
+
+#[derive(Serialize)]
+struct GovernancePayload<'a> {
+    domain: &'static str,
+    schema_version: u32,
+    governance_scope: &'static str,
+    base_observer_quorum_policy_sha256: &'a str,
+    policy_id: &'a str,
+    registry_id: &'a str,
+    registry_generation: u64,
+    registry_state_sha256: &'a str,
+    registry_authority_public_key: &'a str,
+    minimum_approvals: u32,
+    authorities: &'a [FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority],
+    issued_at_unix: u64,
+    algorithm: &'static str,
+}
+
+#[derive(Serialize)]
+struct ThresholdTransitionPayload<'a> {
+    domain: &'static str,
+    schema_version: u32,
+    transition_scope: &'static str,
+    base_observer_quorum_policy_sha256: &'a str,
+    policy_id: &'a str,
+    registry_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&'a str>,
+    governance_sha256: &'a str,
+    action: &'a FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction,
+    organization_id: &'a str,
+    observer_id: Option<&'a str>,
+    observer_trust_state_sha256: Option<&'a str>,
+    reason_sha256: &'a str,
+    effective_at_unix: u64,
     algorithm: &'static str,
 }
 
@@ -379,6 +586,7 @@ pub(crate) fn new_factory_release_state_transparency_external_gossip_organizatio
         registry_id: registry_id.into(),
         generation: 0,
         authority_public_key,
+        active_governance_sha256: None,
         last_transition_sha256: None,
         last_updated_at_unix: None,
         organizations: Vec::new(),
@@ -399,6 +607,12 @@ pub(crate) fn sign_factory_release_state_transparency_external_gossip_organizati
 ) -> Result<SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition, String>
 {
     validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "factory release transparency external gossip registry with active governance rejects root-only transitions"
+                .into(),
+        );
+    }
     validate_slug(
         organization_id,
         "factory release transparency external gossip registry organization id",
@@ -487,6 +701,12 @@ pub(crate) fn apply_factory_release_state_transparency_external_gossip_organizat
     transition: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition,
 ) -> Result<FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry, String> {
     validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "factory release transparency external gossip registry with active governance rejects root-only transitions"
+                .into(),
+        );
+    }
     validate_signed_factory_release_state_transparency_external_gossip_organization_registry_transition(
         transition,
     )?;
@@ -557,6 +777,7 @@ pub(crate) fn apply_factory_release_state_transparency_external_gossip_organizat
         registry_id: registry.registry_id.clone(),
         generation: transition.to_generation,
         authority_public_key: registry.authority_public_key.clone(),
+        active_governance_sha256: None,
         last_transition_sha256: Some(
             signed_factory_release_state_transparency_external_gossip_organization_registry_transition_sha256(
                 transition,
@@ -579,6 +800,12 @@ pub(crate) fn sign_factory_release_state_transparency_external_gossip_organizati
     String,
 > {
     validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "factory release transparency external gossip registry with active governance rejects root-only authority rotation"
+                .into(),
+        );
+    }
     if rotated_at_unix > MAX_TIMESTAMP {
         return Err(
             "factory release transparency external gossip registry authority rotation time is outside its bound"
@@ -667,6 +894,12 @@ pub(crate) fn apply_factory_release_state_transparency_external_gossip_organizat
     rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
 ) -> Result<FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry, String> {
     validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "factory release transparency external gossip registry with active governance rejects root-only authority rotation"
+                .into(),
+        );
+    }
     validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
         rotation,
     )?;
@@ -732,6 +965,7 @@ pub(crate) fn apply_factory_release_state_transparency_external_gossip_organizat
         registry_id: registry.registry_id.clone(),
         generation: rotation.to_generation,
         authority_public_key: rotation.new_public_key.clone(),
+        active_governance_sha256: None,
         last_transition_sha256: Some(
             signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_sha256(
                 rotation,
@@ -739,6 +973,415 @@ pub(crate) fn apply_factory_release_state_transparency_external_gossip_organizat
         ),
         last_updated_at_unix: Some(rotation.rotated_at_unix),
         organizations: registry.organizations.clone(),
+    };
+    validate_factory_release_state_transparency_external_gossip_organization_registry(&next)?;
+    Ok(next)
+}
+
+pub(crate) fn sign_factory_release_state_transparency_external_gossip_organization_registry_governance(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    registry_authority_secret_key: &[u8; 32],
+    minimum_approvals: u32,
+    mut authorities: Vec<FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority>,
+    issued_at_unix: u64,
+) -> Result<SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance, String>
+{
+    validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "factory release transparency external gossip registry already has active governance"
+                .into(),
+        );
+    }
+    if !(2..=MAXIMUM_GOVERNANCE_AUTHORITIES as u32).contains(&minimum_approvals) {
+        return Err(
+            "factory release transparency external gossip registry governance minimum approvals must be between 2 and 100"
+                .into(),
+        );
+    }
+    if issued_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "factory release transparency external gossip registry governance issue time is outside its bound"
+                .into(),
+        );
+    }
+    authorities.sort_by(|left, right| left.authority_id.cmp(&right.authority_id));
+    validate_governance_authorities(&authorities)?;
+    if authorities.len() < minimum_approvals as usize {
+        return Err(
+            "factory release transparency external gossip registry governance has fewer authorities than its threshold"
+                .into(),
+        );
+    }
+    let signing_key = SigningKey::from_bytes(registry_authority_secret_key);
+    let registry_authority_public_key = hex::encode(signing_key.verifying_key().to_bytes());
+    if registry_authority_public_key != registry.authority_public_key {
+        return Err(
+            "factory release transparency external gossip registry governance signer does not match retained authority"
+                .into(),
+        );
+    }
+    if registry
+        .last_updated_at_unix
+        .is_some_and(|last| issued_at_unix < last)
+    {
+        return Err(
+            "factory release transparency external gossip registry governance predates retained state"
+                .into(),
+        );
+    }
+    let payload = governance_payload(
+        &registry.base_observer_quorum_policy_sha256,
+        &registry.policy_id,
+        &registry.registry_id,
+        registry.generation,
+        &factory_release_state_transparency_external_gossip_organization_registry_sha256(registry)?,
+        &registry_authority_public_key,
+        minimum_approvals,
+        &authorities,
+        issued_at_unix,
+    )?;
+    let governance =
+        SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance {
+            schema_version:
+                FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+            governance_scope:
+                SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_SCOPE
+                    .into(),
+            base_observer_quorum_policy_sha256: registry.base_observer_quorum_policy_sha256.clone(),
+            policy_id: registry.policy_id.clone(),
+            registry_id: registry.registry_id.clone(),
+            registry_generation: registry.generation,
+            registry_state_sha256:
+                factory_release_state_transparency_external_gossip_organization_registry_sha256(
+                    registry,
+                )?,
+            registry_authority_public_key,
+            minimum_approvals,
+            authorities,
+            issued_at_unix,
+            algorithm: "ed25519".into(),
+            signature: hex::encode(signing_key.sign(&payload).to_bytes()),
+        };
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        &governance,
+    )?;
+    Ok(governance)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sign_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    governance: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+    signers: &[(String, [u8; 32])],
+    action: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction,
+    organization_id: &str,
+    observer_trust_state: Option<&FactoryReleaseStateTransparencyExternalGossipObserverTrustState>,
+    reason_sha256: &str,
+    effective_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition,
+    String,
+> {
+    validate_governance_for_registry(registry, governance)?;
+    validate_slug(
+        organization_id,
+        "factory release transparency external gossip registry organization id",
+    )?;
+    validate_digest(
+        reason_sha256,
+        "factory release transparency external gossip registry threshold transition reason SHA-256",
+    )?;
+    if effective_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "factory release transparency external gossip registry threshold transition time is outside its bound"
+                .into(),
+        );
+    }
+    if effective_at_unix < governance.issued_at_unix
+        || registry
+            .last_updated_at_unix
+            .is_some_and(|last| effective_at_unix < last)
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition timestamps must be monotonic"
+                .into(),
+        );
+    }
+    if signers.len() < governance.minimum_approvals as usize
+        || signers.len() > governance.authorities.len()
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition does not satisfy its threshold"
+                .into(),
+        );
+    }
+    let governance_sha256 =
+        signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+            governance,
+        )?;
+    if registry
+        .active_governance_sha256
+        .as_deref()
+        .is_some_and(|retained| retained != governance_sha256)
+    {
+        return Err(
+            "factory release transparency external gossip registry governance does not match retained active governance"
+                .into(),
+        );
+    }
+    let (observer_id, observer_trust_state_sha256) =
+        transition_observer_binding(registry, &action, organization_id, observer_trust_state)?;
+    let to_generation = registry
+        .generation
+        .checked_add(1)
+        .filter(|generation| {
+            *generation
+                <= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        })
+        .ok_or_else(|| {
+            "factory release transparency external gossip registry generation is exhausted"
+                .to_string()
+        })?;
+    let payload = threshold_transition_payload(
+        registry,
+        to_generation,
+        &governance_sha256,
+        &action,
+        organization_id,
+        observer_id.as_deref(),
+        observer_trust_state_sha256.as_deref(),
+        reason_sha256,
+        effective_at_unix,
+    )?;
+    let mut seen_ids = HashSet::new();
+    let mut seen_keys = HashSet::new();
+    let mut approvals = Vec::with_capacity(signers.len());
+    for (authority_id, secret_key) in signers {
+        if !seen_ids.insert(authority_id.as_str()) {
+            return Err(
+                "duplicate factory release transparency external gossip registry governance authority identity"
+                    .into(),
+            );
+        }
+        let signing_key = SigningKey::from_bytes(secret_key);
+        let public_key = hex::encode(signing_key.verifying_key().to_bytes());
+        if !seen_keys.insert(public_key.clone()) {
+            return Err(
+                "duplicate factory release transparency external gossip registry governance authority key"
+                    .into(),
+            );
+        }
+        let trusted = governance
+            .authorities
+            .binary_search_by(|entry| entry.authority_id.as_str().cmp(authority_id))
+            .ok()
+            .map(|index| &governance.authorities[index])
+            .ok_or_else(|| {
+                format!(
+                    "untrusted factory release transparency external gossip registry governance authority {authority_id:?}"
+                )
+            })?;
+        if trusted.public_key != public_key {
+            return Err(format!(
+                "factory release transparency external gossip registry governance authority {authority_id:?} key does not match governance"
+            ));
+        }
+        approvals.push(
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdApproval {
+                authority_id: authority_id.clone(),
+                public_key,
+                signature: hex::encode(signing_key.sign(&payload).to_bytes()),
+            },
+        );
+    }
+    approvals.sort_by(|left, right| left.authority_id.cmp(&right.authority_id));
+    let transition = SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition {
+        schema_version: FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+        transition_scope: SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_SCOPE.into(),
+        base_observer_quorum_policy_sha256: registry.base_observer_quorum_policy_sha256.clone(),
+        policy_id: registry.policy_id.clone(),
+        registry_id: registry.registry_id.clone(),
+        from_generation: registry.generation,
+        to_generation,
+        previous_transition_sha256: registry.last_transition_sha256.clone(),
+        governance_sha256,
+        governance: governance.clone(),
+        action,
+        organization_id: organization_id.into(),
+        observer_id,
+        observer_trust_state_sha256,
+        reason_sha256: reason_sha256.into(),
+        effective_at_unix,
+        algorithm: "ed25519".into(),
+        approvals,
+    };
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+        &transition,
+    )?;
+    Ok(transition)
+}
+
+pub(crate) fn apply_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    transition: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition,
+) -> Result<FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry, String> {
+    validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+        transition,
+    )?;
+    let governance = &transition.governance;
+    validate_governance_for_registry(registry, governance)?;
+    let governance_sha256 =
+        signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+            governance,
+        )?;
+    if registry
+        .active_governance_sha256
+        .as_deref()
+        .is_some_and(|retained| retained != governance_sha256)
+    {
+        return Err(
+            "factory release transparency external gossip registry governance does not match retained active governance"
+                .into(),
+        );
+    }
+    let expected_generation = registry.generation.checked_add(1).ok_or_else(|| {
+        "factory release transparency external gossip registry generation overflow".to_string()
+    })?;
+    if transition.base_observer_quorum_policy_sha256 != registry.base_observer_quorum_policy_sha256
+        || transition.policy_id != registry.policy_id
+        || transition.registry_id != registry.registry_id
+        || transition.from_generation != registry.generation
+        || transition.to_generation != expected_generation
+        || transition.previous_transition_sha256 != registry.last_transition_sha256
+        || transition.governance_sha256 != governance_sha256
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition does not extend the selected state"
+                .into(),
+        );
+    }
+    if transition.effective_at_unix < governance.issued_at_unix
+        || registry
+            .last_updated_at_unix
+            .is_some_and(|last| transition.effective_at_unix < last)
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition timestamps must be monotonic"
+                .into(),
+        );
+    }
+    if transition.approvals.len() < governance.minimum_approvals as usize
+        || transition.approvals.len() > governance.authorities.len()
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition has an invalid approval count"
+                .into(),
+        );
+    }
+    let payload = threshold_transition_payload(
+        registry,
+        transition.to_generation,
+        &transition.governance_sha256,
+        &transition.action,
+        &transition.organization_id,
+        transition.observer_id.as_deref(),
+        transition.observer_trust_state_sha256.as_deref(),
+        &transition.reason_sha256,
+        transition.effective_at_unix,
+    )?;
+    let mut previous_id: Option<&String> = None;
+    let mut seen_keys = HashSet::new();
+    for approval in &transition.approvals {
+        if previous_id.is_some_and(|id| id >= &approval.authority_id) {
+            return Err(
+                "factory release transparency external gossip registry threshold approvals must be unique and ordered"
+                    .into(),
+            );
+        }
+        previous_id = Some(&approval.authority_id);
+        if !seen_keys.insert(approval.public_key.as_str()) {
+            return Err(
+                "factory release transparency external gossip registry threshold approvals require distinct keys"
+                    .into(),
+            );
+        }
+        let trusted = governance
+            .authorities
+            .binary_search_by(|entry| entry.authority_id.cmp(&approval.authority_id))
+            .ok()
+            .map(|index| &governance.authorities[index])
+            .ok_or_else(|| {
+                "untrusted factory release transparency external gossip registry threshold approval"
+                    .to_string()
+            })?;
+        if trusted.public_key != approval.public_key {
+            return Err(
+                "factory release transparency external gossip registry threshold approval key substitution"
+                    .into(),
+            );
+        }
+        let public_key = decode_hex::<32>(
+            &approval.public_key,
+            "factory release transparency external gossip registry governance approval public key",
+        )?;
+        let signature = Signature::from_bytes(&decode_hex::<64>(
+            &approval.signature,
+            "factory release transparency external gossip registry governance approval signature",
+        )?);
+        VerifyingKey::from_bytes(&public_key)
+            .map_err(|error| format!("invalid governance approval public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| {
+                "factory release transparency external gossip registry threshold approval verification failed"
+                    .to_string()
+            })?;
+    }
+    let compatibility_transition =
+        SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition {
+            schema_version: transition.schema_version,
+            transition_scope:
+                SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_SCOPE
+                    .into(),
+            base_observer_quorum_policy_sha256: transition
+                .base_observer_quorum_policy_sha256
+                .clone(),
+            policy_id: transition.policy_id.clone(),
+            registry_id: transition.registry_id.clone(),
+            from_generation: transition.from_generation,
+            to_generation: transition.to_generation,
+            previous_transition_sha256: transition.previous_transition_sha256.clone(),
+            action: transition.action.clone(),
+            organization_id: transition.organization_id.clone(),
+            observer_id: transition.observer_id.clone(),
+            observer_trust_state_sha256: transition.observer_trust_state_sha256.clone(),
+            reason_sha256: transition.reason_sha256.clone(),
+            effective_at_unix: transition.effective_at_unix,
+            authority_public_key: registry.authority_public_key.clone(),
+            algorithm: "ed25519".into(),
+            signature: "00".repeat(64),
+        };
+    let mut organizations = registry.organizations.clone();
+    apply_action(&mut organizations, &compatibility_transition)?;
+    let next = FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry {
+        schema_version: registry.schema_version,
+        registry_scope: registry.registry_scope.clone(),
+        base_observer_quorum_policy_sha256: registry
+            .base_observer_quorum_policy_sha256
+            .clone(),
+        policy_id: registry.policy_id.clone(),
+        registry_id: registry.registry_id.clone(),
+        generation: transition.to_generation,
+        authority_public_key: registry.authority_public_key.clone(),
+        active_governance_sha256: Some(governance_sha256),
+        last_transition_sha256: Some(
+            signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition_sha256(
+                transition,
+            )?,
+        ),
+        last_updated_at_unix: Some(transition.effective_at_unix),
+        organizations,
     };
     validate_factory_release_state_transparency_external_gossip_organization_registry(&next)?;
     Ok(next)
@@ -1078,6 +1721,226 @@ pub(crate) fn verify_factory_release_state_transparency_external_gossip_quorum_w
     Ok(report)
 }
 
+pub(crate) fn verify_factory_release_state_transparency_external_gossip_quorum_with_organization_registry_threshold_governance(
+    registry_genesis_source: &[u8],
+    expected_registry_genesis_sha256: &str,
+    registry_history_sources: &[Vec<u8>],
+    observer_trust_report_source: &[u8],
+    selected_ledger_latest_registry_verified: bool,
+    selected_ledger_observer_trust_report_verified: bool,
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+    String,
+> {
+    if !selected_ledger_latest_registry_verified {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance verification requires the latest selected-ledger registry"
+                .into(),
+        );
+    }
+    if !selected_ledger_observer_trust_report_verified {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance verification requires the exact selected-ledger observer trust report"
+                .into(),
+        );
+    }
+    if registry_history_sources.len()
+        > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+    {
+        return Err(
+            "factory release transparency external gossip registry history exceeds its event bound"
+                .into(),
+        );
+    }
+    let registry_genesis =
+        parse_factory_release_state_transparency_external_gossip_organization_registry(
+            registry_genesis_source,
+        )?;
+    if registry_genesis.generation != 0 {
+        return Err(
+            "factory release transparency external gossip registry genesis must be generation zero"
+                .into(),
+        );
+    }
+    let actual_registry_genesis_sha256 =
+        factory_release_state_transparency_external_gossip_organization_registry_sha256(
+            &registry_genesis,
+        )?;
+    if actual_registry_genesis_sha256 != expected_registry_genesis_sha256 {
+        return Err(
+            "factory release transparency external gossip registry genesis pin does not match"
+                .into(),
+        );
+    }
+    let mut current_registry = registry_genesis.clone();
+    let mut history_evidence = Vec::with_capacity(registry_history_sources.len());
+    let mut authority_keys = vec![registry_genesis.authority_public_key.clone()];
+    let mut historical_authority_keys =
+        HashSet::from([registry_genesis.authority_public_key.clone()]);
+    let mut authority_rotation_count = 0_u32;
+    let mut threshold_transition_count = 0_u32;
+    let mut active_governance = None;
+    for source in registry_history_sources {
+        let evidence = parse_factory_release_state_transparency_external_gossip_registry_threshold_governance_history_event(source)?;
+        match &evidence {
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::OrganizationTransition {
+                transition,
+                ..
+            } => {
+                current_registry = apply_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                    &current_registry,
+                    transition,
+                )?;
+            }
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::AuthorityKeyRotation {
+                rotation,
+                ..
+            } => {
+                if !historical_authority_keys.insert(rotation.new_public_key.clone()) {
+                    return Err(
+                        "factory release transparency external gossip registry authority rotation reuses a historical key"
+                            .into(),
+                    );
+                }
+                current_registry = apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                    &current_registry,
+                    rotation,
+                )?;
+                authority_keys.push(rotation.new_public_key.clone());
+                authority_rotation_count = authority_rotation_count.checked_add(1).ok_or_else(|| {
+                    "factory release transparency external gossip registry authority rotation count overflow"
+                        .to_string()
+                })?;
+            }
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::ThresholdTransition {
+                transition,
+                ..
+            } => {
+                current_registry = apply_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+                    &current_registry,
+                    transition,
+                )?;
+                active_governance = Some(transition.governance.clone());
+                threshold_transition_count = threshold_transition_count.checked_add(1).ok_or_else(|| {
+                    "factory release transparency external gossip registry threshold transition count overflow"
+                        .to_string()
+                })?;
+            }
+        }
+        history_evidence.push(evidence);
+    }
+    let active_governance = active_governance.ok_or_else(|| {
+        "factory release transparency external gossip registry history has no threshold-governed transition"
+            .to_string()
+    })?;
+    let active_governance_sha256 =
+        signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+            &active_governance,
+        )?;
+    if current_registry.active_governance_sha256.as_deref()
+        != Some(active_governance_sha256.as_str())
+    {
+        return Err(
+            "factory release transparency external gossip registry active governance is inconsistent"
+                .into(),
+        );
+    }
+    let observer_trust_report =
+        parse_factory_release_state_transparency_external_gossip_trust_report(
+            observer_trust_report_source,
+        )?;
+    if observer_trust_report.base_observer_quorum_policy_sha256
+        != current_registry.base_observer_quorum_policy_sha256
+        || observer_trust_report.base_observer_quorum_policy.policy_id != current_registry.policy_id
+    {
+        return Err(
+            "factory release transparency external gossip registry does not bind the observer trust report base policy"
+                .into(),
+        );
+    }
+    if current_registry
+        .last_updated_at_unix
+        .is_some_and(|updated| updated > observer_trust_report.evaluated_at_unix)
+    {
+        return Err(
+            "factory release transparency external gossip registry is newer than the observer trust quorum evaluation"
+                .into(),
+        );
+    }
+    validate_registry_authority_history_role_separation(&authority_keys, &observer_trust_report)?;
+    validate_governance_authority_role_separation(
+        &active_governance,
+        &authority_keys,
+        &observer_trust_report,
+    )?;
+    validate_selected_member_admissions(&current_registry, &observer_trust_report)?;
+
+    let registry_history_event_count = u32::try_from(history_evidence.len()).map_err(|_| {
+        "factory release transparency external gossip registry history event count overflow"
+            .to_string()
+    })?;
+    let current_registry_sha256 =
+        factory_release_state_transparency_external_gossip_organization_registry_sha256(
+            &current_registry,
+        )?;
+    let mut report = FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport {
+        schema_version: FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+        verification_scope: FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_VERIFICATION_SCOPE.into(),
+        status: if observer_trust_report.quorum_met { "verified" } else { "insufficient_organizations" }.into(),
+        registry_genesis_pin_matched: true,
+        complete_registry_history_verified: true,
+        registry_authority_transition_signatures_verified: true,
+        registry_authority_rotation_dual_signatures_verified: true,
+        registry_authority_successor_possession_verified: true,
+        registry_authority_key_history_unique: true,
+        governance_root_signature_verified: true,
+        governance_authority_identities_unique: true,
+        governance_authority_keys_unique: true,
+        governance_threshold_approvals_verified: true,
+        root_only_registry_mutations_locked_out: true,
+        registry_generation_chain_verified: true,
+        registry_digest_chain_verified: true,
+        registry_timestamps_monotonic: true,
+        registry_authority_role_separation_verified: true,
+        current_observer_trust_admissions_verified: true,
+        selected_observer_organizations_active: true,
+        registry_effective_before_quorum_evaluation_verified: true,
+        selected_ledger_latest_registry_verified: true,
+        selected_ledger_observer_trust_report_verified: true,
+        selected_ledger_latest_observer_rotations_verified: true,
+        selected_ledger_registry_bound_report_committed: false,
+        selected_ledger_rollback_resistance_verified: false,
+        authority_threshold_governance_verified: true,
+        global_non_equivocation_verified: false,
+        trusted_time_verified: false,
+        independent_organization_operation_verified: false,
+        factory_legal_identity_verified: false,
+        capacity_reserved: false,
+        order_placed: false,
+        payment_performed: false,
+        exactly_once_execution_verified: false,
+        quorum_met: observer_trust_report.quorum_met,
+        registry_genesis_artifact: exact_identity(registry_genesis_source),
+        registry_genesis_sha256: actual_registry_genesis_sha256,
+        registry_genesis,
+        registry_history_event_count,
+        registry_authority_rotation_count: authority_rotation_count,
+        registry_threshold_transition_count: threshold_transition_count,
+        registry_history_events: history_evidence,
+        active_governance_sha256,
+        active_governance,
+        current_registry,
+        current_registry_sha256,
+        observer_trust_report_artifact: exact_identity(observer_trust_report_source),
+        evaluated_at_unix: observer_trust_report.evaluated_at_unix,
+        observer_trust_report,
+        binding_sha256: String::new(),
+    };
+    report.binding_sha256 = threshold_governance_registry_report_binding(&report)?;
+    validate_threshold_governance_registry_report_self_contained(&report)?;
+    Ok(report)
+}
+
 pub(crate) fn render_factory_release_state_transparency_external_gossip_organization_registry(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
 ) -> Result<Vec<u8>, String> {
@@ -1159,6 +2022,64 @@ pub(crate) fn parse_signed_factory_release_state_transparency_external_gossip_or
     Ok(rotation)
 }
 
+pub(crate) fn render_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+    governance: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+) -> Result<Vec<u8>, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        governance,
+    )?;
+    render_bounded(
+        governance,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_BYTES,
+        "signed factory release transparency external gossip organization registry governance",
+    )
+}
+
+pub(crate) fn parse_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+    source: &[u8],
+) -> Result<SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance, String>
+{
+    let governance = parse_canonical(
+        source,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_BYTES,
+        "signed factory release transparency external gossip organization registry governance",
+    )?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        &governance,
+    )?;
+    Ok(governance)
+}
+
+pub(crate) fn render_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+    transition: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition,
+) -> Result<Vec<u8>, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+        transition,
+    )?;
+    render_bounded(
+        transition,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_BYTES,
+        "signed factory release transparency external gossip organization registry threshold transition",
+    )
+}
+
+pub(crate) fn parse_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+    source: &[u8],
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition,
+    String,
+> {
+    let transition = parse_canonical(
+        source,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_BYTES,
+        "signed factory release transparency external gossip organization registry threshold transition",
+    )?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+        &transition,
+    )?;
+    Ok(transition)
+}
+
 pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_history_event(
     source: &[u8],
 ) -> Result<FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence, String> {
@@ -1180,6 +2101,42 @@ pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_
         FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::AuthorityKeyRotation {
             artifact: exact_identity(source),
             rotation,
+        },
+    )
+}
+
+pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_threshold_governance_history_event(
+    source: &[u8],
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence,
+    String,
+> {
+    if let Ok(transition) = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_transition(source) {
+        return Ok(
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::OrganizationTransition {
+                artifact: exact_identity(source),
+                transition,
+            },
+        );
+    }
+    if let Ok(rotation) = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(source) {
+        return Ok(
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::AuthorityKeyRotation {
+                artifact: exact_identity(source),
+                rotation,
+            },
+        );
+    }
+    let transition = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(source)
+        .map_err(|error| {
+            format!(
+                "invalid factory release transparency external gossip registry threshold-governance history event: {error}"
+            )
+        })?;
+    Ok(
+        FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::ThresholdTransition {
+            artifact: exact_identity(source),
+            transition: Box::new(transition),
         },
     )
 }
@@ -1233,6 +2190,32 @@ pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_
     Ok(report)
 }
 
+pub(crate) fn render_factory_release_state_transparency_external_gossip_registry_threshold_governance_report(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+) -> Result<Vec<u8>, String> {
+    validate_threshold_governance_registry_report_self_contained(report)?;
+    render_bounded(
+        report,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_REPORT_BYTES,
+        "factory release transparency external gossip organization registry threshold-governance verification report",
+    )
+}
+
+pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_threshold_governance_report(
+    source: &[u8],
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+    String,
+> {
+    let report = parse_canonical(
+        source,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_REPORT_BYTES,
+        "factory release transparency external gossip organization registry threshold-governance verification report",
+    )?;
+    validate_threshold_governance_registry_report_self_contained(&report)?;
+    Ok(report)
+}
+
 pub(crate) fn factory_release_state_transparency_external_gossip_organization_registry_sha256(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
 ) -> Result<String, String> {
@@ -1264,6 +2247,30 @@ pub(crate) fn signed_factory_release_state_transparency_external_gossip_organiza
     normalized_sha256(
         rotation,
         "signed factory release transparency external gossip organization registry authority key rotation",
+    )
+}
+
+pub(crate) fn signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+    governance: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+) -> Result<String, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        governance,
+    )?;
+    normalized_sha256(
+        governance,
+        "signed factory release transparency external gossip organization registry governance",
+    )
+}
+
+pub(crate) fn signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition_sha256(
+    transition: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition,
+) -> Result<String, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+        transition,
+    )?;
+    normalized_sha256(
+        transition,
+        "signed factory release transparency external gossip organization registry threshold transition",
     )
 }
 
@@ -1351,6 +2358,48 @@ pub(crate) fn factory_release_state_transparency_external_gossip_registry_author
     ))
 }
 
+pub(crate) fn factory_release_state_transparency_external_gossip_registry_threshold_transition_filename(
+    registry_genesis_sha256: &str,
+    base_policy_sha256: &str,
+    registry_id: &str,
+    generation: u64,
+) -> Result<String, String> {
+    validate_digest(
+        registry_genesis_sha256,
+        "factory release transparency external gossip registry genesis SHA-256",
+    )?;
+    validate_digest(
+        base_policy_sha256,
+        "factory release transparency external gossip base policy SHA-256",
+    )?;
+    validate_slug(
+        registry_id,
+        "factory release transparency external gossip organization registry id",
+    )?;
+    if generation == 0
+        || generation > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition generation is outside its bound"
+                .into(),
+        );
+    }
+    let context = TransitionFilenameContext {
+        registry_genesis_sha256,
+        base_observer_quorum_policy_sha256: base_policy_sha256,
+        registry_id,
+    };
+    let digest = domain_hash(
+        THRESHOLD_TRANSITION_FILENAME_CONTEXT_DOMAIN,
+        &context,
+        "factory release transparency external gossip registry threshold transition filename context",
+    )?;
+    Ok(format!(
+        "factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-v1-{}-{generation:04}.json",
+        &digest[..32]
+    ))
+}
+
 pub(crate) fn factory_release_state_transparency_external_gossip_registry_report_filename(
     report: &FactoryReleaseStateTransparencyExternalGossipRegistryVerificationReport,
 ) -> Result<String, String> {
@@ -1397,6 +2446,29 @@ pub(crate) fn factory_release_state_transparency_external_gossip_registry_author
     ))
 }
 
+pub(crate) fn factory_release_state_transparency_external_gossip_registry_threshold_governance_report_filename(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+) -> Result<String, String> {
+    validate_threshold_governance_registry_report_shape(report)?;
+    let context = ReportFilenameContext {
+        observer_trust_binding_sha256: &report.observer_trust_report.binding_sha256,
+        registry_genesis_sha256: &report.registry_genesis_sha256,
+        current_registry_sha256: &report.current_registry_sha256,
+        registry_generation: report.current_registry.generation,
+    };
+    let digest = domain_hash(
+        THRESHOLD_GOVERNANCE_REPORT_FILENAME_CONTEXT_DOMAIN,
+        &context,
+        "factory release transparency external gossip registry threshold-governance report filename context",
+    )?;
+    Ok(format!(
+        "factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-v1-{}-{:04}-{}.json",
+        report.observer_trust_report.quorum_report.idempotency_key,
+        report.current_registry.generation,
+        &digest[..32]
+    ))
+}
+
 pub(crate) fn validate_factory_release_state_transparency_external_gossip_organization_registry(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
 ) -> Result<(), String> {
@@ -1425,6 +2497,12 @@ pub(crate) fn validate_factory_release_state_transparency_external_gossip_organi
         &registry.authority_public_key,
         "factory release transparency external gossip registry authority public key",
     )?;
+    if let Some(governance_sha256) = &registry.active_governance_sha256 {
+        validate_digest(
+            governance_sha256,
+            "factory release transparency external gossip registry active governance SHA-256",
+        )?;
+    }
     if registry.generation
         > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
     {
@@ -1438,7 +2516,9 @@ pub(crate) fn validate_factory_release_state_transparency_external_gossip_organi
         &registry.last_transition_sha256,
         registry.last_updated_at_unix,
     ) {
-        (0, None, None) if registry.organizations.is_empty() => {}
+        (0, None, None)
+            if registry.organizations.is_empty() && registry.active_governance_sha256.is_none() => {
+        }
         (0, _, _) => {
             return Err(
                 "factory release transparency external gossip registry genesis must be empty and unadvanced"
@@ -1718,6 +2798,295 @@ pub(crate) fn validate_signed_factory_release_state_transparency_external_gossip
     Ok(())
 }
 
+pub(crate) fn validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+    governance: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+) -> Result<(), String> {
+    if governance.schema_version
+        != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION
+        || governance.governance_scope
+            != SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_SCOPE
+        || governance.algorithm != "ed25519"
+        || !(2..=MAXIMUM_GOVERNANCE_AUTHORITIES as u32).contains(&governance.minimum_approvals)
+        || governance.authorities.len() < governance.minimum_approvals as usize
+        || governance.issued_at_unix > MAX_TIMESTAMP
+        || governance.registry_generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+    {
+        return Err(
+            "invalid factory release transparency external gossip registry governance invariants"
+                .into(),
+        );
+    }
+    validate_digest(
+        &governance.base_observer_quorum_policy_sha256,
+        "factory release transparency external gossip registry governance base policy SHA-256",
+    )?;
+    validate_slug(
+        &governance.policy_id,
+        "factory release transparency external gossip registry governance policy id",
+    )?;
+    validate_slug(
+        &governance.registry_id,
+        "factory release transparency external gossip registry governance registry id",
+    )?;
+    validate_digest(
+        &governance.registry_state_sha256,
+        "factory release transparency external gossip registry governance state SHA-256",
+    )?;
+    validate_nonweak_public_key(
+        &governance.registry_authority_public_key,
+        "factory release transparency external gossip registry governance root public key",
+    )?;
+    validate_governance_authorities(&governance.authorities)?;
+    decode_hex::<64>(
+        &governance.signature,
+        "factory release transparency external gossip registry governance root signature",
+    )?;
+    Ok(())
+}
+
+pub(crate) fn validate_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+    transition: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryThresholdTransition,
+) -> Result<(), String> {
+    if transition.schema_version
+        != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION
+        || transition.transition_scope
+            != SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_SCOPE
+        || transition.algorithm != "ed25519"
+        || transition.from_generation.checked_add(1) != Some(transition.to_generation)
+        || transition.to_generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || transition.effective_at_unix > MAX_TIMESTAMP
+    {
+        return Err(
+            "invalid factory release transparency external gossip registry threshold transition invariants"
+                .into(),
+        );
+    }
+    validate_digest(
+        &transition.base_observer_quorum_policy_sha256,
+        "factory release transparency external gossip registry threshold transition base policy SHA-256",
+    )?;
+    validate_slug(
+        &transition.policy_id,
+        "factory release transparency external gossip registry threshold transition policy id",
+    )?;
+    validate_slug(
+        &transition.registry_id,
+        "factory release transparency external gossip registry threshold transition registry id",
+    )?;
+    validate_slug(
+        &transition.organization_id,
+        "factory release transparency external gossip registry threshold transition organization id",
+    )?;
+    validate_digest(
+        &transition.reason_sha256,
+        "factory release transparency external gossip registry threshold transition reason SHA-256",
+    )?;
+    validate_digest(
+        &transition.governance_sha256,
+        "factory release transparency external gossip registry governance SHA-256",
+    )?;
+    if let Some(previous) = &transition.previous_transition_sha256 {
+        validate_digest(
+            previous,
+            "previous factory release transparency external gossip registry threshold transition SHA-256",
+        )?;
+    }
+    if (transition.from_generation == 0) != transition.previous_transition_sha256.is_none() {
+        return Err(
+            "factory release transparency external gossip registry threshold transition chain reference is inconsistent"
+                .into(),
+        );
+    }
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        &transition.governance,
+    )?;
+    let actual_governance_sha256 =
+        signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+            &transition.governance,
+        )?;
+    if transition.governance_sha256 != actual_governance_sha256
+        || transition.base_observer_quorum_policy_sha256
+            != transition.governance.base_observer_quorum_policy_sha256
+        || transition.policy_id != transition.governance.policy_id
+        || transition.registry_id != transition.governance.registry_id
+        || transition.effective_at_unix < transition.governance.issued_at_unix
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition does not bind its governance"
+                .into(),
+        );
+    }
+    match transition.action {
+        FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::AdmitObserver => {
+            validate_observer_slug(
+                transition.observer_id.as_deref().ok_or_else(|| {
+                    "factory release transparency external gossip threshold admission requires an observer id"
+                        .to_string()
+                })?,
+                "admitted factory release transparency external gossip observer id",
+            )?;
+            validate_digest(
+                transition
+                    .observer_trust_state_sha256
+                    .as_deref()
+                    .ok_or_else(|| {
+                        "factory release transparency external gossip threshold admission requires a trust-state SHA-256"
+                            .to_string()
+                    })?,
+                "admitted factory release transparency external gossip observer trust-state SHA-256",
+            )?;
+        }
+        FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::SuspendOrganization
+        | FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::RevokeOrganization => {
+            if transition.observer_id.is_some()
+                || transition.observer_trust_state_sha256.is_some()
+            {
+                return Err(
+                    "factory release transparency external gossip threshold status transition cannot bind an observer"
+                        .into(),
+                );
+            }
+        }
+    }
+    if transition.approvals.len() < transition.governance.minimum_approvals as usize
+        || transition.approvals.len() > transition.governance.authorities.len()
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold transition approval count is invalid"
+                .into(),
+        );
+    }
+    let mut previous_id: Option<&String> = None;
+    let mut public_keys = HashSet::new();
+    for approval in &transition.approvals {
+        validate_slug(
+            &approval.authority_id,
+            "factory release transparency external gossip registry governance approval authority id",
+        )?;
+        validate_nonweak_public_key(
+            &approval.public_key,
+            "factory release transparency external gossip registry governance approval public key",
+        )?;
+        decode_hex::<64>(
+            &approval.signature,
+            "factory release transparency external gossip registry governance approval signature",
+        )?;
+        if previous_id.is_some_and(|previous| previous >= &approval.authority_id)
+            || !public_keys.insert(approval.public_key.as_str())
+        {
+            return Err(
+                "factory release transparency external gossip registry threshold approvals require ordered distinct identities and keys"
+                    .into(),
+            );
+        }
+        previous_id = Some(&approval.authority_id);
+    }
+    Ok(())
+}
+
+fn validate_governance_authorities(
+    authorities: &[FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority],
+) -> Result<(), String> {
+    if authorities.len() < 2 || authorities.len() > MAXIMUM_GOVERNANCE_AUTHORITIES {
+        return Err(
+            "factory release transparency external gossip registry governance requires 2 to 100 authorities"
+                .into(),
+        );
+    }
+    let mut previous_id: Option<&String> = None;
+    let mut public_keys = HashSet::new();
+    for authority in authorities {
+        validate_slug(
+            &authority.authority_id,
+            "factory release transparency external gossip registry governance authority id",
+        )?;
+        validate_nonweak_public_key(
+            &authority.public_key,
+            "factory release transparency external gossip registry governance authority public key",
+        )?;
+        if previous_id.is_some_and(|previous| previous >= &authority.authority_id)
+            || !public_keys.insert(authority.public_key.as_str())
+        {
+            return Err(
+                "factory release transparency external gossip registry governance authorities require ordered distinct identities and keys"
+                    .into(),
+            );
+        }
+        previous_id = Some(&authority.authority_id);
+    }
+    Ok(())
+}
+
+fn validate_governance_for_registry(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    governance: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+) -> Result<(), String> {
+    validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        governance,
+    )?;
+    if governance.base_observer_quorum_policy_sha256 != registry.base_observer_quorum_policy_sha256
+        || governance.policy_id != registry.policy_id
+        || governance.registry_id != registry.registry_id
+        || governance.registry_authority_public_key != registry.authority_public_key
+    {
+        return Err(
+            "factory release transparency external gossip registry governance does not match retained root trust"
+                .into(),
+        );
+    }
+    let governance_sha256 =
+        signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+            governance,
+        )?;
+    if let Some(active) = &registry.active_governance_sha256 {
+        if active != &governance_sha256 {
+            return Err(
+                "factory release transparency external gossip registry governance does not match retained active governance"
+                    .into(),
+            );
+        }
+    } else if governance.registry_generation != registry.generation
+        || governance.registry_state_sha256
+            != factory_release_state_transparency_external_gossip_organization_registry_sha256(
+                registry,
+            )?
+    {
+        return Err(
+            "factory release transparency external gossip registry governance does not bind the activation state"
+                .into(),
+        );
+    }
+    let payload = governance_payload(
+        &governance.base_observer_quorum_policy_sha256,
+        &governance.policy_id,
+        &governance.registry_id,
+        governance.registry_generation,
+        &governance.registry_state_sha256,
+        &governance.registry_authority_public_key,
+        governance.minimum_approvals,
+        &governance.authorities,
+        governance.issued_at_unix,
+    )?;
+    let public_key = decode_hex::<32>(
+        &governance.registry_authority_public_key,
+        "factory release transparency external gossip registry governance root public key",
+    )?;
+    let signature = Signature::from_bytes(&decode_hex::<64>(
+        &governance.signature,
+        "factory release transparency external gossip registry governance root signature",
+    )?);
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid registry governance root public key: {error}"))?
+        .verify_strict(&payload, &signature)
+        .map_err(|_| {
+            "factory release transparency external gossip registry governance root signature verification failed"
+                .to_string()
+        })
+}
+
 fn transition_observer_binding(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
     action: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction,
@@ -1939,6 +3308,82 @@ fn authority_key_rotation_payload(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn governance_payload(
+    base_observer_quorum_policy_sha256: &str,
+    policy_id: &str,
+    registry_id: &str,
+    registry_generation: u64,
+    registry_state_sha256: &str,
+    registry_authority_public_key: &str,
+    minimum_approvals: u32,
+    authorities: &[FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority],
+    issued_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&GovernancePayload {
+        domain: GOVERNANCE_DOMAIN,
+        schema_version:
+            FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+        governance_scope:
+            SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_SCOPE,
+        base_observer_quorum_policy_sha256,
+        policy_id,
+        registry_id,
+        registry_generation,
+        registry_state_sha256,
+        registry_authority_public_key,
+        minimum_approvals,
+        authorities,
+        issued_at_unix,
+        algorithm: "ed25519",
+    })
+    .map_err(|error| {
+        format!(
+            "serializing factory release transparency external gossip registry governance payload: {error}"
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn threshold_transition_payload(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    to_generation: u64,
+    governance_sha256: &str,
+    action: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction,
+    organization_id: &str,
+    observer_id: Option<&str>,
+    observer_trust_state_sha256: Option<&str>,
+    reason_sha256: &str,
+    effective_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&ThresholdTransitionPayload {
+        domain: THRESHOLD_TRANSITION_DOMAIN,
+        schema_version:
+            FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+        transition_scope:
+            SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_SCOPE,
+        base_observer_quorum_policy_sha256: &registry.base_observer_quorum_policy_sha256,
+        policy_id: &registry.policy_id,
+        registry_id: &registry.registry_id,
+        from_generation: registry.generation,
+        to_generation,
+        previous_transition_sha256: registry.last_transition_sha256.as_deref(),
+        governance_sha256,
+        action,
+        organization_id,
+        observer_id,
+        observer_trust_state_sha256,
+        reason_sha256,
+        effective_at_unix,
+        algorithm: "ed25519",
+    })
+    .map_err(|error| {
+        format!(
+            "serializing factory release transparency external gossip registry threshold transition payload: {error}"
+        )
+    })
+}
+
 fn validate_registry_authority_role_separation(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
     observer_trust_report: &FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
@@ -1955,6 +3400,29 @@ fn validate_registry_authority_history_role_separation(
 ) -> Result<(), String> {
     for authority in authority_keys {
         validate_registry_authority_key_role_separation(authority, observer_trust_report)?;
+    }
+    Ok(())
+}
+
+fn validate_governance_authority_role_separation(
+    governance: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryGovernance,
+    registry_authority_keys: &[String],
+    observer_trust_report: &FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
+) -> Result<(), String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        governance,
+    )?;
+    for authority in &governance.authorities {
+        if registry_authority_keys.contains(&authority.public_key) {
+            return Err(
+                "factory release transparency external gossip registry governance authority key is not role-disjoint from registry authority history"
+                    .into(),
+            );
+        }
+        validate_registry_authority_key_role_separation(
+            &authority.public_key,
+            observer_trust_report,
+        )?;
     }
     Ok(())
 }
@@ -2434,6 +3902,292 @@ fn validate_authority_rotation_registry_report_self_contained(
     Ok(())
 }
 
+fn validate_threshold_governance_registry_report_shape(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+) -> Result<(), String> {
+    if report.schema_version
+        != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION
+        || report.verification_scope
+            != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_VERIFICATION_SCOPE
+        || !report.registry_genesis_pin_matched
+        || !report.complete_registry_history_verified
+        || !report.registry_authority_transition_signatures_verified
+        || !report.registry_authority_rotation_dual_signatures_verified
+        || !report.registry_authority_successor_possession_verified
+        || !report.registry_authority_key_history_unique
+        || !report.governance_root_signature_verified
+        || !report.governance_authority_identities_unique
+        || !report.governance_authority_keys_unique
+        || !report.governance_threshold_approvals_verified
+        || !report.root_only_registry_mutations_locked_out
+        || !report.registry_generation_chain_verified
+        || !report.registry_digest_chain_verified
+        || !report.registry_timestamps_monotonic
+        || !report.registry_authority_role_separation_verified
+        || !report.current_observer_trust_admissions_verified
+        || !report.selected_observer_organizations_active
+        || !report.registry_effective_before_quorum_evaluation_verified
+        || !report.selected_ledger_latest_registry_verified
+        || !report.selected_ledger_observer_trust_report_verified
+        || !report.selected_ledger_latest_observer_rotations_verified
+        || report.selected_ledger_registry_bound_report_committed
+        || report.selected_ledger_rollback_resistance_verified
+        || !report.authority_threshold_governance_verified
+        || report.global_non_equivocation_verified
+        || report.trusted_time_verified
+        || report.independent_organization_operation_verified
+        || report.factory_legal_identity_verified
+        || report.capacity_reserved
+        || report.order_placed
+        || report.payment_performed
+        || report.exactly_once_execution_verified
+        || report.quorum_met != report.observer_trust_report.quorum_met
+        || report.evaluated_at_unix != report.observer_trust_report.evaluated_at_unix
+        || report.selected_ledger_latest_observer_rotations_verified
+            != report
+                .observer_trust_report
+                .selected_ledger_latest_observer_rotations_verified
+    {
+        return Err(
+            "invalid factory release transparency external gossip registry threshold-governance report invariants"
+                .into(),
+        );
+    }
+    let expected_status = if report.quorum_met {
+        "verified"
+    } else {
+        "insufficient_organizations"
+    };
+    if report.status != expected_status
+        || report.observer_trust_report.status != expected_status
+        || usize::try_from(report.registry_history_event_count).ok()
+            != Some(report.registry_history_events.len())
+        || report.registry_history_events.len()
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+        || report.current_registry.generation != u64::from(report.registry_history_event_count)
+        || report.registry_authority_rotation_count > report.registry_history_event_count
+        || report.registry_threshold_transition_count == 0
+        || report.registry_threshold_transition_count > report.registry_history_event_count
+        || report
+            .registry_authority_rotation_count
+            .checked_add(report.registry_threshold_transition_count)
+            .is_none_or(|count| count > report.registry_history_event_count)
+        || report.current_registry.active_governance_sha256.as_deref()
+            != Some(report.active_governance_sha256.as_str())
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance report state is inconsistent"
+                .into(),
+        );
+    }
+    validate_digest(
+        &report.registry_genesis_sha256,
+        "factory release transparency external gossip registry genesis SHA-256",
+    )?;
+    validate_digest(
+        &report.current_registry_sha256,
+        "factory release transparency external gossip current registry SHA-256",
+    )?;
+    validate_digest(
+        &report.active_governance_sha256,
+        "factory release transparency external gossip active registry governance SHA-256",
+    )?;
+    validate_digest(
+        &report.binding_sha256,
+        "factory release transparency external gossip registry threshold-governance report binding SHA-256",
+    )?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(
+        &report.active_governance,
+    )?;
+    validate_artifact_identity(
+        &report.registry_genesis_artifact,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_BYTES,
+        "factory release transparency external gossip registry genesis artifact",
+    )?;
+    validate_artifact_identity(
+        &report.observer_trust_report_artifact,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_TRUST_REPORT_BYTES,
+        "factory release transparency external gossip observer trust report artifact",
+    )?;
+    Ok(())
+}
+
+fn validate_threshold_governance_registry_report_self_contained(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+) -> Result<(), String> {
+    validate_threshold_governance_registry_report_shape(report)?;
+    let genesis_source =
+        render_factory_release_state_transparency_external_gossip_organization_registry(
+            &report.registry_genesis,
+        )?;
+    if report.registry_genesis.generation != 0
+        || report.registry_genesis_artifact != exact_identity(&genesis_source)
+        || report.registry_genesis_sha256
+            != factory_release_state_transparency_external_gossip_organization_registry_sha256(
+                &report.registry_genesis,
+            )?
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance report genesis binding is invalid"
+                .into(),
+        );
+    }
+    let mut current = report.registry_genesis.clone();
+    let mut authority_keys = vec![report.registry_genesis.authority_public_key.clone()];
+    let mut historical_authority_keys =
+        HashSet::from([report.registry_genesis.authority_public_key.clone()]);
+    let mut rotation_count = 0_u32;
+    let mut threshold_count = 0_u32;
+    let mut active_governance = None;
+    for evidence in &report.registry_history_events {
+        match evidence {
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::OrganizationTransition {
+                artifact,
+                transition,
+            } => {
+                let source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                    transition,
+                )?;
+                validate_artifact_identity(
+                    artifact,
+                    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_BYTES,
+                    "factory release transparency external gossip registry transition artifact",
+                )?;
+                if *artifact != exact_identity(&source) {
+                    return Err(
+                        "factory release transparency external gossip registry transition artifact identity is invalid"
+                            .into(),
+                    );
+                }
+                current = apply_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                    &current,
+                    transition,
+                )?;
+            }
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::AuthorityKeyRotation {
+                artifact,
+                rotation,
+            } => {
+                let source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                    rotation,
+                )?;
+                validate_artifact_identity(
+                    artifact,
+                    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES,
+                    "factory release transparency external gossip registry authority rotation artifact",
+                )?;
+                if *artifact != exact_identity(&source) {
+                    return Err(
+                        "factory release transparency external gossip registry authority rotation artifact identity is invalid"
+                            .into(),
+                    );
+                }
+                if !historical_authority_keys.insert(rotation.new_public_key.clone()) {
+                    return Err(
+                        "factory release transparency external gossip registry authority rotation reuses a historical key"
+                            .into(),
+                    );
+                }
+                current = apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                    &current,
+                    rotation,
+                )?;
+                authority_keys.push(rotation.new_public_key.clone());
+                rotation_count = rotation_count.checked_add(1).ok_or_else(|| {
+                    "factory release transparency external gossip registry authority rotation count overflow"
+                        .to_string()
+                })?;
+            }
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::ThresholdTransition {
+                artifact,
+                transition,
+            } => {
+                let source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+                    transition,
+                )?;
+                validate_artifact_identity(
+                    artifact,
+                    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_BYTES,
+                    "factory release transparency external gossip registry threshold transition artifact",
+                )?;
+                if *artifact != exact_identity(&source) {
+                    return Err(
+                        "factory release transparency external gossip registry threshold transition artifact identity is invalid"
+                            .into(),
+                    );
+                }
+                current = apply_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+                    &current,
+                    transition,
+                )?;
+                active_governance = Some(transition.governance.clone());
+                threshold_count = threshold_count.checked_add(1).ok_or_else(|| {
+                    "factory release transparency external gossip registry threshold transition count overflow"
+                        .to_string()
+                })?;
+            }
+        }
+    }
+    if rotation_count != report.registry_authority_rotation_count
+        || threshold_count != report.registry_threshold_transition_count
+        || active_governance.as_ref() != Some(&report.active_governance)
+        || report.active_governance_sha256
+            != signed_factory_release_state_transparency_external_gossip_organization_registry_governance_sha256(
+                &report.active_governance,
+            )?
+        || current != report.current_registry
+        || report.current_registry_sha256
+            != factory_release_state_transparency_external_gossip_organization_registry_sha256(
+                &current,
+            )?
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance report does not reproduce its current registry"
+                .into(),
+        );
+    }
+    let trust_source = render_factory_release_state_transparency_external_gossip_trust_report(
+        &report.observer_trust_report,
+    )?;
+    if report.observer_trust_report_artifact != exact_identity(&trust_source)
+        || report.registry_genesis.base_observer_quorum_policy_sha256
+            != report
+                .observer_trust_report
+                .base_observer_quorum_policy_sha256
+        || report.registry_genesis.policy_id
+            != report
+                .observer_trust_report
+                .base_observer_quorum_policy
+                .policy_id
+        || report
+            .current_registry
+            .last_updated_at_unix
+            .is_some_and(|updated| updated > report.evaluated_at_unix)
+    {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance report observer trust binding is invalid"
+                .into(),
+        );
+    }
+    validate_registry_authority_history_role_separation(
+        &authority_keys,
+        &report.observer_trust_report,
+    )?;
+    validate_governance_authority_role_separation(
+        &report.active_governance,
+        &authority_keys,
+        &report.observer_trust_report,
+    )?;
+    validate_selected_member_admissions(&report.current_registry, &report.observer_trust_report)?;
+    if threshold_governance_registry_report_binding(report)? != report.binding_sha256 {
+        return Err(
+            "factory release transparency external gossip registry threshold-governance report binding is invalid"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 fn registry_report_binding(
     report: &FactoryReleaseStateTransparencyExternalGossipRegistryVerificationReport,
 ) -> Result<String, String> {
@@ -2455,6 +4209,18 @@ fn authority_rotation_registry_report_binding(
         AUTHORITY_ROTATION_REPORT_BINDING_DOMAIN,
         &bound,
         "factory release transparency external gossip registry authority-rotation report binding",
+    )
+}
+
+fn threshold_governance_registry_report_binding(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceVerificationReport,
+) -> Result<String, String> {
+    let mut bound = report.clone();
+    bound.binding_sha256.clear();
+    domain_hash(
+        THRESHOLD_GOVERNANCE_REPORT_BINDING_DOMAIN,
+        &bound,
+        "factory release transparency external gossip registry threshold-governance report binding",
     )
 }
 
@@ -2667,6 +4433,7 @@ pub(crate) fn factory_release_state_transparency_external_gossip_organization_re
                 "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
             },
             "authority_public_key": digest_schema(),
+            "active_governance_sha256": digest_schema(),
             "last_transition_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
             "last_updated_at_unix": {
                 "oneOf": [
@@ -2759,6 +4526,111 @@ pub(crate) fn signed_factory_release_state_transparency_external_gossip_organiza
             "algorithm": {"const": "ed25519"},
             "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
             "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub(crate) fn signed_factory_release_state_transparency_external_gossip_organization_registry_governance_json_schema()
+-> Value {
+    let authority = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["authority_id", "public_key"],
+        "properties": {
+            "authority_id": slug_schema(),
+            "public_key": digest_schema()
+        }
+    });
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-factory-release-state-transparency-external-gossip-organization-registry-governance-v1.json",
+        "title": "Root-signed pcbex factory-release transparency external-gossip organization registry threshold governance",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "governance_scope", "base_observer_quorum_policy_sha256",
+            "policy_id", "registry_id", "registry_generation", "registry_state_sha256",
+            "registry_authority_public_key", "minimum_approvals", "authorities",
+            "issued_at_unix", "algorithm", "signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "governance_scope": {"const": SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_SCOPE},
+            "base_observer_quorum_policy_sha256": digest_schema(),
+            "policy_id": slug_schema(),
+            "registry_id": slug_schema(),
+            "registry_generation": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+            },
+            "registry_state_sha256": digest_schema(),
+            "registry_authority_public_key": digest_schema(),
+            "minimum_approvals": {
+                "type": "integer", "minimum": 2,
+                "maximum": MAXIMUM_GOVERNANCE_AUTHORITIES
+            },
+            "authorities": {
+                "type": "array", "minItems": 2,
+                "maxItems": MAXIMUM_GOVERNANCE_AUTHORITIES,
+                "items": authority
+            },
+            "issued_at_unix": {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP},
+            "algorithm": {"const": "ed25519"},
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub(crate) fn signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition_json_schema()
+-> Value {
+    let approval = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["authority_id", "public_key", "signature"],
+        "properties": {
+            "authority_id": slug_schema(),
+            "public_key": digest_schema(),
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    });
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition-v1.json",
+        "title": "Threshold-approved pcbex factory-release transparency external-gossip organization registry transition",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "transition_scope", "base_observer_quorum_policy_sha256",
+            "policy_id", "registry_id", "from_generation", "to_generation",
+            "previous_transition_sha256", "governance_sha256", "governance",
+            "action", "organization_id", "observer_id", "observer_trust_state_sha256",
+            "reason_sha256", "effective_at_unix", "algorithm", "approvals"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "transition_scope": {"const": SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_SCOPE},
+            "base_observer_quorum_policy_sha256": digest_schema(),
+            "policy_id": slug_schema(),
+            "registry_id": slug_schema(),
+            "from_generation": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION - 1
+            },
+            "to_generation": {
+                "type": "integer", "minimum": 1,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+            },
+            "previous_transition_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "governance_sha256": digest_schema(),
+            "governance": signed_factory_release_state_transparency_external_gossip_organization_registry_governance_json_schema(),
+            "action": {"enum": ["admit_observer", "suspend_organization", "revoke_organization"]},
+            "organization_id": slug_schema(),
+            "observer_id": {"oneOf": [{"type": "null"}, observer_slug_schema()]},
+            "observer_trust_state_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "reason_sha256": digest_schema(),
+            "effective_at_unix": {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP},
+            "algorithm": {"const": "ed25519"},
+            "approvals": {
+                "type": "array", "minItems": 2,
+                "maxItems": MAXIMUM_GOVERNANCE_AUTHORITIES,
+                "items": approval
+            }
         }
     })
 }
@@ -2965,6 +4837,150 @@ pub(crate) fn factory_release_state_transparency_external_gossip_registry_author
                 "maxItems": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS,
                 "items": history_event
             },
+            "current_registry": registry,
+            "current_registry_sha256": digest_schema(),
+            "observer_trust_report_artifact": artifact_schema(MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_TRUST_REPORT_BYTES),
+            "observer_trust_report": factory_release_state_transparency_external_gossip_trust_report_json_schema(),
+            "evaluated_at_unix": {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP},
+            "binding_sha256": digest_schema()
+        }
+    })
+}
+
+pub(crate) fn factory_release_state_transparency_external_gossip_registry_threshold_governance_report_json_schema()
+-> Value {
+    let registry =
+        factory_release_state_transparency_external_gossip_organization_registry_json_schema();
+    let transition = signed_factory_release_state_transparency_external_gossip_organization_registry_transition_json_schema();
+    let rotation = signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_json_schema();
+    let threshold_transition = signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition_json_schema();
+    let governance = signed_factory_release_state_transparency_external_gossip_organization_registry_governance_json_schema();
+    let history_event = json!({
+        "oneOf": [
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "artifact", "transition"],
+                "properties": {
+                    "kind": {"const": "organization_transition"},
+                    "artifact": artifact_schema(MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_BYTES),
+                    "transition": transition
+                }
+            },
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "artifact", "rotation"],
+                "properties": {
+                    "kind": {"const": "authority_key_rotation"},
+                    "artifact": artifact_schema(MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES),
+                    "rotation": rotation
+                }
+            },
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "artifact", "transition"],
+                "properties": {
+                    "kind": {"const": "threshold_transition"},
+                    "artifact": artifact_schema(MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_TRANSITION_BYTES),
+                    "transition": threshold_transition
+                }
+            }
+        ]
+    });
+    let true_value = json!({"const": true});
+    let false_value = json!({"const": false});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-verification-report-v1.json",
+        "title": "pcbex factory-release transparency external-gossip organization registry threshold-governance verification report",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "verification_scope", "status",
+            "registry_genesis_pin_matched", "complete_registry_history_verified",
+            "registry_authority_transition_signatures_verified",
+            "registry_authority_rotation_dual_signatures_verified",
+            "registry_authority_successor_possession_verified",
+            "registry_authority_key_history_unique", "governance_root_signature_verified",
+            "governance_authority_identities_unique", "governance_authority_keys_unique",
+            "governance_threshold_approvals_verified", "root_only_registry_mutations_locked_out",
+            "registry_generation_chain_verified", "registry_digest_chain_verified",
+            "registry_timestamps_monotonic", "registry_authority_role_separation_verified",
+            "current_observer_trust_admissions_verified", "selected_observer_organizations_active",
+            "registry_effective_before_quorum_evaluation_verified",
+            "selected_ledger_latest_registry_verified",
+            "selected_ledger_observer_trust_report_verified",
+            "selected_ledger_latest_observer_rotations_verified",
+            "selected_ledger_registry_bound_report_committed",
+            "selected_ledger_rollback_resistance_verified",
+            "authority_threshold_governance_verified", "global_non_equivocation_verified",
+            "trusted_time_verified", "independent_organization_operation_verified",
+            "factory_legal_identity_verified", "capacity_reserved", "order_placed",
+            "payment_performed", "exactly_once_execution_verified", "quorum_met",
+            "registry_genesis_artifact", "registry_genesis_sha256", "registry_genesis",
+            "registry_history_event_count", "registry_authority_rotation_count",
+            "registry_threshold_transition_count", "registry_history_events",
+            "active_governance_sha256", "active_governance", "current_registry",
+            "current_registry_sha256", "observer_trust_report_artifact",
+            "observer_trust_report", "evaluated_at_unix", "binding_sha256"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "verification_scope": {"const": FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_THRESHOLD_GOVERNANCE_VERIFICATION_SCOPE},
+            "status": {"enum": ["verified", "insufficient_organizations"]},
+            "registry_genesis_pin_matched": true_value.clone(),
+            "complete_registry_history_verified": true_value.clone(),
+            "registry_authority_transition_signatures_verified": true_value.clone(),
+            "registry_authority_rotation_dual_signatures_verified": true_value.clone(),
+            "registry_authority_successor_possession_verified": true_value.clone(),
+            "registry_authority_key_history_unique": true_value.clone(),
+            "governance_root_signature_verified": true_value.clone(),
+            "governance_authority_identities_unique": true_value.clone(),
+            "governance_authority_keys_unique": true_value.clone(),
+            "governance_threshold_approvals_verified": true_value.clone(),
+            "root_only_registry_mutations_locked_out": true_value.clone(),
+            "registry_generation_chain_verified": true_value.clone(),
+            "registry_digest_chain_verified": true_value.clone(),
+            "registry_timestamps_monotonic": true_value.clone(),
+            "registry_authority_role_separation_verified": true_value.clone(),
+            "current_observer_trust_admissions_verified": true_value.clone(),
+            "selected_observer_organizations_active": true_value.clone(),
+            "registry_effective_before_quorum_evaluation_verified": true_value.clone(),
+            "selected_ledger_latest_registry_verified": true_value.clone(),
+            "selected_ledger_observer_trust_report_verified": true_value.clone(),
+            "selected_ledger_latest_observer_rotations_verified": true_value.clone(),
+            "selected_ledger_registry_bound_report_committed": false_value.clone(),
+            "selected_ledger_rollback_resistance_verified": false_value.clone(),
+            "authority_threshold_governance_verified": true_value,
+            "global_non_equivocation_verified": false_value.clone(),
+            "trusted_time_verified": false_value.clone(),
+            "independent_organization_operation_verified": false_value.clone(),
+            "factory_legal_identity_verified": false_value.clone(),
+            "capacity_reserved": false_value.clone(),
+            "order_placed": false_value.clone(),
+            "payment_performed": false_value.clone(),
+            "exactly_once_execution_verified": false_value,
+            "quorum_met": {"type": "boolean"},
+            "registry_genesis_artifact": artifact_schema(MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_BYTES),
+            "registry_genesis_sha256": digest_schema(),
+            "registry_genesis": registry.clone(),
+            "registry_history_event_count": {
+                "type": "integer", "minimum": 1,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+            },
+            "registry_authority_rotation_count": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+            },
+            "registry_threshold_transition_count": {
+                "type": "integer", "minimum": 1,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+            },
+            "registry_history_events": {
+                "type": "array", "minItems": 1,
+                "maxItems": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS,
+                "items": history_event
+            },
+            "active_governance_sha256": digest_schema(),
+            "active_governance": governance,
             "current_registry": registry,
             "current_registry_sha256": digest_schema(),
             "observer_trust_report_artifact": artifact_schema(MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_TRUST_REPORT_BYTES),
@@ -3300,19 +5316,243 @@ mod tests {
     }
 
     #[test]
+    fn threshold_governance_requires_distinct_keys_and_locks_out_root_only_mutation() {
+        let policy = policy();
+        let policy_sha =
+            factory_release_state_transparency_external_gossip_quorum_policy_sha256(&policy)
+                .unwrap();
+        let initial = new_factory_release_state_transparency_external_gossip_organization_registry(
+            &policy,
+            &policy_sha,
+            "production-observers",
+            &SigningKey::from_bytes(&[31; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        assert!(
+            !String::from_utf8(
+                render_factory_release_state_transparency_external_gossip_organization_registry(
+                    &initial,
+                )
+                .unwrap()
+            )
+            .unwrap()
+            .contains("active_governance_sha256")
+        );
+
+        let governance = sign_factory_release_state_transparency_external_gossip_organization_registry_governance(
+            &initial,
+            &[31; 32],
+            2,
+            vec![
+                FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority {
+                    authority_id: "authority-c".into(),
+                    public_key: public([43; 32]),
+                },
+                FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority {
+                    authority_id: "authority-a".into(),
+                    public_key: public([41; 32]),
+                },
+                FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority {
+                    authority_id: "authority-b".into(),
+                    public_key: public([42; 32]),
+                },
+            ],
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(governance.authorities[0].authority_id, "authority-a");
+        let governance_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(&governance).unwrap();
+        assert_eq!(
+            parse_signed_factory_release_state_transparency_external_gossip_organization_registry_governance(&governance_source).unwrap(),
+            governance
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_governance(
+                &initial,
+                &[31; 32],
+                2,
+                vec![
+                    FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority {
+                        authority_id: "authority-a".into(),
+                        public_key: public([41; 32]),
+                    },
+                    FactoryReleaseStateTransparencyExternalGossipRegistryGovernanceAuthority {
+                        authority_id: "authority-b".into(),
+                        public_key: public([41; 32]),
+                    },
+                ],
+                1_000,
+            )
+            .is_err()
+        );
+
+        let trust = new_factory_release_state_transparency_external_gossip_observer_trust_state(
+            &policy,
+            &policy_sha,
+            "lab-a",
+            "observer-a",
+        )
+        .unwrap();
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+                &initial,
+                &governance,
+                &[("authority-a".into(), [41; 32])],
+                FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::AdmitObserver,
+                "lab-a",
+                Some(&trust),
+                &"1".repeat(64),
+                1_100,
+            )
+            .is_err()
+        );
+        let admission = sign_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+            &initial,
+            &governance,
+            &[
+                ("authority-b".into(), [42; 32]),
+                ("authority-a".into(), [41; 32]),
+            ],
+            FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::AdmitObserver,
+            "lab-a",
+            Some(&trust),
+            &"1".repeat(64),
+            1_100,
+        )
+        .unwrap();
+        let admission_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(&admission).unwrap();
+        assert_eq!(
+            parse_signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(&admission_source).unwrap(),
+            admission
+        );
+        assert!(matches!(
+            parse_factory_release_state_transparency_external_gossip_registry_threshold_governance_history_event(&admission_source).unwrap(),
+            FactoryReleaseStateTransparencyExternalGossipRegistryThresholdGovernanceHistoryEventEvidence::ThresholdTransition { .. }
+        ));
+        let governed = apply_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+            &initial,
+            &admission,
+        )
+        .unwrap();
+        assert_eq!(governed.organizations.len(), 1);
+        assert_eq!(
+            governed.active_governance_sha256.as_deref(),
+            Some(admission.governance_sha256.as_str())
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                &governed,
+                &[31; 32],
+                FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::SuspendOrganization,
+                "lab-a",
+                None,
+                &"2".repeat(64),
+                1_200,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                &governed,
+                &[31; 32],
+                &[51; 32],
+                1_200,
+            )
+            .is_err()
+        );
+        let suspension = sign_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+            &governed,
+            &governance,
+            &[
+                ("authority-c".into(), [43; 32]),
+                ("authority-a".into(), [41; 32]),
+            ],
+            FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::SuspendOrganization,
+            "lab-a",
+            None,
+            &"2".repeat(64),
+            1_200,
+        )
+        .unwrap();
+        let suspended = apply_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+            &governed,
+            &suspension,
+        )
+        .unwrap();
+        assert_eq!(
+            suspended.organizations[0].status,
+            FactoryReleaseStateTransparencyExternalGossipOrganizationStatus::Suspended
+        );
+        let mut tampered = suspension.clone();
+        let replacement = if tampered.approvals[0].signature.starts_with("00") {
+            "ff"
+        } else {
+            "00"
+        };
+        tampered.approvals[0]
+            .signature
+            .replace_range(..2, replacement);
+        assert!(
+            apply_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+                &governed,
+                &tampered,
+            )
+            .is_err()
+        );
+
+        let root_transition = sign_factory_release_state_transparency_external_gossip_organization_registry_transition(
+            &initial,
+            &[31; 32],
+            FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::AdmitObserver,
+            "lab-a",
+            Some(&trust),
+            &"3".repeat(64),
+            1_050,
+        )
+        .unwrap();
+        let advanced = apply_factory_release_state_transparency_external_gossip_organization_registry_transition(
+            &initial,
+            &root_transition,
+        )
+        .unwrap();
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition(
+                &advanced,
+                &governance,
+                &[
+                    ("authority-a".into(), [41; 32]),
+                    ("authority-b".into(), [42; 32]),
+                ],
+                FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::SuspendOrganization,
+                "lab-a",
+                None,
+                &"4".repeat(64),
+                1_200,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn schemas_are_closed_and_bounded() {
         let registry =
             factory_release_state_transparency_external_gossip_organization_registry_json_schema();
         let transition = signed_factory_release_state_transparency_external_gossip_organization_registry_transition_json_schema();
         let authority_rotation = signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_json_schema();
+        let governance = signed_factory_release_state_transparency_external_gossip_organization_registry_governance_json_schema();
+        let threshold_transition = signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition_json_schema();
         let report =
             factory_release_state_transparency_external_gossip_registry_report_json_schema();
         let authority_rotation_report = factory_release_state_transparency_external_gossip_registry_authority_rotation_report_json_schema();
+        let threshold_governance_report = factory_release_state_transparency_external_gossip_registry_threshold_governance_report_json_schema();
         assert_eq!(registry["additionalProperties"], false);
         assert_eq!(transition["additionalProperties"], false);
         assert_eq!(authority_rotation["additionalProperties"], false);
+        assert_eq!(governance["additionalProperties"], false);
+        assert_eq!(threshold_transition["additionalProperties"], false);
         assert_eq!(report["additionalProperties"], false);
         assert_eq!(authority_rotation_report["additionalProperties"], false);
+        assert_eq!(threshold_governance_report["additionalProperties"], false);
         assert_eq!(
             registry["properties"]["organizations"]["maxItems"],
             MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_OBSERVATIONS
@@ -3328,6 +5568,10 @@ mod tests {
         assert_eq!(
             authority_rotation_report["properties"]["authority_threshold_governance_verified"],
             json!({"const": false})
+        );
+        assert_eq!(
+            threshold_governance_report["properties"]["authority_threshold_governance_verified"],
+            json!({"const": true})
         );
     }
 }

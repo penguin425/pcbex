@@ -253,6 +253,7 @@ it enters a routing, manufacturing, or authorization flow.
 | External-gossip observer rotation v1 | Derive current observer trust from policy-bound, dual-signed, no-replace key histories | `pcbex factory-release-state-transparency-external-gossip-observer-trust-verification-report-schema` |
 | External-gossip organization registry v1 | Admit exact current observer trust and suspend or revoke organizations through one authority-signed no-replace history | `pcbex factory-release-state-transparency-external-gossip-organization-registry-verification-report-schema` |
 | Registry authority rotation v1 | Dual-sign successor authority keys and replay one transition/rotation history without historical key reuse | `pcbex factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-verification-report-schema` |
+| Registry threshold governance v1 | Root-authorize a fixed authority set, require distinct-key threshold approval for every organization decision, and lock out root-only bypasses after activation | `pcbex factory-release-state-transparency-external-gossip-organization-registry-threshold-governance-verification-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
