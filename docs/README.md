@@ -115,6 +115,10 @@ boundary document for the artifact you plan to produce or trust.
   — admit exact current observer trust and suspend or permanently revoke
   organizations through an independently pinned authority-signed history.
 
+- [External-gossip Registry Authority Rotation](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION.md)
+  — require old/new dual signatures, reject historical authority-key reuse, and
+  replay transitions plus rotations as one selected-ledger generation chain.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

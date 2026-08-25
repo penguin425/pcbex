@@ -2,8 +2,9 @@
 //!
 //! The v1.493 boundary leaves every v1.491 and v1.492 wire document unchanged.
 //! It adds an independently pinned generation-zero registry and retains each
-//! authority-signed admission, suspension, or permanent revocation in the same
-//! selected ledger that already owns observer rotations and quorum reports.
+//! authority-signed admission, suspension, or permanent revocation. v1.494
+//! preserves those artifacts while adding dual-signed authority rotation and
+//! typed mixed-history verification in the same selected ledger.
 
 use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
 use crate::factory_release_state_transparency_external_gossip_quorum::{
@@ -26,6 +27,7 @@ use pcbex_kicad::ExactArtifactIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 
 pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION: u32 =
     1;
@@ -33,14 +35,22 @@ pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCO
     "factory-release-state-transparency-external-gossip-organization-registry-v1";
 pub(crate) const SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_SCOPE:
     &str = "signed-factory-release-state-transparency-external-gossip-organization-registry-transition-v1";
+pub(crate) const SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_SCOPE:
+    &str = "signed-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1";
 pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_VERIFICATION_SCOPE:
     &str = "verified-factory-release-state-transparency-external-gossip-organization-registry-v1";
+pub(crate) const FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_VERIFICATION_SCOPE:
+    &str = "verified-factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-v1";
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_BYTES: u64 =
     256 * 1024;
 pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_BYTES:
     u64 = 16 * 1024;
+pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES:
+    u64 = 16 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_REPORT_BYTES: u64 =
     128 * 1024 * 1024;
+pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_REPORT_BYTES:
+    u64 = 128 * 1024 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS:
     usize = 4_096;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION: u64 =
@@ -49,12 +59,19 @@ pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY
 const MAX_TIMESTAMP: u64 = 999_999_999_999_999;
 const TRANSITION_DOMAIN: &str =
     "pcbex-factory-release-state-transparency-external-gossip-organization-registry-transition-v1";
+const AUTHORITY_KEY_ROTATION_DOMAIN: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1";
 const REPORT_BINDING_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-report:v1\0";
+const AUTHORITY_ROTATION_REPORT_BINDING_DOMAIN: &[u8] =
+    b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-report:v1\0";
 const TRANSITION_FILENAME_CONTEXT_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-transition-filename:v1\0";
+const AUTHORITY_KEY_ROTATION_FILENAME_CONTEXT_DOMAIN: &[u8] =
+    b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-filename:v1\0";
 const REPORT_FILENAME_CONTEXT_DOMAIN: &[u8] =
     b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-report-filename:v1\0";
+const AUTHORITY_ROTATION_REPORT_FILENAME_CONTEXT_DOMAIN: &[u8] =
+    b"pcbex:factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-report-filename:v1\0";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -131,10 +148,45 @@ pub(crate) struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizatio
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation
+{
+    pub(crate) schema_version: u32,
+    pub(crate) rotation_scope: String,
+    pub(crate) base_observer_quorum_policy_sha256: String,
+    pub(crate) policy_id: String,
+    pub(crate) registry_id: String,
+    pub(crate) from_generation: u64,
+    pub(crate) to_generation: u64,
+    pub(crate) previous_transition_sha256: Option<String>,
+    pub(crate) old_public_key: String,
+    pub(crate) new_public_key: String,
+    pub(crate) rotated_at_unix: u64,
+    pub(crate) algorithm: String,
+    pub(crate) old_signature: String,
+    pub(crate) new_signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryTransitionEvidence {
     pub(crate) artifact: ExactArtifactIdentity,
     pub(crate) transition:
         SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence {
+    OrganizationTransition {
+        artifact: ExactArtifactIdentity,
+        transition:
+            SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition,
+    },
+    AuthorityKeyRotation {
+        artifact: ExactArtifactIdentity,
+        rotation:
+            SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -182,6 +234,57 @@ pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryVerificat
     pub(crate) binding_sha256: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport
+{
+    pub(crate) schema_version: u32,
+    pub(crate) verification_scope: String,
+    pub(crate) status: String,
+    pub(crate) registry_genesis_pin_matched: bool,
+    pub(crate) complete_registry_history_verified: bool,
+    pub(crate) registry_authority_transition_signatures_verified: bool,
+    pub(crate) registry_authority_rotation_dual_signatures_verified: bool,
+    pub(crate) registry_authority_successor_possession_verified: bool,
+    pub(crate) registry_authority_key_history_unique: bool,
+    pub(crate) registry_generation_chain_verified: bool,
+    pub(crate) registry_digest_chain_verified: bool,
+    pub(crate) registry_timestamps_monotonic: bool,
+    pub(crate) registry_authority_role_separation_verified: bool,
+    pub(crate) current_observer_trust_admissions_verified: bool,
+    pub(crate) selected_observer_organizations_active: bool,
+    pub(crate) registry_effective_before_quorum_evaluation_verified: bool,
+    pub(crate) selected_ledger_latest_registry_verified: bool,
+    pub(crate) selected_ledger_observer_trust_report_verified: bool,
+    pub(crate) selected_ledger_latest_observer_rotations_verified: bool,
+    pub(crate) selected_ledger_registry_bound_report_committed: bool,
+    pub(crate) selected_ledger_rollback_resistance_verified: bool,
+    pub(crate) authority_threshold_governance_verified: bool,
+    pub(crate) global_non_equivocation_verified: bool,
+    pub(crate) trusted_time_verified: bool,
+    pub(crate) independent_organization_operation_verified: bool,
+    pub(crate) factory_legal_identity_verified: bool,
+    pub(crate) capacity_reserved: bool,
+    pub(crate) order_placed: bool,
+    pub(crate) payment_performed: bool,
+    pub(crate) exactly_once_execution_verified: bool,
+    pub(crate) quorum_met: bool,
+    pub(crate) registry_genesis_artifact: ExactArtifactIdentity,
+    pub(crate) registry_genesis_sha256: String,
+    pub(crate) registry_genesis: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    pub(crate) registry_history_event_count: u32,
+    pub(crate) registry_authority_rotation_count: u32,
+    pub(crate) registry_history_events:
+        Vec<FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence>,
+    pub(crate) current_registry: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    pub(crate) current_registry_sha256: String,
+    pub(crate) observer_trust_report_artifact: ExactArtifactIdentity,
+    pub(crate) observer_trust_report:
+        FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
+    pub(crate) evaluated_at_unix: u64,
+    pub(crate) binding_sha256: String,
+}
+
 #[derive(Serialize)]
 struct TransitionPayload<'a> {
     domain: &'static str,
@@ -200,6 +303,23 @@ struct TransitionPayload<'a> {
     reason_sha256: &'a str,
     effective_at_unix: u64,
     authority_public_key: &'a str,
+    algorithm: &'static str,
+}
+
+#[derive(Serialize)]
+struct AuthorityKeyRotationPayload<'a> {
+    domain: &'static str,
+    schema_version: u32,
+    rotation_scope: &'static str,
+    base_observer_quorum_policy_sha256: &'a str,
+    policy_id: &'a str,
+    registry_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
     algorithm: &'static str,
 }
 
@@ -306,7 +426,7 @@ pub(crate) fn sign_factory_release_state_transparency_external_gossip_organizati
     let authority_public_key = hex::encode(authority.verifying_key().to_bytes());
     if authority_public_key != registry.authority_public_key {
         return Err(
-            "factory release transparency external gossip registry authority key does not match retained genesis trust"
+            "factory release transparency external gossip registry authority key does not match the current registry"
                 .into(),
         );
     }
@@ -444,6 +564,181 @@ pub(crate) fn apply_factory_release_state_transparency_external_gossip_organizat
         ),
         last_updated_at_unix: Some(transition.effective_at_unix),
         organizations,
+    };
+    validate_factory_release_state_transparency_external_gossip_organization_registry(&next)?;
+    Ok(next)
+}
+
+pub(crate) fn sign_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    old_authority_secret_key: &[u8; 32],
+    new_authority_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+    String,
+> {
+    validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    if rotated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "factory release transparency external gossip registry authority rotation time is outside its bound"
+                .into(),
+        );
+    }
+    if registry
+        .last_updated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err(
+            "factory release transparency external gossip registry authority rotation timestamps must be monotonic"
+                .into(),
+        );
+    }
+    let old_authority = SigningKey::from_bytes(old_authority_secret_key);
+    let new_authority = SigningKey::from_bytes(new_authority_secret_key);
+    let old_public_key = hex::encode(old_authority.verifying_key().to_bytes());
+    let new_public_key = hex::encode(new_authority.verifying_key().to_bytes());
+    validate_nonweak_public_key(
+        &old_public_key,
+        "old factory release transparency external gossip registry authority public key",
+    )?;
+    validate_nonweak_public_key(
+        &new_public_key,
+        "new factory release transparency external gossip registry authority public key",
+    )?;
+    if old_public_key != registry.authority_public_key {
+        return Err(
+            "old factory release transparency external gossip registry authority key does not match the current registry"
+                .into(),
+        );
+    }
+    if new_public_key == old_public_key {
+        return Err(
+            "new factory release transparency external gossip registry authority key must differ from the current key"
+                .into(),
+        );
+    }
+    let to_generation = registry
+        .generation
+        .checked_add(1)
+        .filter(|generation| {
+            *generation
+                <= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        })
+        .ok_or_else(|| {
+            "factory release transparency external gossip registry generation is exhausted"
+                .to_string()
+        })?;
+    let payload = authority_key_rotation_payload(
+        registry,
+        to_generation,
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    let rotation =
+        SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation {
+            schema_version:
+                FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+            rotation_scope:
+                SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_SCOPE
+                    .into(),
+            base_observer_quorum_policy_sha256: registry.base_observer_quorum_policy_sha256.clone(),
+            policy_id: registry.policy_id.clone(),
+            registry_id: registry.registry_id.clone(),
+            from_generation: registry.generation,
+            to_generation,
+            previous_transition_sha256: registry.last_transition_sha256.clone(),
+            old_public_key,
+            new_public_key,
+            rotated_at_unix,
+            algorithm: "ed25519".into(),
+            old_signature: hex::encode(old_authority.sign(&payload).to_bytes()),
+            new_signature: hex::encode(new_authority.sign(&payload).to_bytes()),
+        };
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub(crate) fn apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry, String> {
+    validate_factory_release_state_transparency_external_gossip_organization_registry(registry)?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+        rotation,
+    )?;
+    let expected_generation = registry.generation.checked_add(1).ok_or_else(|| {
+        "factory release transparency external gossip registry generation overflow".to_string()
+    })?;
+    if rotation.base_observer_quorum_policy_sha256 != registry.base_observer_quorum_policy_sha256
+        || rotation.policy_id != registry.policy_id
+        || rotation.registry_id != registry.registry_id
+        || rotation.from_generation != registry.generation
+        || rotation.to_generation != expected_generation
+        || rotation.previous_transition_sha256 != registry.last_transition_sha256
+        || rotation.old_public_key != registry.authority_public_key
+        || rotation.new_public_key == registry.authority_public_key
+    {
+        return Err(
+            "factory release transparency external gossip registry authority rotation does not extend the selected state"
+                .into(),
+        );
+    }
+    if registry
+        .last_updated_at_unix
+        .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err(
+            "factory release transparency external gossip registry authority rotation timestamps must be monotonic"
+                .into(),
+        );
+    }
+    let payload = authority_key_rotation_payload(
+        registry,
+        rotation.to_generation,
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    for (public_key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old factory release transparency external gossip registry authority rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new factory release transparency external gossip registry authority rotation",
+        ),
+    ] {
+        let public_key = decode_hex::<32>(public_key, label)?;
+        let signature = Signature::from_bytes(&decode_hex::<64>(signature, label)?);
+        VerifyingKey::from_bytes(&public_key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    let next = FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry {
+        schema_version: registry.schema_version,
+        registry_scope: registry.registry_scope.clone(),
+        base_observer_quorum_policy_sha256: registry
+            .base_observer_quorum_policy_sha256
+            .clone(),
+        policy_id: registry.policy_id.clone(),
+        registry_id: registry.registry_id.clone(),
+        generation: rotation.to_generation,
+        authority_public_key: rotation.new_public_key.clone(),
+        last_transition_sha256: Some(
+            signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_sha256(
+                rotation,
+            )?,
+        ),
+        last_updated_at_unix: Some(rotation.rotated_at_unix),
+        organizations: registry.organizations.clone(),
     };
     validate_factory_release_state_transparency_external_gossip_organization_registry(&next)?;
     Ok(next)
@@ -596,6 +891,193 @@ pub(crate) fn verify_factory_release_state_transparency_external_gossip_quorum_w
     Ok(report)
 }
 
+pub(crate) fn verify_factory_release_state_transparency_external_gossip_quorum_with_organization_registry_authority_rotation(
+    registry_genesis_source: &[u8],
+    expected_registry_genesis_sha256: &str,
+    registry_history_sources: &[Vec<u8>],
+    observer_trust_report_source: &[u8],
+    selected_ledger_latest_registry_verified: bool,
+    selected_ledger_observer_trust_report_verified: bool,
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+    String,
+> {
+    if !selected_ledger_latest_registry_verified {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation verification requires the latest selected-ledger registry"
+                .into(),
+        );
+    }
+    if !selected_ledger_observer_trust_report_verified {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation verification requires the exact selected-ledger observer trust report"
+                .into(),
+        );
+    }
+    if registry_history_sources.len()
+        > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+    {
+        return Err(
+            "factory release transparency external gossip registry history exceeds its event bound"
+                .into(),
+        );
+    }
+    let registry_genesis =
+        parse_factory_release_state_transparency_external_gossip_organization_registry(
+            registry_genesis_source,
+        )?;
+    if registry_genesis.generation != 0 {
+        return Err(
+            "factory release transparency external gossip registry genesis must be generation zero"
+                .into(),
+        );
+    }
+    let actual_registry_genesis_sha256 =
+        factory_release_state_transparency_external_gossip_organization_registry_sha256(
+            &registry_genesis,
+        )?;
+    if actual_registry_genesis_sha256 != expected_registry_genesis_sha256 {
+        return Err(
+            "factory release transparency external gossip registry genesis pin does not match"
+                .into(),
+        );
+    }
+    let mut current_registry = registry_genesis.clone();
+    let mut history_evidence = Vec::with_capacity(registry_history_sources.len());
+    let mut authority_keys = vec![registry_genesis.authority_public_key.clone()];
+    let mut historical_authority_keys =
+        HashSet::from([registry_genesis.authority_public_key.clone()]);
+    let mut authority_rotation_count = 0_u32;
+    for source in registry_history_sources {
+        let evidence =
+            parse_factory_release_state_transparency_external_gossip_registry_history_event(
+                source,
+            )?;
+        match &evidence {
+            FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::OrganizationTransition {
+                transition,
+                ..
+            } => {
+                current_registry = apply_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                    &current_registry,
+                    transition,
+                )?;
+            }
+            FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::AuthorityKeyRotation {
+                rotation,
+                ..
+            } => {
+                if !historical_authority_keys.insert(rotation.new_public_key.clone()) {
+                    return Err(
+                        "factory release transparency external gossip registry authority rotation reuses a historical key"
+                            .into(),
+                    );
+                }
+                current_registry = apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                    &current_registry,
+                    rotation,
+                )?;
+                authority_keys.push(rotation.new_public_key.clone());
+                authority_rotation_count = authority_rotation_count.checked_add(1).ok_or_else(|| {
+                    "factory release transparency external gossip registry authority rotation count overflow"
+                        .to_string()
+                })?;
+            }
+        }
+        history_evidence.push(evidence);
+    }
+    let observer_trust_report =
+        parse_factory_release_state_transparency_external_gossip_trust_report(
+            observer_trust_report_source,
+        )?;
+    if observer_trust_report.base_observer_quorum_policy_sha256
+        != current_registry.base_observer_quorum_policy_sha256
+        || observer_trust_report.base_observer_quorum_policy.policy_id != current_registry.policy_id
+    {
+        return Err(
+            "factory release transparency external gossip registry does not bind the observer trust report base policy"
+                .into(),
+        );
+    }
+    if current_registry
+        .last_updated_at_unix
+        .is_some_and(|updated| updated > observer_trust_report.evaluated_at_unix)
+    {
+        return Err(
+            "factory release transparency external gossip registry is newer than the observer trust quorum evaluation"
+                .into(),
+        );
+    }
+    validate_registry_authority_history_role_separation(&authority_keys, &observer_trust_report)?;
+    validate_selected_member_admissions(&current_registry, &observer_trust_report)?;
+
+    let registry_history_event_count = u32::try_from(history_evidence.len()).map_err(|_| {
+        "factory release transparency external gossip registry history event count overflow"
+            .to_string()
+    })?;
+    let current_registry_sha256 =
+        factory_release_state_transparency_external_gossip_organization_registry_sha256(
+            &current_registry,
+        )?;
+    let mut report =
+        FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport {
+            schema_version:
+                FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+            verification_scope:
+                FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_VERIFICATION_SCOPE
+                    .into(),
+            status: if observer_trust_report.quorum_met {
+                "verified"
+            } else {
+                "insufficient_organizations"
+            }
+            .into(),
+            registry_genesis_pin_matched: true,
+            complete_registry_history_verified: true,
+            registry_authority_transition_signatures_verified: true,
+            registry_authority_rotation_dual_signatures_verified: true,
+            registry_authority_successor_possession_verified: true,
+            registry_authority_key_history_unique: true,
+            registry_generation_chain_verified: true,
+            registry_digest_chain_verified: true,
+            registry_timestamps_monotonic: true,
+            registry_authority_role_separation_verified: true,
+            current_observer_trust_admissions_verified: true,
+            selected_observer_organizations_active: true,
+            registry_effective_before_quorum_evaluation_verified: true,
+            selected_ledger_latest_registry_verified: true,
+            selected_ledger_observer_trust_report_verified: true,
+            selected_ledger_latest_observer_rotations_verified: true,
+            selected_ledger_registry_bound_report_committed: false,
+            selected_ledger_rollback_resistance_verified: false,
+            authority_threshold_governance_verified: false,
+            global_non_equivocation_verified: false,
+            trusted_time_verified: false,
+            independent_organization_operation_verified: false,
+            factory_legal_identity_verified: false,
+            capacity_reserved: false,
+            order_placed: false,
+            payment_performed: false,
+            exactly_once_execution_verified: false,
+            quorum_met: observer_trust_report.quorum_met,
+            registry_genesis_artifact: exact_identity(registry_genesis_source),
+            registry_genesis_sha256: actual_registry_genesis_sha256,
+            registry_genesis,
+            registry_history_event_count,
+            registry_authority_rotation_count: authority_rotation_count,
+            registry_history_events: history_evidence,
+            current_registry,
+            current_registry_sha256,
+            observer_trust_report_artifact: exact_identity(observer_trust_report_source),
+            evaluated_at_unix: observer_trust_report.evaluated_at_unix,
+            observer_trust_report,
+            binding_sha256: String::new(),
+        };
+    report.binding_sha256 = authority_rotation_registry_report_binding(&report)?;
+    validate_authority_rotation_registry_report_self_contained(&report)?;
+    Ok(report)
+}
+
 pub(crate) fn render_factory_release_state_transparency_external_gossip_organization_registry(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
 ) -> Result<Vec<u8>, String> {
@@ -647,6 +1129,61 @@ pub(crate) fn parse_signed_factory_release_state_transparency_external_gossip_or
     Ok(transition)
 }
 
+pub(crate) fn render_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<Vec<u8>, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+        rotation,
+    )?;
+    render_bounded(
+        rotation,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES,
+        "signed factory release transparency external gossip organization registry authority key rotation",
+    )
+}
+
+pub(crate) fn parse_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+    source: &[u8],
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+    String,
+> {
+    let rotation = parse_canonical(
+        source,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES,
+        "signed factory release transparency external gossip organization registry authority key rotation",
+    )?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_history_event(
+    source: &[u8],
+) -> Result<FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence, String> {
+    if let Ok(transition) = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_transition(source) {
+        return Ok(
+            FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::OrganizationTransition {
+                artifact: exact_identity(source),
+                transition,
+            },
+        );
+    }
+    let rotation = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(source)
+        .map_err(|error| {
+            format!(
+                "invalid factory release transparency external gossip registry history event: {error}"
+            )
+        })?;
+    Ok(
+        FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::AuthorityKeyRotation {
+            artifact: exact_identity(source),
+            rotation,
+        },
+    )
+}
+
 pub(crate) fn render_factory_release_state_transparency_external_gossip_registry_report(
     report: &FactoryReleaseStateTransparencyExternalGossipRegistryVerificationReport,
 ) -> Result<Vec<u8>, String> {
@@ -670,6 +1207,32 @@ pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_
     Ok(report)
 }
 
+pub(crate) fn render_factory_release_state_transparency_external_gossip_registry_authority_rotation_report(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+) -> Result<Vec<u8>, String> {
+    validate_authority_rotation_registry_report_self_contained(report)?;
+    render_bounded(
+        report,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_REPORT_BYTES,
+        "factory release transparency external gossip organization registry authority-rotation verification report",
+    )
+}
+
+pub(crate) fn parse_factory_release_state_transparency_external_gossip_registry_authority_rotation_report(
+    source: &[u8],
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+    String,
+> {
+    let report = parse_canonical(
+        source,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_REPORT_BYTES,
+        "factory release transparency external gossip organization registry authority-rotation verification report",
+    )?;
+    validate_authority_rotation_registry_report_self_contained(&report)?;
+    Ok(report)
+}
+
 pub(crate) fn factory_release_state_transparency_external_gossip_organization_registry_sha256(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
 ) -> Result<String, String> {
@@ -689,6 +1252,18 @@ pub(crate) fn signed_factory_release_state_transparency_external_gossip_organiza
     normalized_sha256(
         transition,
         "signed factory release transparency external gossip organization registry transition",
+    )
+}
+
+pub(crate) fn signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_sha256(
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<String, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+        rotation,
+    )?;
+    normalized_sha256(
+        rotation,
+        "signed factory release transparency external gossip organization registry authority key rotation",
     )
 }
 
@@ -734,6 +1309,48 @@ pub(crate) fn factory_release_state_transparency_external_gossip_registry_transi
     ))
 }
 
+pub(crate) fn factory_release_state_transparency_external_gossip_registry_authority_key_rotation_filename(
+    registry_genesis_sha256: &str,
+    base_policy_sha256: &str,
+    registry_id: &str,
+    generation: u64,
+) -> Result<String, String> {
+    validate_digest(
+        registry_genesis_sha256,
+        "factory release transparency external gossip registry genesis SHA-256",
+    )?;
+    validate_digest(
+        base_policy_sha256,
+        "factory release transparency external gossip base policy SHA-256",
+    )?;
+    validate_slug(
+        registry_id,
+        "factory release transparency external gossip organization registry id",
+    )?;
+    if generation == 0
+        || generation > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+    {
+        return Err(
+            "factory release transparency external gossip registry authority rotation generation is outside its bound"
+                .into(),
+        );
+    }
+    let context = TransitionFilenameContext {
+        registry_genesis_sha256,
+        base_observer_quorum_policy_sha256: base_policy_sha256,
+        registry_id,
+    };
+    let digest = domain_hash(
+        AUTHORITY_KEY_ROTATION_FILENAME_CONTEXT_DOMAIN,
+        &context,
+        "factory release transparency external gossip registry authority rotation filename context",
+    )?;
+    Ok(format!(
+        "factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1-{}-{generation:04}.json",
+        &digest[..32]
+    ))
+}
+
 pub(crate) fn factory_release_state_transparency_external_gossip_registry_report_filename(
     report: &FactoryReleaseStateTransparencyExternalGossipRegistryVerificationReport,
 ) -> Result<String, String> {
@@ -751,6 +1368,29 @@ pub(crate) fn factory_release_state_transparency_external_gossip_registry_report
     )?;
     Ok(format!(
         "factory-release-state-transparency-external-gossip-organization-registry-v1-{}-{:04}-{}.json",
+        report.observer_trust_report.quorum_report.idempotency_key,
+        report.current_registry.generation,
+        &digest[..32]
+    ))
+}
+
+pub(crate) fn factory_release_state_transparency_external_gossip_registry_authority_rotation_report_filename(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+) -> Result<String, String> {
+    validate_authority_rotation_registry_report_shape(report)?;
+    let context = ReportFilenameContext {
+        observer_trust_binding_sha256: &report.observer_trust_report.binding_sha256,
+        registry_genesis_sha256: &report.registry_genesis_sha256,
+        current_registry_sha256: &report.current_registry_sha256,
+        registry_generation: report.current_registry.generation,
+    };
+    let digest = domain_hash(
+        AUTHORITY_ROTATION_REPORT_FILENAME_CONTEXT_DOMAIN,
+        &context,
+        "factory release transparency external gossip registry authority-rotation report filename context",
+    )?;
+    Ok(format!(
+        "factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-v1-{}-{:04}-{}.json",
         report.observer_trust_report.quorum_report.idempotency_key,
         report.current_registry.generation,
         &digest[..32]
@@ -805,7 +1445,7 @@ pub(crate) fn validate_factory_release_state_transparency_external_gossip_organi
                     .into(),
             );
         }
-        (_, Some(digest), Some(updated)) if !registry.organizations.is_empty() => {
+        (_, Some(digest), Some(updated)) => {
             validate_digest(
                 digest,
                 "factory release transparency external gossip registry last transition SHA-256",
@@ -1011,6 +1651,73 @@ pub(crate) fn validate_signed_factory_release_state_transparency_external_gossip
     Ok(())
 }
 
+pub(crate) fn validate_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<(), String> {
+    if rotation.schema_version
+        != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION
+        || rotation.rotation_scope
+            != SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_SCOPE
+        || rotation.algorithm != "ed25519"
+        || rotation.from_generation.checked_add(1) != Some(rotation.to_generation)
+        || rotation.to_generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err(
+            "invalid factory release transparency external gossip registry authority rotation invariants"
+                .into(),
+        );
+    }
+    validate_digest(
+        &rotation.base_observer_quorum_policy_sha256,
+        "factory release transparency external gossip registry base policy SHA-256",
+    )?;
+    validate_slug(
+        &rotation.policy_id,
+        "factory release transparency external gossip observer policy id",
+    )?;
+    validate_slug(
+        &rotation.registry_id,
+        "factory release transparency external gossip organization registry id",
+    )?;
+    if rotation.rotated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "factory release transparency external gossip registry authority rotation time is outside its bound"
+                .into(),
+        );
+    }
+    if let Some(digest) = &rotation.previous_transition_sha256 {
+        validate_digest(
+            digest,
+            "previous factory release transparency external gossip registry history event SHA-256",
+        )?;
+    }
+    if (rotation.from_generation == 0) != rotation.previous_transition_sha256.is_none() {
+        return Err(
+            "factory release transparency external gossip registry authority rotation chain reference is inconsistent"
+                .into(),
+        );
+    }
+    validate_nonweak_public_key(
+        &rotation.old_public_key,
+        "old factory release transparency external gossip registry authority public key",
+    )?;
+    validate_nonweak_public_key(
+        &rotation.new_public_key,
+        "new factory release transparency external gossip registry authority public key",
+    )?;
+    decode_hex::<64>(
+        &rotation.old_signature,
+        "old factory release transparency external gossip registry authority rotation signature",
+    )?;
+    decode_hex::<64>(
+        &rotation.new_signature,
+        "new factory release transparency external gossip registry authority rotation signature",
+    )?;
+    Ok(())
+}
+
 fn transition_observer_binding(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
     action: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction,
@@ -1201,17 +1908,67 @@ fn transition_payload(
     })
 }
 
+fn authority_key_rotation_payload(
+    registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
+    to_generation: u64,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&AuthorityKeyRotationPayload {
+        domain: AUTHORITY_KEY_ROTATION_DOMAIN,
+        schema_version:
+            FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION,
+        rotation_scope:
+            SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_SCOPE,
+        base_observer_quorum_policy_sha256: &registry.base_observer_quorum_policy_sha256,
+        policy_id: &registry.policy_id,
+        registry_id: &registry.registry_id,
+        from_generation: registry.generation,
+        to_generation,
+        previous_transition_sha256: registry.last_transition_sha256.as_deref(),
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+        algorithm: "ed25519",
+    })
+    .map_err(|error| {
+        format!(
+            "serializing factory release transparency external gossip registry authority rotation payload: {error}"
+        )
+    })
+}
+
 fn validate_registry_authority_role_separation(
     registry: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistry,
     observer_trust_report: &FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
 ) -> Result<(), String> {
-    let authority = &registry.authority_public_key;
+    validate_registry_authority_key_role_separation(
+        &registry.authority_public_key,
+        observer_trust_report,
+    )
+}
+
+fn validate_registry_authority_history_role_separation(
+    authority_keys: &[String],
+    observer_trust_report: &FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
+) -> Result<(), String> {
+    for authority in authority_keys {
+        validate_registry_authority_key_role_separation(authority, observer_trust_report)?;
+    }
+    Ok(())
+}
+
+fn validate_registry_authority_key_role_separation(
+    authority: &str,
+    observer_trust_report: &FactoryReleaseStateTransparencyExternalGossipTrustVerificationReport,
+) -> Result<(), String> {
     for observer in &observer_trust_report.observer_trust {
-        if observer.initial_public_key == *authority
-            || observer.current_trust_state.current_public_key == *authority
+        if observer.initial_public_key == authority
+            || observer.current_trust_state.current_public_key == authority
             || observer.rotations.iter().any(|evidence| {
-                evidence.rotation.old_public_key == *authority
-                    || evidence.rotation.new_public_key == *authority
+                evidence.rotation.old_public_key == authority
+                    || evidence.rotation.new_public_key == authority
             })
         {
             return Err(
@@ -1452,6 +2209,231 @@ fn validate_registry_report_self_contained(
     Ok(())
 }
 
+fn validate_authority_rotation_registry_report_shape(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+) -> Result<(), String> {
+    if report.schema_version
+        != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_SCHEMA_VERSION
+        || report.verification_scope
+            != FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_VERIFICATION_SCOPE
+        || !report.registry_genesis_pin_matched
+        || !report.complete_registry_history_verified
+        || !report.registry_authority_transition_signatures_verified
+        || !report.registry_authority_rotation_dual_signatures_verified
+        || !report.registry_authority_successor_possession_verified
+        || !report.registry_authority_key_history_unique
+        || !report.registry_generation_chain_verified
+        || !report.registry_digest_chain_verified
+        || !report.registry_timestamps_monotonic
+        || !report.registry_authority_role_separation_verified
+        || !report.current_observer_trust_admissions_verified
+        || !report.selected_observer_organizations_active
+        || !report.registry_effective_before_quorum_evaluation_verified
+        || !report.selected_ledger_latest_registry_verified
+        || !report.selected_ledger_observer_trust_report_verified
+        || !report.selected_ledger_latest_observer_rotations_verified
+        || report.selected_ledger_registry_bound_report_committed
+        || report.selected_ledger_rollback_resistance_verified
+        || report.authority_threshold_governance_verified
+        || report.global_non_equivocation_verified
+        || report.trusted_time_verified
+        || report.independent_organization_operation_verified
+        || report.factory_legal_identity_verified
+        || report.capacity_reserved
+        || report.order_placed
+        || report.payment_performed
+        || report.exactly_once_execution_verified
+        || report.quorum_met != report.observer_trust_report.quorum_met
+        || report.evaluated_at_unix != report.observer_trust_report.evaluated_at_unix
+        || report.selected_ledger_latest_observer_rotations_verified
+            != report
+                .observer_trust_report
+                .selected_ledger_latest_observer_rotations_verified
+    {
+        return Err(
+            "invalid factory release transparency external gossip registry authority-rotation report invariants"
+                .into(),
+        );
+    }
+    let expected_status = if report.quorum_met {
+        "verified"
+    } else {
+        "insufficient_organizations"
+    };
+    if report.status != expected_status
+        || report.observer_trust_report.status != expected_status
+        || usize::try_from(report.registry_history_event_count).ok()
+            != Some(report.registry_history_events.len())
+        || report.registry_history_events.len()
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+        || report.current_registry.generation != u64::from(report.registry_history_event_count)
+        || report.registry_authority_rotation_count > report.registry_history_event_count
+    {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation report state is inconsistent"
+                .into(),
+        );
+    }
+    validate_digest(
+        &report.registry_genesis_sha256,
+        "factory release transparency external gossip registry genesis SHA-256",
+    )?;
+    validate_digest(
+        &report.current_registry_sha256,
+        "factory release transparency external gossip current registry SHA-256",
+    )?;
+    validate_digest(
+        &report.binding_sha256,
+        "factory release transparency external gossip registry authority-rotation report binding SHA-256",
+    )?;
+    validate_artifact_identity(
+        &report.registry_genesis_artifact,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_BYTES,
+        "factory release transparency external gossip registry genesis artifact",
+    )?;
+    validate_artifact_identity(
+        &report.observer_trust_report_artifact,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_TRUST_REPORT_BYTES,
+        "factory release transparency external gossip observer trust report artifact",
+    )?;
+    Ok(())
+}
+
+fn validate_authority_rotation_registry_report_self_contained(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+) -> Result<(), String> {
+    validate_authority_rotation_registry_report_shape(report)?;
+    let genesis_source =
+        render_factory_release_state_transparency_external_gossip_organization_registry(
+            &report.registry_genesis,
+        )?;
+    if report.registry_genesis.generation != 0
+        || report.registry_genesis_artifact != exact_identity(&genesis_source)
+        || report.registry_genesis_sha256
+            != factory_release_state_transparency_external_gossip_organization_registry_sha256(
+                &report.registry_genesis,
+            )?
+    {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation report genesis binding is invalid"
+                .into(),
+        );
+    }
+    let mut current = report.registry_genesis.clone();
+    let mut authority_keys = vec![report.registry_genesis.authority_public_key.clone()];
+    let mut historical_authority_keys =
+        HashSet::from([report.registry_genesis.authority_public_key.clone()]);
+    let mut rotation_count = 0_u32;
+    for evidence in &report.registry_history_events {
+        match evidence {
+            FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::OrganizationTransition {
+                artifact,
+                transition,
+            } => {
+                let source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                    transition,
+                )?;
+                validate_artifact_identity(
+                    artifact,
+                    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_BYTES,
+                    "factory release transparency external gossip registry transition artifact",
+                )?;
+                if *artifact != exact_identity(&source) {
+                    return Err(
+                        "factory release transparency external gossip registry transition artifact identity is invalid"
+                            .into(),
+                    );
+                }
+                current = apply_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                    &current,
+                    transition,
+                )?;
+            }
+            FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::AuthorityKeyRotation {
+                artifact,
+                rotation,
+            } => {
+                let source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                    rotation,
+                )?;
+                validate_artifact_identity(
+                    artifact,
+                    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES,
+                    "factory release transparency external gossip registry authority rotation artifact",
+                )?;
+                if *artifact != exact_identity(&source) {
+                    return Err(
+                        "factory release transparency external gossip registry authority rotation artifact identity is invalid"
+                            .into(),
+                    );
+                }
+                if !historical_authority_keys.insert(rotation.new_public_key.clone()) {
+                    return Err(
+                        "factory release transparency external gossip registry authority rotation reuses a historical key"
+                            .into(),
+                    );
+                }
+                current = apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                    &current,
+                    rotation,
+                )?;
+                authority_keys.push(rotation.new_public_key.clone());
+                rotation_count = rotation_count.checked_add(1).ok_or_else(|| {
+                    "factory release transparency external gossip registry authority rotation count overflow"
+                        .to_string()
+                })?;
+            }
+        }
+    }
+    if rotation_count != report.registry_authority_rotation_count
+        || current != report.current_registry
+        || report.current_registry_sha256
+            != factory_release_state_transparency_external_gossip_organization_registry_sha256(
+                &current,
+            )?
+    {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation report does not reproduce its current registry"
+                .into(),
+        );
+    }
+    let trust_source = render_factory_release_state_transparency_external_gossip_trust_report(
+        &report.observer_trust_report,
+    )?;
+    if report.observer_trust_report_artifact != exact_identity(&trust_source)
+        || report.registry_genesis.base_observer_quorum_policy_sha256
+            != report
+                .observer_trust_report
+                .base_observer_quorum_policy_sha256
+        || report.registry_genesis.policy_id
+            != report
+                .observer_trust_report
+                .base_observer_quorum_policy
+                .policy_id
+        || report
+            .current_registry
+            .last_updated_at_unix
+            .is_some_and(|updated| updated > report.evaluated_at_unix)
+    {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation report observer trust binding is invalid"
+                .into(),
+        );
+    }
+    validate_registry_authority_history_role_separation(
+        &authority_keys,
+        &report.observer_trust_report,
+    )?;
+    validate_selected_member_admissions(&report.current_registry, &report.observer_trust_report)?;
+    if authority_rotation_registry_report_binding(report)? != report.binding_sha256 {
+        return Err(
+            "factory release transparency external gossip registry authority-rotation report binding is invalid"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 fn registry_report_binding(
     report: &FactoryReleaseStateTransparencyExternalGossipRegistryVerificationReport,
 ) -> Result<String, String> {
@@ -1461,6 +2443,18 @@ fn registry_report_binding(
         REPORT_BINDING_DOMAIN,
         &bound,
         "factory release transparency external gossip registry report binding",
+    )
+}
+
+fn authority_rotation_registry_report_binding(
+    report: &FactoryReleaseStateTransparencyExternalGossipRegistryAuthorityRotationVerificationReport,
+) -> Result<String, String> {
+    let mut bound = report.clone();
+    bound.binding_sha256.clear();
+    domain_hash(
+        AUTHORITY_ROTATION_REPORT_BINDING_DOMAIN,
+        &bound,
+        "factory release transparency external gossip registry authority-rotation report binding",
     )
 }
 
@@ -1731,6 +2725,44 @@ pub(crate) fn signed_factory_release_state_transparency_external_gossip_organiza
     })
 }
 
+pub(crate) fn signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1.json",
+        "title": "Dual-signed pcbex factory-release transparency external-gossip organization registry authority key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "rotation_scope", "base_observer_quorum_policy_sha256",
+            "policy_id", "registry_id", "from_generation", "to_generation",
+            "previous_transition_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "rotation_scope": {"const": SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_SCOPE},
+            "base_observer_quorum_policy_sha256": digest_schema(),
+            "policy_id": slug_schema(),
+            "registry_id": slug_schema(),
+            "from_generation": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION - 1
+            },
+            "to_generation": {
+                "type": "integer", "minimum": 1,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+            },
+            "previous_transition_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "old_public_key": digest_schema(),
+            "new_public_key": digest_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
+            "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
 pub(crate) fn factory_release_state_transparency_external_gossip_registry_report_json_schema()
 -> Value {
     let registry =
@@ -1812,6 +2844,126 @@ pub(crate) fn factory_release_state_transparency_external_gossip_registry_report
                 "type": "array", "minItems": 0,
                 "maxItems": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS,
                 "items": transition_evidence
+            },
+            "current_registry": registry,
+            "current_registry_sha256": digest_schema(),
+            "observer_trust_report_artifact": artifact_schema(MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_TRUST_REPORT_BYTES),
+            "observer_trust_report": factory_release_state_transparency_external_gossip_trust_report_json_schema(),
+            "evaluated_at_unix": {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP},
+            "binding_sha256": digest_schema()
+        }
+    })
+}
+
+pub(crate) fn factory_release_state_transparency_external_gossip_registry_authority_rotation_report_json_schema()
+-> Value {
+    let registry =
+        factory_release_state_transparency_external_gossip_organization_registry_json_schema();
+    let transition = signed_factory_release_state_transparency_external_gossip_organization_registry_transition_json_schema();
+    let rotation = signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_json_schema();
+    let history_event = json!({
+        "oneOf": [
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "artifact", "transition"],
+                "properties": {
+                    "kind": {"const": "organization_transition"},
+                    "artifact": artifact_schema(MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITION_BYTES),
+                    "transition": transition
+                }
+            },
+            {
+                "type": "object", "additionalProperties": false,
+                "required": ["kind", "artifact", "rotation"],
+                "properties": {
+                    "kind": {"const": "authority_key_rotation"},
+                    "artifact": artifact_schema(MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_KEY_ROTATION_BYTES),
+                    "rotation": rotation
+                }
+            }
+        ]
+    });
+    let true_value = json!({"const": true});
+    let false_value = json!({"const": false});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-verification-report-v1.json",
+        "title": "pcbex factory-release transparency external-gossip organization registry authority-rotation verification report",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "verification_scope", "status",
+            "registry_genesis_pin_matched", "complete_registry_history_verified",
+            "registry_authority_transition_signatures_verified",
+            "registry_authority_rotation_dual_signatures_verified",
+            "registry_authority_successor_possession_verified",
+            "registry_authority_key_history_unique", "registry_generation_chain_verified",
+            "registry_digest_chain_verified", "registry_timestamps_monotonic",
+            "registry_authority_role_separation_verified",
+            "current_observer_trust_admissions_verified",
+            "selected_observer_organizations_active",
+            "registry_effective_before_quorum_evaluation_verified",
+            "selected_ledger_latest_registry_verified",
+            "selected_ledger_observer_trust_report_verified",
+            "selected_ledger_latest_observer_rotations_verified",
+            "selected_ledger_registry_bound_report_committed",
+            "selected_ledger_rollback_resistance_verified",
+            "authority_threshold_governance_verified", "global_non_equivocation_verified",
+            "trusted_time_verified", "independent_organization_operation_verified",
+            "factory_legal_identity_verified", "capacity_reserved", "order_placed",
+            "payment_performed", "exactly_once_execution_verified", "quorum_met",
+            "registry_genesis_artifact", "registry_genesis_sha256", "registry_genesis",
+            "registry_history_event_count", "registry_authority_rotation_count",
+            "registry_history_events", "current_registry", "current_registry_sha256",
+            "observer_trust_report_artifact", "observer_trust_report",
+            "evaluated_at_unix", "binding_sha256"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "verification_scope": {"const": FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION_VERIFICATION_SCOPE},
+            "status": {"enum": ["verified", "insufficient_organizations"]},
+            "registry_genesis_pin_matched": true_value.clone(),
+            "complete_registry_history_verified": true_value.clone(),
+            "registry_authority_transition_signatures_verified": true_value.clone(),
+            "registry_authority_rotation_dual_signatures_verified": true_value.clone(),
+            "registry_authority_successor_possession_verified": true_value.clone(),
+            "registry_authority_key_history_unique": true_value.clone(),
+            "registry_generation_chain_verified": true_value.clone(),
+            "registry_digest_chain_verified": true_value.clone(),
+            "registry_timestamps_monotonic": true_value.clone(),
+            "registry_authority_role_separation_verified": true_value.clone(),
+            "current_observer_trust_admissions_verified": true_value.clone(),
+            "selected_observer_organizations_active": true_value.clone(),
+            "registry_effective_before_quorum_evaluation_verified": true_value.clone(),
+            "selected_ledger_latest_registry_verified": true_value.clone(),
+            "selected_ledger_observer_trust_report_verified": true_value.clone(),
+            "selected_ledger_latest_observer_rotations_verified": true_value,
+            "selected_ledger_registry_bound_report_committed": false_value.clone(),
+            "selected_ledger_rollback_resistance_verified": false_value.clone(),
+            "authority_threshold_governance_verified": false_value.clone(),
+            "global_non_equivocation_verified": false_value.clone(),
+            "trusted_time_verified": false_value.clone(),
+            "independent_organization_operation_verified": false_value.clone(),
+            "factory_legal_identity_verified": false_value.clone(),
+            "capacity_reserved": false_value.clone(),
+            "order_placed": false_value.clone(),
+            "payment_performed": false_value.clone(),
+            "exactly_once_execution_verified": false_value,
+            "quorum_met": {"type": "boolean"},
+            "registry_genesis_artifact": artifact_schema(MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_BYTES),
+            "registry_genesis_sha256": digest_schema(),
+            "registry_genesis": registry.clone(),
+            "registry_history_event_count": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+            },
+            "registry_authority_rotation_count": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+            },
+            "registry_history_events": {
+                "type": "array", "minItems": 0,
+                "maxItems": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS,
+                "items": history_event
             },
             "current_registry": registry,
             "current_registry_sha256": digest_schema(),
@@ -2021,21 +3173,160 @@ mod tests {
     }
 
     #[test]
+    fn authority_rotation_requires_both_keys_and_preserves_registry_membership() {
+        let policy = policy();
+        let policy_sha =
+            factory_release_state_transparency_external_gossip_quorum_policy_sha256(&policy)
+                .unwrap();
+        let initial = new_factory_release_state_transparency_external_gossip_organization_registry(
+            &policy,
+            &policy_sha,
+            "production-observers",
+            &SigningKey::from_bytes(&[31; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let rotation = sign_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+            &initial,
+            &[31; 32],
+            &[41; 32],
+            1_000,
+        )
+        .unwrap();
+        let rotation_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+            &rotation,
+        )
+        .unwrap();
+        assert!(matches!(
+            parse_factory_release_state_transparency_external_gossip_registry_history_event(
+                &rotation_source,
+            )
+            .unwrap(),
+            FactoryReleaseStateTransparencyExternalGossipRegistryHistoryEventEvidence::AuthorityKeyRotation { .. }
+        ));
+        let rotated = apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+            &initial,
+            &rotation,
+        )
+        .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert_eq!(rotated.authority_public_key, public([41; 32]));
+        assert!(rotated.organizations.is_empty());
+
+        let trust = new_factory_release_state_transparency_external_gossip_observer_trust_state(
+            &policy,
+            &policy_sha,
+            "lab-a",
+            "observer-a",
+        )
+        .unwrap();
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_transition(
+                &rotated,
+                &[31; 32],
+                FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::AdmitObserver,
+                "lab-a",
+                Some(&trust),
+                &"1".repeat(64),
+                2_000,
+            )
+            .is_err()
+        );
+        let admission = sign_factory_release_state_transparency_external_gossip_organization_registry_transition(
+            &rotated,
+            &[41; 32],
+            FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryAction::AdmitObserver,
+            "lab-a",
+            Some(&trust),
+            &"1".repeat(64),
+            2_000,
+        )
+        .unwrap();
+        let admitted = apply_factory_release_state_transparency_external_gossip_organization_registry_transition(
+            &rotated,
+            &admission,
+        )
+        .unwrap();
+        let second_rotation = sign_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+            &admitted,
+            &[41; 32],
+            &[51; 32],
+            3_000,
+        )
+        .unwrap();
+        let twice_rotated = apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+            &admitted,
+            &second_rotation,
+        )
+        .unwrap();
+        assert_eq!(twice_rotated.organizations, admitted.organizations);
+
+        let mut tampered_old = rotation.clone();
+        let replacement = if tampered_old.old_signature.starts_with("00") {
+            "ff"
+        } else {
+            "00"
+        };
+        tampered_old.old_signature.replace_range(..2, replacement);
+        assert!(
+            apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                &initial,
+                &tampered_old,
+            )
+            .is_err()
+        );
+        let mut tampered_new = rotation.clone();
+        let replacement = if tampered_new.new_signature.starts_with("00") {
+            "ff"
+        } else {
+            "00"
+        };
+        tampered_new.new_signature.replace_range(..2, replacement);
+        assert!(
+            apply_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                &initial,
+                &tampered_new,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation(
+                &initial,
+                &[31; 32],
+                &[31; 32],
+                1_000,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn schemas_are_closed_and_bounded() {
         let registry =
             factory_release_state_transparency_external_gossip_organization_registry_json_schema();
         let transition = signed_factory_release_state_transparency_external_gossip_organization_registry_transition_json_schema();
+        let authority_rotation = signed_factory_release_state_transparency_external_gossip_organization_registry_authority_key_rotation_json_schema();
         let report =
             factory_release_state_transparency_external_gossip_registry_report_json_schema();
+        let authority_rotation_report = factory_release_state_transparency_external_gossip_registry_authority_rotation_report_json_schema();
         assert_eq!(registry["additionalProperties"], false);
         assert_eq!(transition["additionalProperties"], false);
+        assert_eq!(authority_rotation["additionalProperties"], false);
         assert_eq!(report["additionalProperties"], false);
+        assert_eq!(authority_rotation_report["additionalProperties"], false);
         assert_eq!(
             registry["properties"]["organizations"]["maxItems"],
             MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_OBSERVATIONS
         );
         assert_eq!(
             report["properties"]["selected_ledger_rollback_resistance_verified"],
+            json!({"const": false})
+        );
+        assert_eq!(
+            authority_rotation_report["properties"]["registry_history_events"]["maxItems"],
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_TRANSITIONS
+        );
+        assert_eq!(
+            authority_rotation_report["properties"]["authority_threshold_governance_verified"],
             json!({"const": false})
         );
     }

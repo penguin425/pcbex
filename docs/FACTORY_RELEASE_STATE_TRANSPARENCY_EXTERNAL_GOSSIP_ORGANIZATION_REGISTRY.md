@@ -214,5 +214,6 @@ establish global non-equivocation, real organizational independence, key
 custody, legal identity, endpoint identity, factory capacity, order authority,
 payment, or exactly-once execution.
 
-Authority key rotation and threshold governance are separate future trust
-boundaries. v1.493 pins one authority key for the lifetime of this registry.
+v1.493 itself pins one authority key for the lifetime of the registry. v1.494
+adds the separate [authority-rotation boundary](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_AUTHORITY_ROTATION.md);
+threshold governance remains unproved.

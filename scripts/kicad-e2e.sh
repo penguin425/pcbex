@@ -1663,6 +1663,283 @@ for schema_path in (registry_schema_path, transition_schema_path, report_schema_
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.494 rotates the organization-registry authority with signatures from both
+# the retained and successor keys. The new verifier replays transitions and
+# rotations as one generation chain; the v1.493 verifier rejects that history.
+factory_transparency_external_gossip_registry_rotation_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-authority-rotation.schema.json"
+factory_transparency_external_gossip_registry_rotation_report_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-authority-rotation-report.schema.json"
+factory_transparency_external_gossip_registry_rotation_new_private="$output_directory/factory-release-transparency-external-gossip-registry-rotation-new.private.hex"
+factory_transparency_external_gossip_registry_rotation_genesis="$output_directory/factory-release-transparency-external-gossip-organization-registry-rotation.genesis.json"
+factory_transparency_external_gossip_registry_rotation_genesis_digest_file="$output_directory/factory-release-transparency-external-gossip-organization-registry-rotation.genesis.sha256"
+factory_transparency_external_gossip_registry_rotation_initial="$output_directory/factory-release-transparency-external-gossip-organization-registry-rotation.initial.json"
+factory_transparency_external_gossip_registry_rotation_admission_a="$output_directory/factory-release-transparency-external-gossip-registry-rotation-admission-a.json"
+factory_transparency_external_gossip_registry_rotation_admission_b="$output_directory/factory-release-transparency-external-gossip-registry-rotation-admission-b.json"
+factory_transparency_external_gossip_registry_rotation_state_1="$output_directory/factory-release-transparency-external-gossip-organization-registry-rotation.state-1.json"
+factory_transparency_external_gossip_registry_rotation_state_2="$output_directory/factory-release-transparency-external-gossip-organization-registry-rotation.state-2.json"
+factory_transparency_external_gossip_registry_rotation_artifact="$output_directory/factory-release-transparency-external-gossip-registry-authority-rotation.json"
+factory_transparency_external_gossip_registry_rotation_state_3="$output_directory/factory-release-transparency-external-gossip-organization-registry-rotation.state-3.json"
+factory_transparency_external_gossip_registry_rotation_report="$output_directory/factory-release-transparency-external-gossip-organization-registry-authority-rotation.report.json"
+factory_transparency_external_gossip_registry_rotation_replay="$output_directory/factory-release-transparency-external-gossip-organization-registry-authority-rotation-replay.report.json"
+factory_transparency_external_gossip_registry_rotation_legacy_output="$output_directory/factory-release-transparency-external-gossip-organization-registry-authority-rotation-legacy.report.json"
+factory_transparency_external_gossip_registry_rotation_legacy_error="$output_directory/factory-release-transparency-external-gossip-organization-registry-authority-rotation-legacy.stderr"
+
+"$pcbex_binary" signed-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-schema \
+  --output "$factory_transparency_external_gossip_registry_rotation_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-verification-report-schema \
+  --output "$factory_transparency_external_gossip_registry_rotation_report_schema"
+
+python3 - "$factory_transparency_external_gossip_registry_rotation_new_private" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+private_path = Path(sys.argv[1])
+private_path.write_text((bytes([76]) * 32).hex() + "\n", encoding="ascii")
+os.chmod(private_path, 0o600)
+PY
+
+"$pcbex_binary" init-factory-release-state-transparency-external-gossip-organization-registry \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-id rotating-production-external-observers \
+  --authority-public-key "$factory_transparency_external_gossip_registry_authority_public" \
+  --output "$factory_transparency_external_gossip_registry_rotation_genesis" \
+  --digest-output "$factory_transparency_external_gossip_registry_rotation_genesis_digest_file"
+factory_transparency_external_gossip_registry_rotation_genesis_digest="$(tr -d '\r\n' < "$factory_transparency_external_gossip_registry_rotation_genesis_digest_file")"
+
+"$pcbex_binary" export-factory-release-state-transparency-external-gossip-organization-registry \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-genesis "$factory_transparency_external_gossip_registry_rotation_genesis" \
+  --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_rotation_genesis_digest" \
+  --output "$factory_transparency_external_gossip_registry_rotation_initial"
+
+apply_factory_transparency_external_gossip_registry_rotation_transition() {
+  "$pcbex_binary" apply-factory-release-state-transparency-external-gossip-organization-registry-transition \
+    --reservation-ledger "$monotonic_release_ledger" \
+    --expected-ledger-id "$signed_release_reservation_id" \
+    --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+    --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+    --registry-genesis "$factory_transparency_external_gossip_registry_rotation_genesis" \
+    --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_rotation_genesis_digest" \
+    --transition "$1" \
+    --output "$2"
+}
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-transition \
+  --registry-state "$factory_transparency_external_gossip_registry_rotation_initial" \
+  --authority-private-key "$factory_transparency_external_gossip_registry_authority_private" \
+  --action admit-observer \
+  --organization-id independent-observer-org-a \
+  --observer-trust-state "$factory_transparency_external_gossip_registry_observer_a" \
+  --reason-sha256 "$factory_transparency_external_gossip_registry_reason_sha256" \
+  --effective-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_rotation_admission_a"
+apply_factory_transparency_external_gossip_registry_rotation_transition \
+  "$factory_transparency_external_gossip_registry_rotation_admission_a" \
+  "$factory_transparency_external_gossip_registry_rotation_state_1"
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-transition \
+  --registry-state "$factory_transparency_external_gossip_registry_rotation_state_1" \
+  --authority-private-key "$factory_transparency_external_gossip_registry_authority_private" \
+  --action admit-observer \
+  --organization-id independent-observer-org-b \
+  --observer-trust-state "$factory_transparency_external_gossip_registry_observer_b" \
+  --reason-sha256 "$factory_transparency_external_gossip_registry_reason_sha256" \
+  --effective-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_rotation_admission_b"
+apply_factory_transparency_external_gossip_registry_rotation_transition \
+  "$factory_transparency_external_gossip_registry_rotation_admission_b" \
+  "$factory_transparency_external_gossip_registry_rotation_state_2"
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation \
+  --registry-state "$factory_transparency_external_gossip_registry_rotation_state_2" \
+  --old-authority-private-key "$factory_transparency_external_gossip_registry_authority_private" \
+  --new-authority-private-key "$factory_transparency_external_gossip_registry_rotation_new_private" \
+  --rotated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_rotation_artifact"
+"$pcbex_binary" apply-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-genesis "$factory_transparency_external_gossip_registry_rotation_genesis" \
+  --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_rotation_genesis_digest" \
+  --rotation "$factory_transparency_external_gossip_registry_rotation_artifact" \
+  --output "$factory_transparency_external_gossip_registry_rotation_state_3"
+
+verify_factory_transparency_external_gossip_registry_authority_rotation() {
+  "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum-with-organization-registry-authority-rotation \
+    --reservation-ledger "$monotonic_release_ledger" \
+    --expected-ledger-id "$signed_release_reservation_id" \
+    --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+    --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+    --registry-genesis "$factory_transparency_external_gossip_registry_rotation_genesis" \
+    --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_rotation_genesis_digest" \
+    --observer-trust-report "$factory_transparency_external_gossip_trust_report_a" \
+    --require-quorum --require-accepted \
+    --output "$1"
+}
+
+verify_factory_transparency_external_gossip_registry_authority_rotation \
+  "$factory_transparency_external_gossip_registry_rotation_report"
+verify_factory_transparency_external_gossip_registry_authority_rotation \
+  "$factory_transparency_external_gossip_registry_rotation_replay"
+cmp "$factory_transparency_external_gossip_registry_rotation_report" \
+  "$factory_transparency_external_gossip_registry_rotation_replay"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum-with-organization-registry \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-genesis "$factory_transparency_external_gossip_registry_rotation_genesis" \
+  --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_rotation_genesis_digest" \
+  --observer-trust-report "$factory_transparency_external_gossip_trust_report_a" \
+  --output "$factory_transparency_external_gossip_registry_rotation_legacy_output" \
+  2>"$factory_transparency_external_gossip_registry_rotation_legacy_error"; then
+  echo "expected the v1.493 registry verifier to reject an authority rotation" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_rotation_legacy_output"
+grep -Fq 'v1.493 organization registry verifier cannot accept authority rotations' \
+  "$factory_transparency_external_gossip_registry_rotation_legacy_error"
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_rotation_genesis" \
+  "$factory_transparency_external_gossip_registry_rotation_admission_a" \
+  "$factory_transparency_external_gossip_registry_rotation_admission_b" \
+  "$factory_transparency_external_gossip_registry_rotation_artifact" \
+  "$factory_transparency_external_gossip_registry_rotation_state_2" \
+  "$factory_transparency_external_gossip_registry_rotation_state_3" \
+  "$factory_transparency_external_gossip_registry_rotation_report" \
+  "$factory_transparency_external_gossip_registry_rotation_schema" \
+  "$factory_transparency_external_gossip_registry_rotation_report_schema" \
+  "$monotonic_release_ledger" \
+  "$factory_transparency_external_gossip_registry_authority_private" \
+  "$factory_transparency_external_gossip_registry_rotation_new_private" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+genesis_path, transition_a_path, transition_b_path, rotation_path, state_2_path, \
+    state_3_path, report_path, rotation_schema_path, report_schema_path, \
+    ledger_path, old_private_path, new_private_path = map(Path, sys.argv[1:])
+
+genesis_source = genesis_path.read_bytes()
+transition_sources = [transition_a_path.read_bytes(), transition_b_path.read_bytes()]
+rotation_source = rotation_path.read_bytes()
+genesis = json.loads(genesis_source)
+transitions = [json.loads(source) for source in transition_sources]
+rotation = json.loads(rotation_source)
+state_2 = json.loads(state_2_path.read_bytes())
+state_3 = json.loads(state_3_path.read_bytes())
+report_source = report_path.read_bytes()
+report = json.loads(report_source)
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":")).encode("ascii")
+
+def identity(source):
+    return {"bytes": len(source), "sha256": hashlib.sha256(source).hexdigest()}
+
+assert rotation["from_generation"] == 2
+assert rotation["to_generation"] == 3
+assert rotation["previous_transition_sha256"] == hashlib.sha256(
+    compact(transitions[1])
+).hexdigest()
+assert rotation["old_public_key"] == state_2["authority_public_key"]
+assert rotation["new_public_key"] == state_3["authority_public_key"]
+assert state_3["organizations"] == state_2["organizations"]
+
+assert report["status"] == "verified"
+assert report["quorum_met"] is True
+assert report["registry_history_event_count"] == 3
+assert report["registry_authority_rotation_count"] == 1
+assert report["registry_genesis"] == genesis
+assert report["current_registry"] == state_3
+assert [event["kind"] for event in report["registry_history_events"]] == [
+    "organization_transition", "organization_transition", "authority_key_rotation"
+]
+for index, source in enumerate(transition_sources):
+    evidence = report["registry_history_events"][index]
+    assert evidence["artifact"] == identity(source)
+    assert evidence["transition"] == transitions[index]
+rotation_evidence = report["registry_history_events"][2]
+assert rotation_evidence["artifact"] == identity(rotation_source)
+assert rotation_evidence["rotation"] == rotation
+for claim in (
+    "registry_genesis_pin_matched",
+    "complete_registry_history_verified",
+    "registry_authority_transition_signatures_verified",
+    "registry_authority_rotation_dual_signatures_verified",
+    "registry_authority_successor_possession_verified",
+    "registry_authority_key_history_unique",
+    "registry_generation_chain_verified",
+    "registry_digest_chain_verified",
+    "registry_timestamps_monotonic",
+    "registry_authority_role_separation_verified",
+    "current_observer_trust_admissions_verified",
+    "selected_observer_organizations_active",
+    "registry_effective_before_quorum_evaluation_verified",
+    "selected_ledger_latest_registry_verified",
+    "selected_ledger_observer_trust_report_verified",
+    "selected_ledger_latest_observer_rotations_verified",
+):
+    assert report[claim] is True, claim
+for claim in (
+    "selected_ledger_registry_bound_report_committed",
+    "selected_ledger_rollback_resistance_verified",
+    "authority_threshold_governance_verified",
+    "global_non_equivocation_verified",
+    "trusted_time_verified",
+    "independent_organization_operation_verified",
+    "factory_legal_identity_verified",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "exactly_once_execution_verified",
+):
+    assert report[claim] is False, claim
+
+rotation_records = list(ledger_path.glob(
+    "factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1-*.json"
+))
+assert len(rotation_records) == 1
+assert rotation_records[0].read_bytes() == rotation_source
+report_records = list(ledger_path.glob(
+    "factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-v1-*.json"
+))
+assert len(report_records) == 1
+assert report_records[0].read_bytes() == report_source
+
+secrets = [
+    old_private_path.read_text(encoding="ascii").strip().encode(),
+    new_private_path.read_text(encoding="ascii").strip().encode(),
+]
+for artifact in [report_path, state_3_path, *ledger_path.iterdir()]:
+    source = artifact.read_bytes()
+    for secret in secrets:
+        assert secret not in source, artifact
+
+for schema_path in (rotation_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 }
 "$pcbex_binary" verify-circuit-kicad-handoff \
   examples/circuit-spec-v2.json "$generated_schematic" \

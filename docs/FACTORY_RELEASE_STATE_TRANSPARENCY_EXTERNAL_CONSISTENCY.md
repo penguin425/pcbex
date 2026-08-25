@@ -234,7 +234,8 @@ separately pinned observer receipt, and v1.491 adds bounded acquisition plus an
 exact-head observer-organization threshold. Version 1.492 binds its current
 keys to complete selected-ledger rotation histories, and v1.493 requires every
 selected member to remain active in an authority-governed organization
-registry.
+registry. Version 1.494 adds dual-signed registry-authority rotation and mixed
+history replay.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain

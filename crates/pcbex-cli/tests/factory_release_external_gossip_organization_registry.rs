@@ -234,6 +234,60 @@ fn apply_transition(
     ])
 }
 
+fn sign_authority_rotation(
+    registry: &Path,
+    old_authority_secret: &Path,
+    new_authority_secret: &Path,
+    rotated_at_unix: &str,
+    output: &Path,
+) -> Output {
+    run(&[
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation",
+        "--registry-state",
+        path(registry),
+        "--old-authority-private-key",
+        path(old_authority_secret),
+        "--new-authority-private-key",
+        path(new_authority_secret),
+        "--rotated-at-unix",
+        rotated_at_unix,
+        "--output",
+        path(output),
+    ])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_authority_rotation(
+    ledger: &Path,
+    ledger_id: &str,
+    policy: &Path,
+    policy_sha256: &str,
+    genesis: &Path,
+    genesis_sha256: &str,
+    rotation: &Path,
+    output: &Path,
+) -> Output {
+    run(&[
+        "apply-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation",
+        "--reservation-ledger",
+        path(ledger),
+        "--expected-ledger-id",
+        ledger_id,
+        "--base-observer-quorum-policy",
+        path(policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        policy_sha256,
+        "--registry-genesis",
+        path(genesis),
+        "--expected-registry-genesis-sha256",
+        genesis_sha256,
+        "--rotation",
+        path(rotation),
+        "--output",
+        path(output),
+    ])
+}
+
 fn assert_closed_and_bounded(value: &Value) {
     match value {
         Value::Object(object) => {
@@ -723,6 +777,371 @@ fn governs_current_observer_admission_and_organization_status() {
 }
 
 #[test]
+fn rotates_registry_authority_with_dual_signatures_and_exact_ledger_convergence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let (ledger, ledger_id) = create_ledger(&root);
+    let policy = root.join("base-policy.json");
+    let policy_sha256 = write_policy(&policy);
+    let old_secret = root.join("authority-old.hex");
+    let new_secret = root.join("authority-new.hex");
+    let third_secret = root.join("authority-third.hex");
+    let observer_secret = root.join("observer-a-secret.hex");
+    let old_public = root.join("authority-old-public.hex");
+    write_hex(&old_secret, [31; 32], 0o600);
+    write_hex(&new_secret, [41; 32], 0o600);
+    write_hex(&third_secret, [51; 32], 0o600);
+    write_hex(&observer_secret, [11; 32], 0o600);
+    write_hex(
+        &old_public,
+        SigningKey::from_bytes(&[31; 32]).verifying_key().to_bytes(),
+        0o644,
+    );
+
+    let genesis = root.join("registry-genesis.json");
+    let genesis_digest = root.join("registry-genesis.sha256");
+    successful(&[
+        "init-factory-release-state-transparency-external-gossip-organization-registry",
+        "--base-observer-quorum-policy",
+        path(&policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        &policy_sha256,
+        "--registry-id",
+        "production-observers",
+        "--authority-public-key",
+        path(&old_public),
+        "--output",
+        path(&genesis),
+        "--digest-output",
+        path(&genesis_digest),
+    ]);
+    let genesis_sha256 = fs::read_to_string(&genesis_digest).unwrap();
+    let genesis_sha256 = genesis_sha256.trim();
+    let initial = root.join("registry-initial.json");
+    export_registry(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &initial,
+    );
+
+    let wrong_rotation = root.join("wrong-rotation.json");
+    let wrong = sign_authority_rotation(
+        &initial,
+        &third_secret,
+        &new_secret,
+        "1000",
+        &wrong_rotation,
+    );
+    assert!(!wrong.status.success());
+    assert!(!wrong_rotation.exists());
+    assert!(String::from_utf8_lossy(&wrong.stderr).contains("does not match the current registry"));
+
+    let rotation = root.join("authority-rotation.json");
+    let signed = sign_authority_rotation(&initial, &old_secret, &new_secret, "1000", &rotation);
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let rotation_value: Value = serde_json::from_slice(&fs::read(&rotation).unwrap()).unwrap();
+    assert_eq!(rotation_value["old_public_key"], public([31; 32]));
+    assert_eq!(rotation_value["new_public_key"], public([41; 32]));
+    assert_eq!(rotation_value["old_signature"].as_str().unwrap().len(), 128);
+    assert_eq!(rotation_value["new_signature"].as_str().unwrap().len(), 128);
+
+    let tampered_rotation = root.join("tampered-rotation.json");
+    let source = fs::read_to_string(&rotation).unwrap();
+    let signature = rotation_value["new_signature"].as_str().unwrap();
+    fs::write(
+        &tampered_rotation,
+        source.replacen(signature, &"0".repeat(128), 1),
+    )
+    .unwrap();
+    let tampered_output = root.join("tampered-output.json");
+    let tampered = apply_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &tampered_rotation,
+        &tampered_output,
+    );
+    assert!(!tampered.status.success());
+    assert!(!tampered_output.exists());
+    assert!(String::from_utf8_lossy(&tampered.stderr).contains("signature verification failed"));
+
+    let applied_a = root.join("rotated-a.json");
+    let applied_b = root.join("rotated-b.json");
+    let common = [
+        "apply-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation",
+        "--reservation-ledger",
+        path(&ledger),
+        "--expected-ledger-id",
+        &ledger_id,
+        "--base-observer-quorum-policy",
+        path(&policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        &policy_sha256,
+        "--registry-genesis",
+        path(&genesis),
+        "--expected-registry-genesis-sha256",
+        genesis_sha256,
+        "--rotation",
+        path(&rotation),
+        "--output",
+    ];
+    let mut first = Command::new(binary())
+        .args(common)
+        .arg(&applied_a)
+        .spawn()
+        .unwrap();
+    let mut second = Command::new(binary())
+        .args(common)
+        .arg(&applied_b)
+        .spawn()
+        .unwrap();
+    assert!(first.wait().unwrap().success());
+    assert!(second.wait().unwrap().success());
+    assert_eq!(fs::read(&applied_a).unwrap(), fs::read(&applied_b).unwrap());
+    let rotated: Value = serde_json::from_slice(&fs::read(&applied_a).unwrap()).unwrap();
+    assert_eq!(rotated["generation"], 1);
+    assert_eq!(rotated["authority_public_key"], public([41; 32]));
+    assert!(rotated["organizations"].as_array().unwrap().is_empty());
+
+    let exact_retry = root.join("rotation-exact-retry.json");
+    assert!(
+        apply_authority_rotation(
+            &ledger,
+            &ledger_id,
+            &policy,
+            &policy_sha256,
+            &genesis,
+            genesis_sha256,
+            &rotation,
+            &exact_retry,
+        )
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read(&applied_a).unwrap(),
+        fs::read(&exact_retry).unwrap()
+    );
+
+    let observer_a = root.join("observer-a.json");
+    export_observer(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        "lab-a",
+        "observer-a",
+        &observer_a,
+    );
+    let rejected_old_transition = root.join("rejected-old-transition.json");
+    let rejected_old = sign_transition(
+        &applied_a,
+        &old_secret,
+        "admit-observer",
+        "lab-a",
+        Some(&observer_a),
+        "1100",
+        &rejected_old_transition,
+    );
+    assert!(!rejected_old.status.success());
+    assert!(!rejected_old_transition.exists());
+
+    let transition = root.join("new-authority-transition.json");
+    assert!(
+        sign_transition(
+            &applied_a,
+            &new_secret,
+            "admit-observer",
+            "lab-a",
+            Some(&observer_a),
+            "1100",
+            &transition,
+        )
+        .status
+        .success()
+    );
+    let competing_rotation = root.join("competing-rotation.json");
+    assert!(
+        sign_authority_rotation(
+            &applied_a,
+            &new_secret,
+            &third_secret,
+            "1100",
+            &competing_rotation,
+        )
+        .status
+        .success()
+    );
+    let transition_output = root.join("competing-transition-state.json");
+    let rotation_output = root.join("competing-rotation-state.json");
+    let mut transition_process = Command::new(binary())
+        .args([
+            "apply-factory-release-state-transparency-external-gossip-organization-registry-transition",
+            "--reservation-ledger",
+            path(&ledger),
+            "--expected-ledger-id",
+            &ledger_id,
+            "--base-observer-quorum-policy",
+            path(&policy),
+            "--expected-base-observer-quorum-policy-sha256",
+            &policy_sha256,
+            "--registry-genesis",
+            path(&genesis),
+            "--expected-registry-genesis-sha256",
+            genesis_sha256,
+            "--transition",
+            path(&transition),
+            "--output",
+            path(&transition_output),
+        ])
+        .spawn()
+        .unwrap();
+    let mut rotation_process = Command::new(binary())
+        .args([
+            "apply-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation",
+            "--reservation-ledger",
+            path(&ledger),
+            "--expected-ledger-id",
+            &ledger_id,
+            "--base-observer-quorum-policy",
+            path(&policy),
+            "--expected-base-observer-quorum-policy-sha256",
+            &policy_sha256,
+            "--registry-genesis",
+            path(&genesis),
+            "--expected-registry-genesis-sha256",
+            genesis_sha256,
+            "--rotation",
+            path(&competing_rotation),
+            "--output",
+            path(&rotation_output),
+        ])
+        .spawn()
+        .unwrap();
+    let transition_status = transition_process.wait().unwrap();
+    let rotation_status = rotation_process.wait().unwrap();
+    assert_ne!(transition_status.success(), rotation_status.success());
+
+    let generation_two = root.join("registry-generation-two.json");
+    export_registry(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &generation_two,
+    );
+    let generation_two_value: Value =
+        serde_json::from_slice(&fs::read(&generation_two).unwrap()).unwrap();
+    assert_eq!(generation_two_value["generation"], 2);
+    let current_public_key = generation_two_value["authority_public_key"]
+        .as_str()
+        .unwrap();
+    let current_secret = if current_public_key == public([41; 32]) {
+        &new_secret
+    } else {
+        assert_eq!(current_public_key, public([51; 32]));
+        &third_secret
+    };
+
+    let reused_rotation = root.join("reused-authority-rotation.json");
+    assert!(
+        sign_authority_rotation(
+            &generation_two,
+            current_secret,
+            &old_secret,
+            "1200",
+            &reused_rotation,
+        )
+        .status
+        .success()
+    );
+    let reused_output = root.join("reused-authority-output.json");
+    let reused = apply_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &reused_rotation,
+        &reused_output,
+    );
+    assert!(!reused.status.success());
+    assert!(!reused_output.exists());
+    assert!(String::from_utf8_lossy(&reused.stderr).contains("reuses a historical key"));
+
+    let colliding_rotation = root.join("observer-colliding-authority-rotation.json");
+    assert!(
+        sign_authority_rotation(
+            &generation_two,
+            current_secret,
+            &observer_secret,
+            "1200",
+            &colliding_rotation,
+        )
+        .status
+        .success()
+    );
+    let colliding_output = root.join("observer-colliding-authority-output.json");
+    let colliding = apply_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &colliding_rotation,
+        &colliding_output,
+    );
+    assert!(!colliding.status.success());
+    assert!(!colliding_output.exists());
+    assert!(String::from_utf8_lossy(&colliding.stderr).contains("not role-disjoint"));
+
+    let history_records = fs::read_dir(&ledger)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(
+                "factory-release-state-transparency-external-gossip-organization-registry-transition-v1-",
+            ) || name.starts_with(
+                "factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-v1-",
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(history_records.len(), 2);
+    for entry in fs::read_dir(&ledger).unwrap() {
+        let source = fs::read(entry.unwrap().path()).unwrap();
+        for secret in [
+            hex::encode([31; 32]),
+            hex::encode([41; 32]),
+            hex::encode([51; 32]),
+            hex::encode([11; 32]),
+        ] {
+            assert!(
+                !source
+                    .windows(secret.len())
+                    .any(|window| window == secret.as_bytes())
+            );
+        }
+    }
+}
+
+#[test]
 fn publishes_closed_bounded_registry_schemas() {
     let temporary = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(temporary.path()).unwrap();
@@ -736,8 +1155,16 @@ fn publishes_closed_bounded_registry_schemas() {
             "transition.schema.json",
         ),
         (
+            "signed-factory-release-state-transparency-external-gossip-organization-registry-authority-key-rotation-schema",
+            "authority-rotation.schema.json",
+        ),
+        (
             "factory-release-state-transparency-external-gossip-organization-registry-verification-report-schema",
             "report.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-authority-rotation-verification-report-schema",
+            "authority-rotation-report.schema.json",
         ),
     ] {
         let output = root.join(filename);

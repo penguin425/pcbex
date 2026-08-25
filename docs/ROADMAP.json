@@ -999,6 +999,11 @@
     {
       "id": "factory-release-transparency-external-gossip-organization-registry",
       "release": "v1.493.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-gossip-registry-authority-key-rotation",
+      "release": "v1.494.0",
       "status": "current"
     }
   ]
