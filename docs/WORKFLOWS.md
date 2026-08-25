@@ -28,6 +28,7 @@ evidence your next consumer actually needs.
 | Latest external-log consistency head plus remote observer endpoints | Selected external-log quorum evidence | bounded observation acquisition → hash-bound transport receipts → full v1.490 replay per observer → exact-head organization quorum → durable v1.491 report |
 | Base observer policy plus successor keys | Rotated external-log quorum trust | export latest trust → old/new dual-sign → no-replace apply → derive effective v1.491 policy → acquire and verify → bind durable quorum to complete histories |
 | Durable observer-trust quorum plus organization authority | Governed external-log quorum eligibility | pin empty registry genesis → admit exact current trust states → retain signed transitions → bind durable v1.492 quorum to latest active organizations |
+| Governed observer registry plus successor authority key | Rotated registry authority trust | export latest registry → old/new dual-sign → serialized no-replace apply → replay mixed transition/rotation history → bind the durable observer quorum |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |

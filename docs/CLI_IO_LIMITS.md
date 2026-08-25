@@ -740,6 +740,28 @@ registry timestamp is ordered but not trusted, and host-ledger rollback
 resistance, global non-equivocation, real organizational independence, legal
 identity, ordering, payment, and exactly-once execution remain false.
 
+## Factory-state external gossip registry authority-rotation limits
+
+The v1.494 dual-signed authority rotation is capped at 16 KiB. It shares the
+v1.493 registry's 4,096-generation and 128 MiB report ceilings; organization
+transitions and authority rotations together consume that history bound.
+
+Each rotation binds the base-policy digest, policy ID, registry ID, exact next
+generation, preceding history-event digest, old and new non-weak Ed25519 keys,
+nondecreasing explicit time, and algorithm. Both keys sign the same payload.
+The successor must never appear in earlier authority history and every
+historical authority key remains disjoint from all observer keys.
+
+Unix transition and rotation apply commands serialize on the descriptor-pinned
+ledger manifest before reloading history and publishing one no-replace event.
+Identical retries converge; a transition/rotation race selects one generation
+winner. The legacy v1.493 verifier rejects any rotation, while the v1.494
+verifier embeds typed mixed-history evidence and the exact v1.492 trust report.
+
+Authority threshold governance, host-ledger rollback resistance, global
+non-equivocation, trusted time, real organizational independence, legal
+identity, ordering, payment, and exactly-once execution remain false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

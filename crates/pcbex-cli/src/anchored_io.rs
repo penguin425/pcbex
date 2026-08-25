@@ -28,7 +28,9 @@ use std::path::{Component, Path, PathBuf};
 use tempfile::NamedTempFile;
 
 #[cfg(unix)]
-use rustix::fs::{AtFlags, Mode, OFlags, fstat, linkat, openat, renameat, statat, unlinkat};
+use rustix::fs::{
+    AtFlags, FlockOperation, Mode, OFlags, flock, fstat, linkat, openat, renameat, statat, unlinkat,
+};
 
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -114,6 +116,19 @@ pub(crate) struct PinnedDirectory {
     directory: File,
     #[cfg(all(not(unix), not(windows)))]
     anchor: NamedTempFile,
+}
+
+/// An advisory exclusive lock held on one pinned regular file.
+#[cfg(unix)]
+pub(crate) struct PinnedFileExclusiveLock {
+    file: File,
+}
+
+#[cfg(unix)]
+impl Drop for PinnedFileExclusiveLock {
+    fn drop(&mut self) {
+        let _ = flock(&self.file, FlockOperation::Unlock);
+    }
 }
 
 /// A temporary file whose name and cleanup are anchored to the pinned
@@ -273,6 +288,56 @@ impl PinnedDirectory {
     /// Revalidate the pinned parent and the strict non-reparse path contract.
     pub(crate) fn revalidate_no_reparse(&self) -> io::Result<()> {
         self.ensure_pinned_no_reparse()
+    }
+
+    /// Acquire an advisory exclusive lock on a regular file below this directory.
+    ///
+    /// The file is opened without following symlinks and its visible identity is
+    /// checked after the blocking lock acquisition. Callers that coordinate a
+    /// mutation protocol must all lock the same retained file.
+    #[cfg(unix)]
+    pub(crate) fn lock_regular_file_exclusive(
+        &self,
+        relative_leaf: impl AsRef<Path>,
+    ) -> io::Result<PinnedFileExclusiveLock> {
+        let leaf = relative_leaf.as_ref();
+        let name = single_leaf_name(leaf)?;
+        self.ensure_pinned()?;
+        let file: File = openat(
+            &self.directory,
+            Path::new(name),
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+            Mode::empty(),
+        )?
+        .into();
+        let metadata = file.metadata()?;
+        if !metadata.file_type().is_file() {
+            return Err(invalid_path(
+                "pinned lock target must be a regular non-symlink file",
+            ));
+        }
+        let opened_stat = fstat(&file)?;
+        let visible_stat = statat(&self.directory, Path::new(name), AtFlags::SYMLINK_NOFOLLOW)?;
+        if !same_stat_identity(&opened_stat, &visible_stat) {
+            return Err(changed_error(
+                leaf,
+                "pinned lock target identity changed while it was being opened",
+            ));
+        }
+        flock(&file, FlockOperation::LockExclusive)?;
+        self.ensure_pinned()?;
+        let locked_stat = fstat(&file)?;
+        let final_visible_stat =
+            statat(&self.directory, Path::new(name), AtFlags::SYMLINK_NOFOLLOW)?;
+        if !same_stat_identity(&opened_stat, &locked_stat)
+            || !same_stat_identity(&locked_stat, &final_visible_stat)
+        {
+            return Err(changed_error(
+                leaf,
+                "pinned lock target identity changed during lock acquisition",
+            ));
+        }
+        Ok(PinnedFileExclusiveLock { file })
     }
 
     /// Require the pinned directory to be owned by the effective user and to

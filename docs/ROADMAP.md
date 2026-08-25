@@ -206,6 +206,7 @@ auditable release.
 | v1.491.0 | Factory-release transparency external-log gossip quorum | Acquire canonical v1.490 observation envelopes through bounded no-redirect HTTPS with hash-bound transport receipts, fully replay every selected observation against the exact latest v1.489 head, require a digest-pinned threshold of distinct organization/observer/key tuples to agree on one exact signed external head, reject later forks that merely share the local prefix, and durably retain one local-generation/policy-keyed no-replace report without claiming global non-equivocation, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.492.0 | Factory-release external-gossip observer key rotation | Anchor every v1.491 observer identity and initial key to one immutable base-policy digest, admit only non-weak successor keys authorized by both retained and successor Ed25519 keys in an exact one-generation/time/digest chain, retain transitions in the selected ledger with concurrent exact-writer convergence, derive the current unchanged-v1.491 policy, and bind its durable exact-head quorum to every complete latest rotation history while rejecting replay, fork, gap, mutation, historical-key reuse, and old-policy rollback without claiming host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
 | v1.493.0 | Governed factory-release external-gossip organization registry | Independently pin one empty generation-zero registry and role-disjoint Ed25519 authority, admit only exact latest v1.492 observer trust states, retain authority-signed one-generation admission, suspension, or permanent-revocation transitions in the selected ledger, and require every selected quorum member to belong to an active organization with current admitted trust while rejecting signature mutation, fork, gap, stale admission, authority/observer role reuse, and organization suspension without claiming authority threshold governance or rotation, host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
+| v1.494.0 | Factory-release external-gossip registry authority key rotation | Preserve every v1.493 wire artifact while adding a dual-signed one-generation authority handoff, require both current-key authorization and successor-key possession, reject historical authority-key reuse and every observer-role collision, serialize transition/rotation races on the pinned ledger manifest, and replay one typed mixed history into a self-contained quorum report without claiming threshold governance, host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1972,7 +1973,7 @@ that exact policy artifact. Its self-contained outer report carries every
 rotation and current trust state. An old policy or history prefix cannot pass
 while a later selected rotation remains present.
 
-The current v1.493.0 milestone adds an independently pinned generation-zero
+The released v1.493.0 milestone adds an independently pinned generation-zero
 organization registry under one role-disjoint Ed25519 authority. Exact
 one-generation transitions admit a current v1.492 observer trust-state digest,
 suspend an organization, or revoke it permanently. The Unix CLI retains those
@@ -1980,7 +1981,19 @@ transitions beside observer histories, rejects stale trust and competing forks,
 and requires every selected quorum member to remain active and currently
 admitted before committing one self-contained registry-bound report.
 
-Authority key rotation and threshold governance remain later boundaries.
-Host-ledger rollback resistance, trusted time, global non-equivocation, real
-organizational independence, legal identity, capacity, ordering, payment, and
-exactly-once execution remain unproved.
+The current v1.494.0 milestone makes that operational authority replaceable
+without changing any v1.493 wire artifact. Each handoff advances the shared
+registry generation exactly once, names the preceding transition-or-rotation
+digest, preserves organizations and admissions, and requires Ed25519
+signatures from both the current and successor keys over one payload.
+
+The selected-ledger loader rejects historical authority-key reuse, observer
+role collisions, gaps, and competing transition/rotation records. Both mutation
+commands serialize on the descriptor-pinned ledger manifest before guarded
+no-replace publication, while the new self-contained report replays typed mixed
+history from the independently pinned genesis. The v1.493 verifier fails closed
+when it encounters a rotation.
+
+Authority threshold governance, host-ledger rollback resistance, trusted time,
+global non-equivocation, real organizational independence, legal identity,
+capacity, ordering, payment, and exactly-once execution remain unproved.
