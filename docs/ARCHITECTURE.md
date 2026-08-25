@@ -98,6 +98,7 @@ writer.
 | Transparency external anchor | Exact latest v1.487 report inclusion in one separately policy-pinned external Ed25519-signed Merkle view | Rust inclusion verifier layered over the fully replayed witness chain and selected pinned ledger |
 | External-log consistency | Strict append-only extension from the retained v1.488 external tree head through a bounded no-replace predecessor chain | Rust consistency verifier layered over the fully replayed external anchor and selected pinned ledger |
 | External-log gossip | One separately pinned observer-signed head compared with the exact latest v1.489 head, with split-view rejection and optional bidirectional consistency proof | Rust gossip verifier layered over the fully replayed external consistency chain and selected pinned ledger |
+| External-log gossip quorum | Bounded remote observations independently replayed against the exact latest v1.489 head, then exact-head agreement across distinct policy-pinned organization, observer, and key tuples | Rust HTTPS adapter plus quorum verifier layered over the unchanged v1.490 verification boundary and selected pinned ledger |
 
 Later layers should retain or bind earlier identities instead of copying a
 boolean result. Fresh replay is required wherever the focused contract says a

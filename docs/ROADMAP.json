@@ -984,6 +984,11 @@
     {
       "id": "factory-release-transparency-external-log-gossip",
       "release": "v1.490.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-log-gossip-quorum",
+      "release": "v1.491.0",
       "status": "current"
     }
   ]
