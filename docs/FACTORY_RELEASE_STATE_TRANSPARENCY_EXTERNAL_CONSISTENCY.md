@@ -231,7 +231,8 @@ closed off Unix; schema and capability discovery remain cross-platform.
 A retained prefix proof still cannot show that independent consumers received
 the same view. Version 1.490 compares the latest retained head with one
 separately pinned observer receipt, and v1.491 adds bounded acquisition plus an
-exact-head observer-organization threshold. Key rotation remains separate.
+exact-head observer-organization threshold. Version 1.492 binds its current
+keys to complete selected-ledger rotation histories.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain

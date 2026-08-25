@@ -251,7 +251,8 @@ One observer comparison detects a selected split view but cannot establish what
 other observers received. Version 1.491 adds bounded remote acquisition and an
 exact-head threshold across multiple independently pinned observer receipts.
 
-Observer key rotation and a governed observer-organization trust registry
-remain separate boundaries. Trusted timestamping, ledger rollback protection,
-legal identity, capacity, order authority, payment, and exactly-once execution
-also remain outside this contract.
+Version 1.492 adds policy-bound observer key rotation around that unchanged
+quorum contract. A governed observer-organization trust registry remains
+separate. Trusted timestamping, ledger rollback protection, legal identity,
+capacity, order authority, payment, and exactly-once execution also remain
+outside this contract.

@@ -263,8 +263,8 @@ input/output or input/ledger overlap fail before public output appears.
 One inclusion proof does not show that a later external tree extends an earlier
 one. Version 1.489 adds that strict external-log consistency chain, and v1.490
 compares its latest head with one separately pinned observer view. Version
-1.491 adds bounded remote acquisition and exact-head threshold agreement; key
-rotation remains separate.
+1.491 adds bounded remote acquisition and exact-head threshold agreement.
+Version 1.492 binds that quorum to selected-ledger observer key histories.
 
 Trusted timestamping, real organizational independence, transport and legal
 identity, capacity, order authority, payment, and exactly-once execution remain

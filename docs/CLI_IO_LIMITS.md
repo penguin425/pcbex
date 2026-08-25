@@ -684,6 +684,34 @@ Global non-equivocation, real organizational independence or key custody,
 endpoint authenticity, selected-ledger rollback resistance, trusted time,
 server idempotency, and exactly-once execution remain false.
 
+## Factory-state external gossip observer-rotation limits
+
+The v1.492 trust state and each canonical dual-signed rotation are capped at 16
+KiB. One observer may advance through generations 1–4,096, while one trust-bound
+evaluation accepts at most 4,096 aggregate retained rotations across the base
+policy's existing maximum of 100 observers.
+
+Every transition advances exactly one generation and binds the immutable base
+v1.491 policy digest, policy ID, organization, observer, preceding rotation
+digest, old and new non-weak Ed25519 keys, explicit time, and algorithm. Both
+keys sign the same payload. Time may remain equal but cannot decrease, and no
+historical key may become current again.
+
+Rotation filenames use a domain-separated digest of the base-policy/member
+context plus the exact generation, keeping maximum-length IDs below filesystem
+component limits. The Unix apply command reloads the complete selected history
+around descriptor-relative no-replace publication. Identical concurrent writers
+converge; fork, gap, replay, mutation, and historical-key reuse fail closed.
+
+Effective-policy derivation emits one canonical unchanged-v1.491 policy plus
+its normalized semantic SHA-256. The 64 MiB recursively closed trust report
+embeds exact base/effective policies, every rotation and current trust state,
+and one complete v1.491 quorum report. A met quorum is retained; a
+below-threshold report remains output-only. Host-ledger rollback resistance,
+global non-equivocation, trusted time, real organizational independence,
+endpoint/legal identity, ordering, payment, and exactly-once execution remain
+false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

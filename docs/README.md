@@ -107,6 +107,10 @@ boundary document for the artifact you plan to produce or trust.
   — acquire canonical observations over bounded remote transport and require
   distinct configured organizations to agree on one exact signed external head.
 
+- [External-gossip Observer Key Rotation](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_OBSERVER_ROTATION.md)
+  — dual-sign generation- and digest-chained successor keys, retain the latest
+  histories, and derive the unchanged v1.491 quorum policy used in production.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
