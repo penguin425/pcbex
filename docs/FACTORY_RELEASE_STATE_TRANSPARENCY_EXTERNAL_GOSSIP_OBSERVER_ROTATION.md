@@ -176,4 +176,5 @@ ledger snapshot.
 It also does not establish global non-equivocation, trusted time, real
 organizational independence, key custody, legal identity, endpoint identity,
 capacity, order authority, payment, or exactly-once execution. A governed
-organization registry remains a separate trust boundary.
+organization registry is the separate v1.493 trust boundary documented in
+[External-gossip Organization Registry](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY.md).
