@@ -71,6 +71,8 @@ factory_transparency_external_gossip_observation_a="$output_directory/factory-re
 factory_transparency_external_gossip_observation_b="$output_directory/factory-release-transparency-external-gossip-quorum-observation-b.server.json"
 factory_transparency_external_gossip_observation_b_fork="$output_directory/factory-release-transparency-external-gossip-quorum-observation-b-fork.server.json"
 factory_transparency_external_gossip_private_b="$factory_response_secret_directory/external-gossip-observer-b.hex"
+factory_transparency_external_gossip_private_a_next="$factory_response_secret_directory/external-gossip-observer-a-next.hex"
+factory_transparency_external_gossip_private_a_fork="$factory_response_secret_directory/external-gossip-observer-a-fork.hex"
 
 "$pcbex_binary" factory-release-state-transparency-external-gossip-quorum-policy-schema \
   --output "$factory_transparency_external_gossip_quorum_policy_schema"
@@ -330,7 +332,7 @@ factory_transparency_external_gossip_transport_b="$output_directory/factory-rele
 factory_transparency_external_gossip_transport_b_fork="$output_directory/factory-release-transparency-external-gossip-quorum-transport-b-fork.json"
 factory_transparency_external_gossip_quorum_port="$output_directory/factory-release-transparency-external-gossip-quorum.port"
 external_gossip_quorum_server_pid=""
-trap 'if [ -n "${external_gossip_quorum_server_pid:-}" ]; then kill "$external_gossip_quorum_server_pid" 2>/dev/null || true; fi; kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der" "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b" "$factory_transparency_external_anchor_private" "$factory_transparency_external_gossip_private" "$factory_transparency_external_gossip_private_b"; rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory" 2>/dev/null || true' EXIT
+trap 'if [ -n "${external_gossip_quorum_server_pid:-}" ]; then kill "$external_gossip_quorum_server_pid" 2>/dev/null || true; fi; if [ -n "${external_gossip_rotation_server_pid:-}" ]; then kill "$external_gossip_rotation_server_pid" 2>/dev/null || true; fi; kill "$signed_release_adapter_server_pid" 2>/dev/null || true; rm -f -- "$factory_response_private_key" "$factory_response_public_der" "$factory_transparency_private_key" "$factory_transparency_public_der" "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b" "$factory_transparency_external_anchor_private" "$factory_transparency_external_gossip_private" "$factory_transparency_external_gossip_private_b" "$factory_transparency_external_gossip_private_a_next" "$factory_transparency_external_gossip_private_a_fork"; rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory" 2>/dev/null || true' EXIT
 
 export PCBEX_E2E_EXTERNAL_GOSSIP_TOKEN="v1491-e2e-bearer-token"
 python3 - \
@@ -850,6 +852,492 @@ for schema_path in (
     transport_schema_path,
     report_schema_path,
 ):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
+
+# v1.492 binds every v1.491 observer to its immutable base policy and advances
+# the selected current key only through one-generation, digest-chained old/new
+# dual signatures retained in the same trusted ledger.
+factory_transparency_external_gossip_trust_state_schema="$output_directory/factory-release-transparency-external-gossip-observer-trust-state.schema.json"
+factory_transparency_external_gossip_rotation_schema="$output_directory/factory-release-transparency-external-gossip-observer-rotation.schema.json"
+factory_transparency_external_gossip_trust_report_schema="$output_directory/factory-release-transparency-external-gossip-observer-trust-report.schema.json"
+factory_transparency_external_gossip_trust_initial="$output_directory/factory-release-transparency-external-gossip-observer-a.initial.json"
+factory_transparency_external_gossip_rotation="$output_directory/factory-release-transparency-external-gossip-observer-a.rotation.json"
+factory_transparency_external_gossip_rotation_fork="$output_directory/factory-release-transparency-external-gossip-observer-a.rotation-fork.json"
+factory_transparency_external_gossip_rotation_applied_a="$output_directory/factory-release-transparency-external-gossip-observer-a.applied-a.json"
+factory_transparency_external_gossip_rotation_applied_b="$output_directory/factory-release-transparency-external-gossip-observer-a.applied-b.json"
+factory_transparency_external_gossip_rotation_replay="$output_directory/factory-release-transparency-external-gossip-observer-a.replay.json"
+factory_transparency_external_gossip_rotation_fork_output="$output_directory/factory-release-transparency-external-gossip-observer-a.fork-output.json"
+factory_transparency_external_gossip_rotation_fork_error="$output_directory/factory-release-transparency-external-gossip-observer-a.fork.stderr"
+factory_transparency_external_gossip_rotation_tampered="$output_directory/factory-release-transparency-external-gossip-observer-a.rotation-tampered.json"
+factory_transparency_external_gossip_rotation_tampered_output="$output_directory/factory-release-transparency-external-gossip-observer-a.tampered-output.json"
+factory_transparency_external_gossip_rotation_tampered_error="$output_directory/factory-release-transparency-external-gossip-observer-a.tampered.stderr"
+factory_transparency_external_gossip_effective_policy="$output_directory/factory-release-transparency-external-gossip-effective.policy.json"
+factory_transparency_external_gossip_effective_policy_digest_file="$output_directory/factory-release-transparency-external-gossip-effective.policy.sha256"
+factory_transparency_external_gossip_rotated_observation_a_server="$output_directory/factory-release-transparency-external-gossip-rotated-observation-a.server.json"
+factory_transparency_external_gossip_rotated_observation_a="$output_directory/factory-release-transparency-external-gossip-rotated-observation-a.json"
+factory_transparency_external_gossip_rotated_observation_b="$output_directory/factory-release-transparency-external-gossip-rotated-observation-b.json"
+factory_transparency_external_gossip_rotated_transport_a="$output_directory/factory-release-transparency-external-gossip-rotated-transport-a.json"
+factory_transparency_external_gossip_rotated_transport_b="$output_directory/factory-release-transparency-external-gossip-rotated-transport-b.json"
+factory_transparency_external_gossip_rotated_quorum_report="$output_directory/factory-release-transparency-external-gossip-rotated-quorum.report.json"
+factory_transparency_external_gossip_trust_report_a="$output_directory/factory-release-transparency-external-gossip-observer-trust-a.report.json"
+factory_transparency_external_gossip_trust_report_b="$output_directory/factory-release-transparency-external-gossip-observer-trust-b.report.json"
+factory_transparency_external_gossip_trust_replay="$output_directory/factory-release-transparency-external-gossip-observer-trust-replay.report.json"
+factory_transparency_external_gossip_trust_rollback_output="$output_directory/factory-release-transparency-external-gossip-observer-trust-rollback.report.json"
+factory_transparency_external_gossip_trust_rollback_error="$output_directory/factory-release-transparency-external-gossip-observer-trust-rollback.stderr"
+factory_transparency_external_gossip_rotation_port="$output_directory/factory-release-transparency-external-gossip-rotation.port"
+
+"$pcbex_binary" factory-release-state-transparency-external-gossip-observer-trust-state-schema \
+  --output "$factory_transparency_external_gossip_trust_state_schema"
+"$pcbex_binary" signed-factory-release-state-transparency-external-gossip-observer-key-rotation-schema \
+  --output "$factory_transparency_external_gossip_rotation_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-observer-trust-verification-report-schema \
+  --output "$factory_transparency_external_gossip_trust_report_schema"
+
+python3 - \
+  "$factory_transparency_external_gossip_private_a_next" \
+  "$factory_transparency_external_gossip_private_a_fork" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+next_path, fork_path = map(Path, sys.argv[1:])
+next_path.write_text(bytes([73]).hex() * 32 + "\n", encoding="ascii")
+fork_path.write_text(bytes([74]).hex() * 32 + "\n", encoding="ascii")
+os.chmod(next_path, 0o600)
+os.chmod(fork_path, 0o600)
+PY
+
+"$pcbex_binary" export-factory-release-state-transparency-external-gossip-observer-trust-state \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --organization-id independent-observer-org-a \
+  --observer-id independent-observer-a \
+  --output "$factory_transparency_external_gossip_trust_initial"
+
+for successor_and_output in \
+  "$factory_transparency_external_gossip_private_a_next:$factory_transparency_external_gossip_rotation" \
+  "$factory_transparency_external_gossip_private_a_fork:$factory_transparency_external_gossip_rotation_fork"; do
+  successor=${successor_and_output%%:*}
+  rotation_output=${successor_and_output#*:}
+  "$pcbex_binary" sign-factory-release-state-transparency-external-gossip-observer-key-rotation \
+    --trust-state "$factory_transparency_external_gossip_trust_initial" \
+    --old-private-key "$factory_transparency_external_gossip_private" \
+    --new-private-key "$successor" \
+    --rotated-at-unix "$((factory_transparency_external_gossip_time + 1))" \
+    --output "$rotation_output"
+done
+
+apply_factory_transparency_external_gossip_rotation() {
+  "$pcbex_binary" apply-factory-release-state-transparency-external-gossip-observer-key-rotation \
+    --reservation-ledger "$monotonic_release_ledger" \
+    --expected-ledger-id "$signed_release_reservation_id" \
+    --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+    --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+    --rotation "$factory_transparency_external_gossip_rotation" \
+    --output "$1"
+}
+
+apply_factory_transparency_external_gossip_rotation \
+  "$factory_transparency_external_gossip_rotation_applied_a" &
+factory_transparency_external_gossip_rotation_pid_a=$!
+apply_factory_transparency_external_gossip_rotation \
+  "$factory_transparency_external_gossip_rotation_applied_b" &
+factory_transparency_external_gossip_rotation_pid_b=$!
+wait "$factory_transparency_external_gossip_rotation_pid_a"
+wait "$factory_transparency_external_gossip_rotation_pid_b"
+cmp "$factory_transparency_external_gossip_rotation_applied_a" \
+  "$factory_transparency_external_gossip_rotation_applied_b"
+
+apply_factory_transparency_external_gossip_rotation \
+  "$factory_transparency_external_gossip_rotation_replay"
+cmp "$factory_transparency_external_gossip_rotation_applied_a" \
+  "$factory_transparency_external_gossip_rotation_replay"
+
+if "$pcbex_binary" apply-factory-release-state-transparency-external-gossip-observer-key-rotation \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --rotation "$factory_transparency_external_gossip_rotation_fork" \
+  --output "$factory_transparency_external_gossip_rotation_fork_output" \
+  2>"$factory_transparency_external_gossip_rotation_fork_error"; then
+  echo "expected a competing external-gossip observer rotation fork to fail" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_rotation_fork_output"
+grep -Fq 'conflicts with retained history' \
+  "$factory_transparency_external_gossip_rotation_fork_error"
+
+python3 - \
+  "$factory_transparency_external_gossip_rotation" \
+  "$factory_transparency_external_gossip_rotation_tampered" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source_path, output_path = map(Path, sys.argv[1:])
+source = source_path.read_text(encoding="utf-8")
+rotation = json.loads(source)
+output_path.write_text(
+    source.replace(rotation["new_signature"], "00" * 64, 1),
+    encoding="utf-8",
+)
+PY
+
+if "$pcbex_binary" apply-factory-release-state-transparency-external-gossip-observer-key-rotation \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --rotation "$factory_transparency_external_gossip_rotation_tampered" \
+  --output "$factory_transparency_external_gossip_rotation_tampered_output" \
+  2>"$factory_transparency_external_gossip_rotation_tampered_error"; then
+  echo "expected a tampered external-gossip observer rotation to fail" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_rotation_tampered_output"
+grep -Fq 'signature verification failed' \
+  "$factory_transparency_external_gossip_rotation_tampered_error"
+
+"$pcbex_binary" derive-factory-release-state-transparency-external-gossip-effective-quorum-policy \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --output "$factory_transparency_external_gossip_effective_policy" \
+  --digest-output "$factory_transparency_external_gossip_effective_policy_digest_file"
+factory_transparency_external_gossip_effective_policy_digest="$(tr -d '\r\n' < "$factory_transparency_external_gossip_effective_policy_digest_file")"
+
+python3 - \
+  "$factory_transparency_external_gossip_observation_a" \
+  "$factory_transparency_external_gossip_private_a_next" \
+  "$factory_transparency_external_gossip_rotated_observation_a_server" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+source_path, private_path, output_path = map(Path, sys.argv[1:])
+observation = json.loads(source_path.read_bytes())
+receipt = observation["gossip_receipt"]
+head = receipt["observed_tree_head"]
+private_key = Ed25519PrivateKey.from_private_bytes(
+    bytes.fromhex(private_path.read_text(encoding="ascii").strip())
+)
+receipt["observer_public_key"] = private_key.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw,
+).hex()
+payload = {
+    "domain":
+        "pcbex-factory-release-state-transparency-external-log-gossip-receipt-v1",
+    "schema_version": receipt["schema_version"],
+    "receipt_scope": receipt["receipt_scope"],
+    "external_anchor_policy_sha256": receipt["external_anchor_policy_sha256"],
+    "external_log_id": receipt["external_log_id"],
+    "observer_id": receipt["observer_id"],
+    "observed_tree_head_sha256": receipt["observed_tree_head_sha256"],
+    "observed_tree_size": head["tree_size"],
+    "observed_root_sha256": head["root_sha256"],
+    "observed_tree_head_observed_at_unix": head["observed_at_unix"],
+    "external_log_public_key": head["public_key"],
+    "received_at_unix": receipt["received_at_unix"],
+    "expires_at_unix": receipt["expires_at_unix"],
+    "algorithm": receipt["algorithm"],
+    "observer_public_key": receipt["observer_public_key"],
+}
+receipt["signature"] = private_key.sign(
+    json.dumps(payload, separators=(",", ":")).encode("ascii")
+).hex()
+output_path.write_text(json.dumps(observation, indent=2) + "\n", encoding="utf-8")
+PY
+
+external_gossip_rotation_server_pid=""
+rm -f "$factory_transparency_external_gossip_rotation_port"
+python3 - \
+  "$factory_transparency_external_gossip_rotation_port" \
+  "$factory_transparency_external_gossip_rotated_observation_a_server" \
+  "$factory_transparency_external_gossip_observation_b" <<'PY' &
+import http.server
+import json
+from pathlib import Path
+import sys
+import threading
+
+port_path, observation_a_path, observation_b_path = map(Path, sys.argv[1:])
+responses = {
+    "independent-observer-a": observation_a_path.read_bytes(),
+    "independent-observer-b": observation_b_path.read_bytes(),
+}
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    count = 0
+
+    def do_POST(self):
+        if self.path != "/v1/external-gossip":
+            self.send_error(404)
+            return
+        size = int(self.headers.get("content-length", "0"))
+        request = json.loads(self.rfile.read(size))
+        body = responses[request["observer_id"]]
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        type(self).count += 1
+        if type(self).count == 2:
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+    def log_message(self, *_):
+        pass
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+port_path.write_text(str(server.server_address[1]), encoding="ascii")
+server.serve_forever()
+server.server_close()
+PY
+external_gossip_rotation_server_pid=$!
+for _ in $(seq 1 100); do
+  test -s "$factory_transparency_external_gossip_rotation_port" && break
+  sleep 0.05
+done
+test -s "$factory_transparency_external_gossip_rotation_port"
+factory_transparency_external_gossip_rotation_endpoint="http://127.0.0.1:$(cat "$factory_transparency_external_gossip_rotation_port")/v1/external-gossip"
+
+for member in \
+  "independent-observer-org-a:independent-observer-a:$factory_transparency_external_gossip_rotated_observation_a:$factory_transparency_external_gossip_rotated_transport_a" \
+  "independent-observer-org-b:independent-observer-b:$factory_transparency_external_gossip_rotated_observation_b:$factory_transparency_external_gossip_rotated_transport_b"; do
+  organization=${member%%:*}
+  remainder=${member#*:}
+  observer=${remainder%%:*}
+  remainder=${remainder#*:}
+  observation_output=${remainder%%:*}
+  transport_output=${remainder#*:}
+  "$pcbex_binary" request-factory-release-state-transparency-external-gossip-observation \
+    --local-external-consistency-report "$factory_transparency_external_consistency_report_2" \
+    --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+    --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+    --external-log-id kicad-e2e-external-anchor-log \
+    --observer-quorum-policy "$factory_transparency_external_gossip_effective_policy" \
+    --expected-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_effective_policy_digest" \
+    --organization-id "$organization" \
+    --observer-id "$observer" \
+    --endpoint "$factory_transparency_external_gossip_rotation_endpoint" \
+    --timeout-seconds 30 \
+    --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+    --output "$observation_output" \
+    --receipt-output "$transport_output" \
+    --allow-http-loopback
+done
+wait "$external_gossip_rotation_server_pid"
+external_gossip_rotation_server_pid=""
+
+"$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --idempotency-key "$monotonic_key" \
+  --log-id kicad-e2e-factory-release-log \
+  --policy-pack "$factory_receipt_policy" \
+  --expected-policy-sha256 "$fabrication_release_policy_digest" \
+  --transparency-policy "$factory_transparency_policy" \
+  --expected-transparency-policy-sha256 "$factory_transparency_policy_digest" \
+  --witness-policy "$factory_transparency_witness_policy" \
+  --expected-witness-policy-sha256 "$factory_transparency_witness_policy_digest" \
+  --external-anchor-policy "$factory_transparency_external_anchor_policy" \
+  --expected-external-anchor-policy-sha256 "$factory_transparency_external_anchor_policy_digest" \
+  --external-log-id kicad-e2e-external-anchor-log \
+  --observer-quorum-policy "$factory_transparency_external_gossip_effective_policy" \
+  --expected-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_effective_policy_digest" \
+  --observation "$factory_transparency_external_gossip_rotated_observation_a" \
+  --observation "$factory_transparency_external_gossip_rotated_observation_b" \
+  --transport-receipt "$factory_transparency_external_gossip_rotated_transport_a" \
+  --transport-receipt "$factory_transparency_external_gossip_rotated_transport_b" \
+  --evaluated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_rotated_quorum_report" \
+  --require-quorum --require-accepted
+
+verify_factory_transparency_external_gossip_trust() {
+  "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum-with-observer-trust \
+    --reservation-ledger "$monotonic_release_ledger" \
+    --expected-ledger-id "$signed_release_reservation_id" \
+    --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+    --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+    --effective-observer-quorum-policy "$factory_transparency_external_gossip_effective_policy" \
+    --expected-effective-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_effective_policy_digest" \
+    --quorum-report "$factory_transparency_external_gossip_rotated_quorum_report" \
+    --require-quorum --require-accepted \
+    --output "$1"
+}
+
+verify_factory_transparency_external_gossip_trust \
+  "$factory_transparency_external_gossip_trust_report_a" &
+factory_transparency_external_gossip_trust_pid_a=$!
+verify_factory_transparency_external_gossip_trust \
+  "$factory_transparency_external_gossip_trust_report_b" &
+factory_transparency_external_gossip_trust_pid_b=$!
+wait "$factory_transparency_external_gossip_trust_pid_a"
+wait "$factory_transparency_external_gossip_trust_pid_b"
+cmp "$factory_transparency_external_gossip_trust_report_a" \
+  "$factory_transparency_external_gossip_trust_report_b"
+verify_factory_transparency_external_gossip_trust \
+  "$factory_transparency_external_gossip_trust_replay"
+cmp "$factory_transparency_external_gossip_trust_report_a" \
+  "$factory_transparency_external_gossip_trust_replay"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum-with-observer-trust \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --effective-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-effective-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --quorum-report "$factory_transparency_external_gossip_quorum_report_a" \
+  --output "$factory_transparency_external_gossip_trust_rollback_output" \
+  2>"$factory_transparency_external_gossip_trust_rollback_error"; then
+  echo "expected an old observer policy to fail after selected-ledger rotation" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_trust_rollback_output"
+grep -Fq 'does not match the complete observer rotation histories' \
+  "$factory_transparency_external_gossip_trust_rollback_error"
+
+python3 - \
+  "$factory_transparency_external_gossip_trust_initial" \
+  "$factory_transparency_external_gossip_rotation" \
+  "$factory_transparency_external_gossip_rotation_applied_a" \
+  "$factory_transparency_external_gossip_quorum_policy" \
+  "$factory_transparency_external_gossip_effective_policy" \
+  "$factory_transparency_external_gossip_rotated_quorum_report" \
+  "$factory_transparency_external_gossip_trust_report_a" \
+  "$factory_transparency_external_gossip_trust_state_schema" \
+  "$factory_transparency_external_gossip_rotation_schema" \
+  "$factory_transparency_external_gossip_trust_report_schema" \
+  "$monotonic_release_ledger" \
+  "$factory_transparency_external_gossip_private" \
+  "$factory_transparency_external_gossip_private_a_next" \
+  "$factory_transparency_external_gossip_private_a_fork" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+initial_path, rotation_path, applied_path, base_path, effective_path, \
+    quorum_path, report_path, state_schema_path, rotation_schema_path, \
+    report_schema_path, ledger_path, old_private_path, next_private_path, \
+    fork_private_path = map(Path, sys.argv[1:])
+
+initial = json.loads(initial_path.read_bytes())
+rotation_source = rotation_path.read_bytes()
+rotation = json.loads(rotation_source)
+applied = json.loads(applied_path.read_bytes())
+base_source = base_path.read_bytes()
+base = json.loads(base_source)
+effective_source = effective_path.read_bytes()
+effective = json.loads(effective_source)
+quorum_source = quorum_path.read_bytes()
+quorum = json.loads(quorum_source)
+report_source = report_path.read_bytes()
+report = json.loads(report_source)
+
+assert initial["generation"] == 0
+assert initial["current_public_key"] == base["trusted_observers"][0]["public_key"]
+assert applied["generation"] == 1
+assert applied["last_rotation_sha256"] == hashlib.sha256(
+    json.dumps(rotation, separators=(",", ":")).encode("ascii")
+).hexdigest()
+assert rotation["from_generation"] == 0 and rotation["to_generation"] == 1
+assert rotation["previous_rotation_sha256"] is None
+assert rotation["old_public_key"] == initial["current_public_key"]
+assert rotation["new_public_key"] == applied["current_public_key"]
+assert rotation["old_signature"] != rotation["new_signature"]
+assert effective["trusted_observers"][0]["public_key"] == applied["current_public_key"]
+assert effective["trusted_observers"][1]["public_key"] == base["trusted_observers"][1]["public_key"]
+assert quorum["observer_quorum_policy"] == effective
+
+assert report["status"] == "verified"
+assert report["quorum_met"] is True
+assert report["observer_rotation_count"] == 1
+assert report["base_observer_quorum_policy"] == base
+assert report["effective_observer_quorum_policy"] == effective
+assert report["quorum_report"] == quorum
+assert report["observer_trust"][0]["current_trust_state"] == applied
+assert len(report["observer_trust"][0]["rotations"]) == 1
+assert report["observer_trust"][0]["rotations"][0]["rotation"] == rotation
+assert report["observer_trust"][1]["current_trust_state"]["generation"] == 0
+assert report["observer_trust"][1]["rotations"] == []
+for claim in (
+    "base_observer_quorum_policy_pin_matched",
+    "complete_observer_rotation_histories_verified",
+    "observer_rotation_dual_signatures_verified",
+    "observer_rotation_generation_chains_verified",
+    "observer_rotation_digest_chains_verified",
+    "observer_rotation_timestamps_monotonic",
+    "effective_observer_quorum_policy_derived",
+    "effective_observer_quorum_policy_pin_matched",
+    "current_observer_trust_bound_to_quorum",
+    "selected_ledger_latest_observer_rotations_verified",
+):
+    assert report[claim] is True, claim
+for claim in (
+    "selected_ledger_rollback_resistance_verified",
+    "global_non_equivocation_verified",
+    "trusted_time_verified",
+    "independent_organization_operation_verified",
+    "factory_legal_identity_verified",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "exactly_once_execution_verified",
+):
+    assert report[claim] is False, claim
+
+def identity(source):
+    return {"bytes": len(source), "sha256": hashlib.sha256(source).hexdigest()}
+
+assert report["base_observer_quorum_policy_artifact"] == identity(base_source)
+assert report["effective_observer_quorum_policy_artifact"] == identity(effective_source)
+assert report["quorum_report_artifact"] == identity(quorum_source)
+assert report["observer_trust"][0]["rotations"][0]["artifact"] == identity(rotation_source)
+
+rotation_records = list(ledger_path.glob(
+    "factory-release-state-transparency-external-gossip-observer-rotation-v1-*.json"
+))
+assert len(rotation_records) == 1
+assert rotation_records[0].read_bytes() == rotation_source
+trust_records = list(ledger_path.glob(
+    "factory-release-state-transparency-external-gossip-observer-trust-v1-*.json"
+))
+assert len(trust_records) == 1
+assert trust_records[0].read_bytes() == report_source
+
+secrets = [
+    old_private_path.read_text(encoding="ascii").strip().encode(),
+    next_private_path.read_text(encoding="ascii").strip().encode(),
+    fork_private_path.read_text(encoding="ascii").strip().encode(),
+]
+for artifact in [report_path, *ledger_path.iterdir()]:
+    source = artifact.read_bytes()
+    for secret in secrets:
+        assert secret not in source, artifact
+
+for schema_path in (state_schema_path, rotation_schema_path, report_schema_path):
     schema = json.loads(schema_path.read_bytes())
     pending = [schema]
     while pending:
@@ -5856,7 +6344,9 @@ rm -f -- \
   "$factory_transparency_witness_private_a" "$factory_transparency_witness_private_b" \
   "$factory_transparency_external_anchor_private" \
   "$factory_transparency_external_gossip_private" \
-  "$factory_transparency_external_gossip_private_b"
+  "$factory_transparency_external_gossip_private_b" \
+  "$factory_transparency_external_gossip_private_a_next" \
+  "$factory_transparency_external_gossip_private_a_fork"
 rmdir -- "$factory_response_secret_directory" "$factory_witness_secret_directory"
 trap - EXIT
 

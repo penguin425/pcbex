@@ -257,9 +257,9 @@ rejection, canonical pretty rendering, and a trailing newline.
 
 ## What remains
 
-Static observer keys cannot express a controlled successor. The next useful
-layer is generation- and digest-chained observer key rotation with old/new dual
-signatures and explicit rollback, gap, and fork rejection.
+v1.492 adds policy-bound, generation- and digest-chained observer key rotation
+without changing this wire contract. See [External-gossip Observer Key
+Rotation](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_OBSERVER_ROTATION.md).
 
 A governed organization registry remains separate. Trusted timestamping,
 selected-ledger rollback protection, legal identity, capacity, order authority,

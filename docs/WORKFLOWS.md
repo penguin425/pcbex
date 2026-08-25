@@ -26,6 +26,7 @@ evidence your next consumer actually needs.
 | Retained external anchor plus newer signed views | Selected external-log append-only evidence | complete v1.488 replay → authenticated old/new heads → bounded consistency proof → durable v1.489 chain |
 | Latest external-log consistency head plus an observer receipt | Selected external-log gossip evidence | complete v1.489 replay → log and observer signature checks → exact-head comparison → optional consistency proof → durable v1.490 report |
 | Latest external-log consistency head plus remote observer endpoints | Selected external-log quorum evidence | bounded observation acquisition → hash-bound transport receipts → full v1.490 replay per observer → exact-head organization quorum → durable v1.491 report |
+| Base observer policy plus successor keys | Rotated external-log quorum trust | export latest trust → old/new dual-sign → no-replace apply → derive effective v1.491 policy → acquire and verify → bind durable quorum to complete histories |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |

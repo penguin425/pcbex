@@ -989,6 +989,11 @@
     {
       "id": "factory-release-transparency-external-log-gossip-quorum",
       "release": "v1.491.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-gossip-observer-key-rotation",
+      "release": "v1.492.0",
       "status": "current"
     }
   ]

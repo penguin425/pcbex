@@ -204,6 +204,7 @@ auditable release.
 | v1.489.0 | Factory-release transparency external-log consistency | Fully reload the exact v1.488 anchor and complete retained predecessor chain, authenticate both external signed heads before interpreting one bounded RFC 6962-shaped consistency path, require strict append-only growth under one log/key/policy context, and retain up to 10,000 no-replace generations without claiming global non-equivocation, selected-ledger rollback resistance, trusted time, real organizational independence, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.490.0 | Factory-release transparency external-log gossip | Fully reload the latest complete v1.489 head, verify one independently pinned observer receipt only after authenticating both external-log views, accept identical trees or a bounded consistency proof in either direction, reject same-size divergent roots and observer role reuse, and retain one local-generation/observer-keyed no-replace comparison without claiming global non-equivocation, observer quorum, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
 | v1.491.0 | Factory-release transparency external-log gossip quorum | Acquire canonical v1.490 observation envelopes through bounded no-redirect HTTPS with hash-bound transport receipts, fully replay every selected observation against the exact latest v1.489 head, require a digest-pinned threshold of distinct organization/observer/key tuples to agree on one exact signed external head, reject later forks that merely share the local prefix, and durably retain one local-generation/policy-keyed no-replace report without claiming global non-equivocation, real organizational independence, selected-ledger rollback resistance, trusted time, transport/legal identity, ordering, payment, or exactly-once execution |
+| v1.492.0 | Factory-release external-gossip observer key rotation | Anchor every v1.491 observer identity and initial key to one immutable base-policy digest, admit only non-weak successor keys authorized by both retained and successor Ed25519 keys in an exact one-generation/time/digest chain, retain transitions in the selected ledger with concurrent exact-writer convergence, derive the current unchanged-v1.491 policy, and bind its durable exact-head quorum to every complete latest rotation history while rejecting replay, fork, gap, mutation, historical-key reuse, and old-policy rollback without claiming host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1931,7 +1932,7 @@ binds that generation plus the observer ID and key, so different observers can
 coexist while competing evidence for one observer conflicts. Exact retry
 returns retained bytes after receipt expiry.
 
-The current v1.491.0 milestone adds bounded remote acquisition and a static
+The v1.491.0 milestone adds bounded remote acquisition and a static
 observer-organization threshold without changing any v1.484–v1.490 wire byte.
 The HTTPS adapter rejects redirects, queries, userinfo, non-JSON responses,
 responses above 1 MiB, and timeouts outside 1–600 seconds. Optional bearer
@@ -1953,5 +1954,22 @@ when each is independently consistent with the same local prefix. A below-
 threshold report is published only to the requested output; a met quorum is
 also retained under one local-generation/policy-keyed no-replace name. Exact
 retry returns the retained bytes after expiry, while alternate evidence
-conflicts. Observer key rotation and a governed organization registry remain
-later trust boundaries.
+conflicts.
+
+The current v1.492.0 milestone makes those observer keys replaceable without
+changing the v1.491 acquisition or quorum wire contracts. Each generation-zero
+trust state binds one base-policy digest, policy ID, organization, observer,
+and initial non-weak Ed25519 key. Every successor transition advances exactly
+one bounded generation, names the preceding transition digest, preserves a
+nondecreasing explicit time, and proves both old-key authorization and new-key
+possession. Historical key reuse is rejected.
+
+The Unix CLI reloads each complete selected-ledger history, converges concurrent
+exact transition writers through no-replace publication, derives one canonical
+effective v1.491 policy, and requires a durable v1.491 quorum report to embed
+that exact policy artifact. Its self-contained outer report carries every
+rotation and current trust state. An old policy or history prefix cannot pass
+while a later selected rotation remains present. A governed organization
+registry remains a later boundary; host-ledger rollback resistance, trusted
+time, global non-equivocation, real organizational independence, legal identity,
+capacity, ordering, payment, and exactly-once execution remain unproved.

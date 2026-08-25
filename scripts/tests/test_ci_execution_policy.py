@@ -703,6 +703,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
             "          factory_release_state_transparency"
         )
+        observer_rotation_command = (
+            "cargo +stable test --package pcbex\n"
+            "          --test factory_release_external_gossip_observer_rotation --release --locked"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
@@ -745,6 +749,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(monotonic_factory_state_command, boundaries)
         self.assertEqual(document.count(factory_state_transparency_command), 2)
         self.assertIn(factory_state_transparency_command, boundaries)
+        self.assertEqual(document.count(observer_rotation_command), 1)
+        self.assertIn(observer_rotation_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
@@ -762,6 +768,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn(authenticated_factory_response_command, rust_windows)
         self.assertIn(monotonic_factory_state_command, rust_windows)
         self.assertIn(factory_state_transparency_command, rust_windows)
+        self.assertNotIn(observer_rotation_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -799,7 +806,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                 "- name: Run Windows monotonic factory-state boundaries"
             ),
             rust_windows.index(
-                "- name: Run Windows v1.485-v1.491 factory-state transparency boundaries"
+                "- name: Run Windows v1.485-v1.492 factory-state transparency boundaries"
             ),
         )
         self.assertIn("runs-on: windows-latest", rust_windows)
@@ -874,7 +881,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "- name: Run cross-platform v1.484 monotonic factory-state boundaries"
         )
         factory_state_transparency_step = boundaries.index(
-            "- name: Run cross-platform v1.485-v1.491 factory-state transparency boundaries"
+            "- name: Run cross-platform v1.485-v1.492 factory-state transparency boundaries"
+        )
+        observer_rotation_step = boundaries.index(
+            "- name: Run cross-platform v1.492 observer-rotation ledger boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -1051,7 +1061,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             monotonic_factory_state_block,
         )
         factory_state_transparency_block = boundaries[
-            factory_state_transparency_step:toolchain_step
+            factory_state_transparency_step:observer_rotation_step
         ]
         self.assertIn(
             factory_state_transparency_command,
@@ -1060,6 +1070,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             "if: ${{ runner.os != 'Windows' }}",
             factory_state_transparency_block,
+        )
+        observer_rotation_block = boundaries[observer_rotation_step:toolchain_step]
+        self.assertIn(observer_rotation_command, observer_rotation_block)
+        self.assertIn(
+            "if: ${{ runner.os != 'Windows' }}",
+            observer_rotation_block,
         )
         self.assertLess(
             assembly_supplier_offer_step,
@@ -1117,7 +1133,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
             monotonic_factory_state_step,
         )
         self.assertLess(monotonic_factory_state_step, factory_state_transparency_step)
-        self.assertLess(factory_state_transparency_step, toolchain_step)
+        self.assertLess(factory_state_transparency_step, observer_rotation_step)
+        self.assertLess(observer_rotation_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

@@ -1940,11 +1940,16 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
-      - name: Run cross-platform v1.485-v1.491 factory-state transparency boundaries
+      - name: Run cross-platform v1.485-v1.492 factory-state transparency boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_state_transparency
+      - name: Run cross-platform v1.492 observer-rotation ledger boundaries
+        if: ${{ runner.os != 'Windows' }}
+        run: >-
+          cargo +stable test --package pcbex
+          --test factory_release_external_gossip_observer_rotation --release --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -2057,7 +2062,7 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
-      - name: Run Windows v1.485-v1.491 factory-state transparency boundaries
+      - name: Run Windows v1.485-v1.492 factory-state transparency boundaries
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_state_transparency
