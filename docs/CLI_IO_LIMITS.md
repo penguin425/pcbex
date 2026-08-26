@@ -847,6 +847,29 @@ people, organizations, or key custody. Host-ledger rollback resistance, global
 non-equivocation, trusted time, legal identity, ordering, payment, and
 exactly-once execution remain false.
 
+## Factory-state external gossip registry history-audit limits
+
+The v1.498 portable history and its audit report are each capped at 128 MiB and
+4,096 events. The history starts with one exact canonical registry artifact of
+at most 256 KiB and permits only the five existing event types, each under its
+original 16 KiB, 128 KiB, or 256 KiB bound.
+
+Export is a Unix selected-ledger operation. It pins the manifest identity,
+immutable base-policy semantic digest, and generation-zero registry semantic
+digest; loads the selected history; confirms replay reaches the selected final
+registry; then reloads all sources before guarded no-replace publication.
+
+Audit is cross-platform. It requires canonical pretty JSON plus LF, rejects
+duplicate or unknown keys, verifies every declared byte count and SHA-256,
+starts only from exact empty generation zero, and applies every event through
+the production verifier. The audit report and computed final registry publish
+as one alias-free no-clobber set after exact input revalidation.
+
+This proves only the supplied chain. It does not prove the selected latest head,
+host-ledger rollback resistance, global non-equivocation, trusted time,
+independent organization or key control, legal identity, ordering, payment, or
+exactly-once execution.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

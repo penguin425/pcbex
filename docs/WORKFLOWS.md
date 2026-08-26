@@ -32,6 +32,7 @@ evidence your next consumer actually needs.
 | Rotated observer registry plus multiple administrators | Threshold-governed registry decisions | export latest registry → root-sign fixed governance → collect distinct administrator approvals → serialized no-replace apply → replay mixed history with root-only mutation locked out |
 | Threshold-governed observer registry plus successor policy | Rotated registry governance | export latest registry → root-sign state-bound successor governance → satisfy retained and successor quorums → serialized no-replace apply → replay four event types |
 | Rotatable governance plus a prospective registry root | Governed root handoff | export exact active state → prospective-root-sign successor governance → satisfy both governance quorums → atomically rotate root and governance → replay five event types |
+| Selected factory-release registry ledger | Portable independent chain audit | pin ledger, base policy, and exact empty genesis → export typed five-event history → transfer one bounded artifact → replay into an atomic audit and computed final registry |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
