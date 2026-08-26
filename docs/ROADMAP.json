@@ -1009,6 +1009,11 @@
     {
       "id": "factory-release-transparency-external-gossip-registry-threshold-governance",
       "release": "v1.495.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-gossip-registry-governance-rotation",
+      "release": "v1.496.0",
       "status": "current"
     }
   ]

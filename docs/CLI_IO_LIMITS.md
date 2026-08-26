@@ -786,9 +786,38 @@ event types select one no-replace generation winner. The v1.493 and v1.494
 verifiers reject threshold-governed history.
 
 The report proves cryptographic threshold satisfaction, not independent
-control of the configured keys. Governance rotation, host-ledger rollback
-resistance, global non-equivocation, trusted time, legal identity, ordering,
-payment, and exactly-once execution remain false.
+control of the configured keys. Host-ledger rollback resistance, global
+non-equivocation, trusted time, legal identity, ordering, payment, and
+exactly-once execution remain false.
+
+## Factory-state external gossip registry governance-rotation limits
+
+The v1.496 governance rotation is capped at 256 KiB. It embeds both 32 KiB
+governance documents plus ordered old and new approval sets of at most 100
+members each. The four-event history remains bounded to 4,096 generations, and
+the self-contained governance-rotation report remains capped at 128 MiB.
+
+Successor governance must bind the exact current registry generation and
+semantic state digest under the retained root signature. Its threshold remains
+2–100, its authority list remains ordered and distinct, and it must change at
+least one threshold, identity, or key. Issue and rotation times are bounded by
+`999999999999999` and must not precede retained state.
+
+The rotation advances exactly one shared registry generation and prior-event
+digest. Both old and new approval sets must satisfy their own governance,
+contain ordered unique identities and distinct policy-matched keys, and verify
+over one domain-separated payload. Organizations, admissions, and registry root
+remain unchanged; only the active governance digest advances.
+
+All four mutation filenames occupy the same generation namespace under one
+descriptor-pinned manifest lock. Exact retry converges, while cross-type
+competition, stale replay, gaps, signature substitution, and observer-role key
+reuse fail closed. The v1.495 verifier rejects a governance-rotation event.
+
+Two valid quorum sets do not prove independent governance control and may
+overlap. Governed registry-root rotation, host-ledger rollback resistance,
+global non-equivocation, trusted time, legal identity, ordering, payment, and
+exactly-once execution remain false.
 
 ## Subprocess limits
 

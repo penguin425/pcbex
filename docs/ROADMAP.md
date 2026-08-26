@@ -208,6 +208,7 @@ auditable release.
 | v1.493.0 | Governed factory-release external-gossip organization registry | Independently pin one empty generation-zero registry and role-disjoint Ed25519 authority, admit only exact latest v1.492 observer trust states, retain authority-signed one-generation admission, suspension, or permanent-revocation transitions in the selected ledger, and require every selected quorum member to belong to an active organization with current admitted trust while rejecting signature mutation, fork, gap, stale admission, authority/observer role reuse, and organization suspension without claiming authority threshold governance or rotation, host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
 | v1.494.0 | Factory-release external-gossip registry authority key rotation | Preserve every v1.493 wire artifact while adding a dual-signed one-generation authority handoff, require both current-key authorization and successor-key possession, reject historical authority-key reuse and every observer-role collision, serialize transition/rotation races on the pinned ledger manifest, and replay one typed mixed history into a self-contained quorum report without claiming threshold governance, host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
 | v1.495.0 | Factory-release external-gossip registry threshold governance | Root-sign one exact activation-state-bound policy with 2–100 distinct authority keys, require a configurable distinct-key threshold of at least two for every admission, suspension, or revocation, retain threshold transitions in the shared serialized generation chain, lock out root-only mutation after activation, and replay legacy transitions, root rotations, and threshold events into one self-contained quorum report without claiming independent key control, governance rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.496.0 | Factory-release external-gossip registry governance rotation | Root-sign successor governance against the exact active registry state, require both retained and successor thresholds over one next-generation rotation payload before changing membership, authority keys, or threshold, retain the event in the shared serialized generation chain, reject no-op rotation and stale governance, and replay all four event types into one self-contained report without claiming independent governance control, governed root rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -1999,7 +2000,7 @@ Authority threshold governance, host-ledger rollback resistance, trusted time,
 global non-equivocation, real organizational independence, legal identity,
 capacity, ordering, payment, and exactly-once execution remain unproved.
 
-The current v1.495.0 milestone replaces root-only organization decisions with
+The released v1.495.0 milestone replaces root-only organization decisions with
 one fixed root-authorized threshold policy without changing any v1.493 or
 v1.494 wire artifact. The policy binds the exact activation generation and
 semantic registry digest, retained root, ordered authority IDs and keys,
@@ -2018,6 +2019,31 @@ replays all three event types and the exact v1.492 observer-trust report. The
 v1.493 and v1.494 verifiers reject threshold-governed history.
 
 Cryptographic threshold satisfaction does not prove independent people,
-organizations, or key custody. Governance rotation, host-ledger rollback
-resistance, trusted time, global non-equivocation, legal identity, capacity,
-ordering, payment, and exactly-once execution remain unproved.
+organizations, or key custody. Host-ledger rollback resistance, trusted time,
+global non-equivocation, legal identity, capacity, ordering, payment, and
+exactly-once execution remain unproved.
+
+The current v1.496.0 milestone makes that active governance replaceable without
+changing any v1.493–v1.495 wire artifact. The root signs a successor policy
+against the exact current registry generation and semantic state digest. The
+successor must change its threshold, identities, or keys; a reissued no-op
+policy fails closed.
+
+One governance-rotation event binds the exact next generation, preceding event
+digest, old and new governance digests, and nondecreasing rotation time. The
+retained policy and successor policy each supply an independently validated,
+ordered, distinct-key approval set satisfying their own threshold over that
+same payload. Rotation preserves the registry root, organizations, and observer
+admissions while atomically retaining the successor governance digest.
+
+The selected-ledger loader admits exactly one legacy transition, root rotation,
+threshold transition, or governance rotation per generation. It rejects gaps,
+cross-type conflicts, stale replay, signature substitution, and observer-role
+key reuse, then reconstructs one self-contained four-event report from the
+pinned genesis. The v1.495 verifier fails closed on the new event.
+
+Old and new quorum satisfaction does not prove independent governance control;
+the policies may overlap and one operator may control several keys. Governed
+registry-root rotation, host-ledger rollback resistance, trusted time, global
+non-equivocation, legal identity, capacity, ordering, payment, and exactly-once
+execution remain unproved.

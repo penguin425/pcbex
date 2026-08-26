@@ -123,6 +123,10 @@ boundary document for the artifact you plan to produce or trust.
   — root-authorize a fixed authority set, require distinct-key threshold
   approval for every organization decision, and reject root-only bypasses.
 
+- [External-gossip Registry Governance Rotation](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_ROTATION.md)
+  — require both retained and successor quorums before changing governance
+  membership, authority keys, or threshold.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

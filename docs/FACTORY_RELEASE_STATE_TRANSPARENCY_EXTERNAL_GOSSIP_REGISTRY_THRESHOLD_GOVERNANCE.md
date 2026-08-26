@@ -199,9 +199,10 @@ This boundary proves that the configured keys produced enough valid approvals.
 It does not prove that those keys belong to independent people or organizations,
 that their custody is sound, or that an operator did not control several keys.
 
-The governance set is fixed after activation. Changing its members, keys, or
-threshold requires a future dual-quorum governance-rotation contract; the root
-cannot bypass the active policy.
+The v1.495 governance set is fixed after activation. v1.496 adds a separate
+[dual-quorum governance-rotation contract](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNANCE_ROTATION.md)
+for changing members, keys, or threshold; the root still cannot bypass the
+active policy.
 
 The selected ledger remains locally mutable storage. Host rollback resistance,
 trusted time, global non-equivocation, legal identity, capacity, order placement,
