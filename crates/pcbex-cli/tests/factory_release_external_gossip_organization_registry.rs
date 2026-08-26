@@ -215,6 +215,30 @@ fn write_canonical_json(path: &Path, value: &Value) {
     .unwrap();
 }
 
+fn compact_json_source(source: &[u8]) -> Vec<u8> {
+    let mut compact = Vec::with_capacity(source.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for &byte in source {
+        if in_string {
+            compact.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+            compact.push(byte);
+        } else if !byte.is_ascii_whitespace() {
+            compact.push(byte);
+        }
+    }
+    compact
+}
+
 fn exact_identity(value: &Value) -> Value {
     let source = format!("{}\n", serde_json::to_string_pretty(value).unwrap());
     serde_json::json!({
@@ -2818,6 +2842,250 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         fs::read(&audit).unwrap()
     );
 
+    let stale_root_checkpoint = root.join("registry-history.stale-root.checkpoint.json");
+    let stale_root = run(&[
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint",
+        "--history",
+        path(&history),
+        "--authority-private-key",
+        path(&root_b_secret),
+        "--issued-at-unix",
+        "5100",
+        "--output",
+        path(&stale_root_checkpoint),
+    ]);
+    assert!(!stale_root.status.success());
+    assert!(!stale_root_checkpoint.exists());
+
+    let checkpoint = root.join("registry-history.checkpoint.json");
+    successful(&[
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint",
+        "--history",
+        path(&history),
+        "--authority-private-key",
+        path(&root_c_secret),
+        "--issued-at-unix",
+        "5100",
+        "--output",
+        path(&checkpoint),
+    ]);
+    let checkpoint_value: Value = serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(checkpoint_value["registry_id"], "portable-history");
+    assert_eq!(checkpoint_value["generation"], 5);
+    assert_eq!(
+        checkpoint_value["history_audit_sha256"],
+        hex::encode(Sha256::digest(compact_json_source(
+            &fs::read(&audit).unwrap()
+        )))
+    );
+    assert_eq!(
+        checkpoint_value["final_registry_sha256"],
+        audit_value["final_registry_sha256"]
+    );
+    assert_eq!(checkpoint_value["authority_public_key"], public([33; 32]));
+    let normalized_checkpoint = root.join("registry-history.checkpoint.normalized.json");
+    successful(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint",
+        path(&checkpoint),
+        "--output",
+        path(&normalized_checkpoint),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_checkpoint).unwrap(),
+        fs::read(&checkpoint).unwrap()
+    );
+
+    let checkpoint_trust = root.join("registry-history.checkpoint.trust.json");
+    successful(&[
+        "accept-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--accepted-at-unix",
+        "5200",
+        "--output",
+        path(&checkpoint_trust),
+    ]);
+    let checkpoint_trust_value: Value =
+        serde_json::from_slice(&fs::read(&checkpoint_trust).unwrap()).unwrap();
+    assert_eq!(checkpoint_trust_value["accepted_generation"], 5);
+    assert_eq!(
+        checkpoint_trust_value["signed_checkpoint"],
+        checkpoint_value
+    );
+    let normalized_trust = root.join("registry-history.checkpoint.trust.normalized.json");
+    successful(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--output",
+        path(&normalized_trust),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_trust).unwrap(),
+        fs::read(&checkpoint_trust).unwrap()
+    );
+    let retry_trust = root.join("registry-history.checkpoint.trust.retry.json");
+    successful(&[
+        "accept-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--baseline",
+        path(&checkpoint_trust),
+        "--accepted-at-unix",
+        "5300",
+        "--output",
+        path(&retry_trust),
+    ]);
+    assert_eq!(
+        fs::read(&retry_trust).unwrap(),
+        fs::read(&checkpoint_trust).unwrap()
+    );
+
+    let witness_a_secret = root.join("checkpoint-witness-a-secret.hex");
+    let witness_a_public = root.join("checkpoint-witness-a-public.hex");
+    let witness_b_secret = root.join("checkpoint-witness-b-secret.hex");
+    let witness_b_public = root.join("checkpoint-witness-b-public.hex");
+    for (secret_path, public_path, secret) in [
+        (&witness_a_secret, &witness_a_public, [81; 32]),
+        (&witness_b_secret, &witness_b_public, [82; 32]),
+    ] {
+        write_hex(secret_path, secret, 0o600);
+        write_hex(
+            public_path,
+            SigningKey::from_bytes(&secret).verifying_key().to_bytes(),
+            0o644,
+        );
+    }
+    let witness_a = root.join("registry-history.checkpoint.witness-a.json");
+    let witness_b = root.join("registry-history.checkpoint.witness-b.json");
+    let governance_key_witness =
+        root.join("registry-history.checkpoint.governance-key-witness.json");
+    let role_collision = run(&[
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--witness-id",
+        "governance-reuse",
+        "--witness-private-key",
+        path(&governance_keys[4].0),
+        "--witnessed-at-unix",
+        "5300",
+        "--output",
+        path(&governance_key_witness),
+    ]);
+    assert!(!role_collision.status.success());
+    assert!(!governance_key_witness.exists());
+    for (witness_id, secret, witnessed_at, output) in [
+        ("witness-a", &witness_a_secret, "5300", &witness_a),
+        ("witness-b", &witness_b_secret, "5301", &witness_b),
+    ] {
+        successful(&[
+            "sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+            "--history",
+            path(&history),
+            "--checkpoint",
+            path(&checkpoint),
+            "--witness-id",
+            witness_id,
+            "--witness-private-key",
+            path(secret),
+            "--witnessed-at-unix",
+            witnessed_at,
+            "--output",
+            path(output),
+        ]);
+    }
+    let normalized_witness = root.join("registry-history.checkpoint.witness.normalized.json");
+    successful(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+        path(&witness_a),
+        "--output",
+        path(&normalized_witness),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_witness).unwrap(),
+        fs::read(&witness_a).unwrap()
+    );
+
+    let witness_quorum = root.join("registry-history.checkpoint.witness-quorum.json");
+    successful(&[
+        "verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--witness",
+        path(&witness_b),
+        "--witness",
+        path(&witness_a),
+        "--trusted-witness-id",
+        "witness-b",
+        "--trusted-witness-id",
+        "witness-a",
+        "--trusted-witness-public-key",
+        path(&witness_b_public),
+        "--trusted-witness-public-key",
+        path(&witness_a_public),
+        "--minimum-witnesses",
+        "2",
+        "--evaluated-at-unix",
+        "5400",
+        "--require-quorum",
+        "--output",
+        path(&witness_quorum),
+    ]);
+    let witness_quorum_value: Value =
+        serde_json::from_slice(&fs::read(&witness_quorum).unwrap()).unwrap();
+    assert_eq!(witness_quorum_value["valid_witnesses"], 2);
+    assert_eq!(witness_quorum_value["quorum_met"], true);
+    assert_eq!(
+        witness_quorum_value["members"][0]["witness_id"],
+        "witness-a"
+    );
+    let normalized_quorum = root.join("registry-history.checkpoint.witness-quorum.normalized.json");
+    successful(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-quorum",
+        path(&witness_quorum),
+        "--output",
+        path(&normalized_quorum),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_quorum).unwrap(),
+        fs::read(&witness_quorum).unwrap()
+    );
+
+    let below_quorum = root.join("registry-history.checkpoint.below-quorum.json");
+    let below = run(&[
+        "verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--witness",
+        path(&witness_a),
+        "--trusted-witness-id",
+        "witness-a",
+        "--trusted-witness-public-key",
+        path(&witness_a_public),
+        "--minimum-witnesses",
+        "2",
+        "--evaluated-at-unix",
+        "5400",
+        "--require-quorum",
+        "--output",
+        path(&below_quorum),
+    ]);
+    assert!(!below.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&below_quorum).unwrap()).unwrap()["quorum_met"],
+        false
+    );
+
     for (name, mutate) in [
         (
             "reordered",
@@ -2997,6 +3265,22 @@ fn publishes_closed_bounded_registry_schemas() {
         (
             "factory-release-state-transparency-external-gossip-organization-registry-history-audit-schema",
             "history-audit.schema.json",
+        ),
+        (
+            "signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-schema",
+            "history-checkpoint.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-trust-state-schema",
+            "history-checkpoint-trust-state.schema.json",
+        ),
+        (
+            "signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-schema",
+            "history-checkpoint-witness.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-quorum-schema",
+            "history-checkpoint-witness-quorum.schema.json",
         ),
     ] {
         let output = root.join(filename);

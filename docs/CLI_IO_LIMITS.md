@@ -870,6 +870,29 @@ host-ledger rollback resistance, global non-equivocation, trusted time,
 independent organization or key control, legal identity, ordering, payment, or
 exactly-once execution.
 
+## Factory-state external gossip registry history-checkpoint limits
+
+The v1.499 signed checkpoint and signed witness are each capped at 32 KiB. The
+accepted checkpoint trust state is capped at 64 KiB, and the witness-quorum
+report is capped at 128 KiB. Every command replays the canonical v1.498 history,
+which retains its 128 MiB and 4,096-event bounds.
+
+Acceptance must occur no earlier than checkpoint issuance and no more than
+86,400 seconds later. A supplied baseline requires the same registry identity,
+forbids generation rollback and same-generation equivocation, preserves
+nondecreasing issue/acceptance times, and requires the new audit to contain the
+exact accepted state at its historical generation.
+
+Witness thresholds are 2–100, with at most 100 supplied witness artifacts and
+trusted identity/key pairs. Witnesses must be no older than 86,400 seconds at
+evaluation, cannot be future-dated, and must use distinct non-weak Ed25519 keys
+that do not reuse any registry root or embedded governance authority key.
+
+All four artifacts require canonical pretty JSON plus LF and reject duplicate
+or unknown keys. Single outputs use guarded no-replace publication after exact
+public-input revalidation. A valid below-threshold report is retained before
+`--require-quorum` returns nonzero.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

@@ -2696,6 +2696,30 @@ factory_transparency_external_gossip_registry_history_normalized="$output_direct
 factory_transparency_external_gossip_registry_history_audit="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-audit.json"
 factory_transparency_external_gossip_registry_history_audit_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-audit.normalized.json"
 factory_transparency_external_gossip_registry_history_final="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-final.json"
+factory_transparency_external_gossip_registry_history_checkpoint_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-history-checkpoint.schema.json"
+factory_transparency_external_gossip_registry_history_checkpoint_trust_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-history-checkpoint-trust-state.schema.json"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-history-checkpoint-witness.schema.json"
+factory_transparency_external_gossip_registry_history_checkpoint_quorum_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-history-checkpoint-witness-quorum.schema.json"
+factory_transparency_external_gossip_registry_history_checkpoint="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.json"
+factory_transparency_external_gossip_registry_history_checkpoint_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.normalized.json"
+factory_transparency_external_gossip_registry_history_checkpoint_stale_root="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.stale-root.json"
+factory_transparency_external_gossip_registry_history_checkpoint_stale_root_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.stale-root.stderr"
+factory_transparency_external_gossip_registry_history_checkpoint_trust="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.trust.json"
+factory_transparency_external_gossip_registry_history_checkpoint_trust_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.trust.normalized.json"
+factory_transparency_external_gossip_registry_history_checkpoint_trust_retry="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.trust.retry.json"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_a_private="$output_directory/factory-release-transparency-external-gossip-registry-history-checkpoint-witness-a.private.hex"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_a_public="$output_directory/factory-release-transparency-external-gossip-registry-history-checkpoint-witness-a.public.hex"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_b_private="$output_directory/factory-release-transparency-external-gossip-registry-history-checkpoint-witness-b.private.hex"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_b_public="$output_directory/factory-release-transparency-external-gossip-registry-history-checkpoint-witness-b.public.hex"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_a="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-a.json"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_b="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-b.json"
+factory_transparency_external_gossip_registry_history_checkpoint_witness_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness.normalized.json"
+factory_transparency_external_gossip_registry_history_checkpoint_role_collision="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.role-collision.json"
+factory_transparency_external_gossip_registry_history_checkpoint_role_collision_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.role-collision.stderr"
+factory_transparency_external_gossip_registry_history_checkpoint_quorum="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-quorum.json"
+factory_transparency_external_gossip_registry_history_checkpoint_quorum_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-quorum.normalized.json"
+factory_transparency_external_gossip_registry_history_checkpoint_below_quorum="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.below-quorum.json"
+factory_transparency_external_gossip_registry_history_checkpoint_below_quorum_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.below-quorum.stderr"
 
 "$pcbex_binary" signed-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation-schema \
   --output "$factory_transparency_external_gossip_registry_governed_rotation_schema"
@@ -2735,6 +2759,35 @@ write_keypair(paths[0], paths[1], 88)
 write_keypair(paths[2], paths[3], 89)
 write_keypair(paths[4], paths[5], 90)
 write_keypair(paths[6], paths[7], 91)
+PY
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_private" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_public" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b_private" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b_public" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+paths = list(map(Path, sys.argv[1:]))
+
+def write_keypair(private_path, public_path, marker):
+    seed = bytes([marker]) * 32
+    private_key = Ed25519PrivateKey.from_private_bytes(seed)
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    private_path.write_text(seed.hex() + "\n", encoding="ascii")
+    public_path.write_text(public_key.hex() + "\n", encoding="ascii")
+    os.chmod(private_path, 0o600)
+
+write_keypair(paths[0], paths[1], 92)
+write_keypair(paths[2], paths[3], 93)
 PY
 
 "$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-successor-root-governance \
@@ -3140,6 +3193,253 @@ for schema_path in (history_schema_path, audit_schema_path):
             pending.extend(value.values())
         elif isinstance(value, list):
             pending.extend(value)
+PY
+
+# v1.499 signs the exact portable-history audit with the retained registry
+# root, pins monotonic consumer trust, and requires fresh role-disjoint
+# witnesses over one exact checkpoint.
+factory_transparency_external_gossip_checkpoint_issued_at="$((factory_transparency_external_gossip_time + 1))"
+factory_transparency_external_gossip_checkpoint_accepted_at="$((factory_transparency_external_gossip_time + 2))"
+factory_transparency_external_gossip_checkpoint_witnessed_at="$((factory_transparency_external_gossip_time + 3))"
+factory_transparency_external_gossip_checkpoint_evaluated_at="$((factory_transparency_external_gossip_time + 5))"
+
+"$pcbex_binary" signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-schema \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-trust-state-schema \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_trust_schema"
+"$pcbex_binary" signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-schema \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_witness_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-quorum-schema \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_quorum_schema"
+
+if "$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --authority-private-key "$factory_transparency_external_gossip_registry_threshold_next_root_private" \
+  --issued-at-unix "$factory_transparency_external_gossip_checkpoint_issued_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_stale_root" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_stale_root_error"; then
+  echo "expected a rotated registry root to fail checkpoint signing" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_stale_root"
+grep -Fq 'not the retained root' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_stale_root_error"
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --authority-private-key "$factory_transparency_external_gossip_registry_successor_root_private" \
+  --issued-at-unix "$factory_transparency_external_gossip_checkpoint_issued_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint"
+"$pcbex_binary" validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint \
+  "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_normalized"
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_normalized"
+
+"$pcbex_binary" accept-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --accepted-at-unix "$factory_transparency_external_gossip_checkpoint_accepted_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_trust"
+"$pcbex_binary" validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-trust-state \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_trust" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_trust_normalized"
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint_trust" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_trust_normalized"
+"$pcbex_binary" accept-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --baseline "$factory_transparency_external_gossip_registry_history_checkpoint_trust" \
+  --accepted-at-unix "$factory_transparency_external_gossip_checkpoint_witnessed_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_trust_retry"
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint_trust" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_trust_retry"
+
+if "$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --witness-id governance-reuse \
+  --witness-private-key "$factory_transparency_external_gossip_registry_governed_authority_g_private" \
+  --witnessed-at-unix "$factory_transparency_external_gossip_checkpoint_witnessed_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_role_collision" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_role_collision_error"; then
+  echo "expected a governance key to fail checkpoint witnessing" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_role_collision"
+grep -Fq 'role-disjoint' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_role_collision_error"
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --witness-id witness-a \
+  --witness-private-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_private" \
+  --witnessed-at-unix "$factory_transparency_external_gossip_checkpoint_witnessed_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a"
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --witness-id witness-b \
+  --witness-private-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b_private" \
+  --witnessed-at-unix "$((factory_transparency_external_gossip_checkpoint_witnessed_at + 1))" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b"
+"$pcbex_binary" validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_witness_normalized"
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_normalized"
+
+"$pcbex_binary" verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --witness "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b" \
+  --witness "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a" \
+  --trusted-witness-id witness-b \
+  --trusted-witness-id witness-a \
+  --trusted-witness-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b_public" \
+  --trusted-witness-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_public" \
+  --minimum-witnesses 2 \
+  --evaluated-at-unix "$factory_transparency_external_gossip_checkpoint_evaluated_at" \
+  --require-quorum \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_quorum"
+"$pcbex_binary" validate-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-quorum \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_quorum" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_quorum_normalized"
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint_quorum" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_quorum_normalized"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  --witness "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a" \
+  --trusted-witness-id witness-a \
+  --trusted-witness-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_public" \
+  --minimum-witnesses 2 \
+  --evaluated-at-unix "$factory_transparency_external_gossip_checkpoint_evaluated_at" \
+  --require-quorum \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_below_quorum" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_below_quorum_error"; then
+  echo "expected one checkpoint witness to remain below quorum" >&2
+  exit 1
+fi
+grep -Fq 'witness quorum was not met' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_below_quorum_error"
+jq -e '.quorum_met == false and .valid_witnesses == 1 and .minimum_witnesses == 2' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_below_quorum" >/dev/null
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_history_audit" \
+  "$factory_transparency_external_gossip_registry_history_final" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_trust" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_quorum" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_below_quorum" \
+  "$factory_transparency_external_gossip_registry_successor_root_public" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_public" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b_public" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_schema" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_trust_schema" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_schema" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_quorum_schema" \
+  "$factory_transparency_external_gossip_registry_successor_root_private" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_private" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_witness_b_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_g_private" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+paths = list(map(Path, sys.argv[1:]))
+audit_path, final_path, checkpoint_path, trust_path, witness_a_path, \
+    witness_b_path, quorum_path, below_path, root_public_path, \
+    witness_a_public_path, witness_b_public_path = paths[:11]
+schema_paths = paths[11:15]
+private_paths = paths[15:]
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":")).encode("ascii")
+
+def digest(value):
+    return hashlib.sha256(compact(value)).hexdigest()
+
+audit = json.loads(audit_path.read_bytes())
+final_registry = json.loads(final_path.read_bytes())
+checkpoint = json.loads(checkpoint_path.read_bytes())
+trust = json.loads(trust_path.read_bytes())
+witness_a = json.loads(witness_a_path.read_bytes())
+witness_b = json.loads(witness_b_path.read_bytes())
+quorum = json.loads(quorum_path.read_bytes())
+below = json.loads(below_path.read_bytes())
+
+assert checkpoint["schema_version"] == 1
+assert checkpoint["registry_id"] == audit["registry_id"]
+assert checkpoint["generation"] == audit["final_registry"]["generation"] == 5
+assert checkpoint["history_audit_sha256"] == digest(audit)
+assert checkpoint["final_registry_sha256"] == audit["final_registry_sha256"]
+assert checkpoint["final_registry_sha256"] == digest(final_registry)
+assert checkpoint["last_transition_sha256"] == final_registry["last_transition_sha256"]
+assert checkpoint["active_governance_sha256"] == final_registry["active_governance_sha256"]
+assert checkpoint["authority_public_key"] == root_public_path.read_text(encoding="ascii").strip()
+assert checkpoint["algorithm"] == "ed25519"
+
+checkpoint_sha256 = digest(checkpoint)
+assert trust["accepted_generation"] == 5
+assert trust["checkpoint_sha256"] == checkpoint_sha256
+assert trust["history_audit_sha256"] == checkpoint["history_audit_sha256"]
+assert trust["signed_checkpoint"] == checkpoint
+
+witnesses = {item["witness_id"]: item for item in (witness_a, witness_b)}
+assert witnesses["witness-a"]["public_key"] == witness_a_public_path.read_text(encoding="ascii").strip()
+assert witnesses["witness-b"]["public_key"] == witness_b_public_path.read_text(encoding="ascii").strip()
+for witness in witnesses.values():
+    assert witness["registry_id"] == checkpoint["registry_id"]
+    assert witness["generation"] == checkpoint["generation"]
+    assert witness["checkpoint_sha256"] == checkpoint_sha256
+    assert witness["algorithm"] == "ed25519"
+
+assert quorum["checkpoint_sha256"] == checkpoint_sha256
+assert quorum["history_audit_sha256"] == checkpoint["history_audit_sha256"]
+assert quorum["minimum_witnesses"] == 2
+assert quorum["valid_witnesses"] == 2
+assert quorum["quorum_met"] is True
+assert [member["witness_id"] for member in quorum["members"]] == ["witness-a", "witness-b"]
+for member in quorum["members"]:
+    witness = witnesses[member["witness_id"]]
+    assert member["public_key"] == witness["public_key"]
+    assert member["witness_sha256"] == digest(witness)
+
+assert below["checkpoint_sha256"] == checkpoint_sha256
+assert below["minimum_witnesses"] == 2
+assert below["valid_witnesses"] == 1
+assert below["quorum_met"] is False
+
+for schema_path in schema_paths:
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+
+secrets = [path.read_text(encoding="ascii").strip().encode() for path in private_paths]
+public_artifacts = [
+    audit_path, final_path, checkpoint_path, trust_path, witness_a_path,
+    witness_b_path, quorum_path, below_path, *schema_paths,
+]
+for artifact in public_artifacts:
+    source = artifact.read_bytes()
+    for secret in secrets:
+        assert secret not in source, artifact
 PY
 }
 "$pcbex_binary" verify-circuit-kicad-handoff \
