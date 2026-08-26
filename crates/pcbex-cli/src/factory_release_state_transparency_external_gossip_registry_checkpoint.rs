@@ -1,9 +1,10 @@
 //! Retained-root checkpoints for portable factory-release registry histories.
 //!
-//! v1.499 leaves every v1.493-v1.498 wire artifact unchanged. It binds one
+//! v1.500 leaves every v1.493-v1.499 wire artifact unchanged. It binds one
 //! freshly replayed portable history head to the retained registry root, pins
 //! accepted heads monotonically, and verifies fresh distinct witnesses over
-//! one exact checkpoint.
+//! one exact checkpoint while advancing each witness key through a
+//! generation-chained, dual-signed trust state.
 
 use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
 use crate::factory_release_state_transparency_external_gossip_registry::{
@@ -23,11 +24,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const CHECKPOINT_DOMAIN: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-v1";
 const WITNESS_DOMAIN: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-v1";
+const WITNESS_KEY_ROTATION_DOMAIN: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-key-rotation-v1";
 pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES: u64 =
     32 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES: u64 =
     64 * 1024;
 pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_BYTES: u64 =
+    32 * 1024;
+pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_BYTES: u64 =
+    32 * 1024;
+pub(crate) const MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES: u64 =
     32 * 1024;
 pub(crate) const MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_REPORT_BYTES: u64 =
     128 * 1024;
@@ -89,6 +95,35 @@ pub struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegist
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState
+{
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub generation: u64,
+    pub current_public_key: String,
+    pub last_rotation_sha256: Option<String>,
+    pub last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation
+{
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_rotation_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessMember
 {
     pub witness_id: String,
@@ -132,6 +167,18 @@ struct WitnessPayload<'a> {
     checkpoint_sha256: &'a str,
     witness_id: &'a str,
     witnessed_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct WitnessKeyRotationPayload<'a> {
+    domain: &'static str,
+    witness_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
@@ -251,6 +298,153 @@ pub fn accept_factory_release_state_transparency_external_gossip_organization_re
         &state,
     )?;
     Ok(state)
+}
+
+pub fn new_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    String,
+>{
+    let state = FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+        schema_version: 1,
+        witness_id: witness_id.into(),
+        generation: 0,
+        current_public_key: hex_encode(public_key),
+        last_rotation_sha256: None,
+        last_rotated_at_unix: None,
+    };
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        &state,
+    )?;
+    Ok(state)
+}
+
+pub fn factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+    state: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    hex_decode::<32>(
+        &state.current_public_key,
+        "current factory release registry history checkpoint witness public key",
+    )
+}
+
+pub fn sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    state: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+    String,
+>{
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = hex_encode(&old_key.verifying_key().to_bytes());
+    let new_public_key = hex_encode(&new_key.verifying_key().to_bytes());
+    if old_public_key != state.current_public_key {
+        return Err(
+            "old factory release registry history witness key does not match trust state".into(),
+        );
+    }
+    if new_public_key == old_public_key {
+        return Err("new factory release registry history witness key must differ".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err(
+            "factory release registry history witness rotation time moved backwards".into(),
+        );
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .filter(|generation| {
+            *generation
+                <= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        })
+        .ok_or_else(|| {
+            "factory release registry history witness key generation overflow".to_string()
+        })?;
+    let payload = witness_key_rotation_payload(
+        &state.witness_id,
+        state.generation,
+        to_generation,
+        state.last_rotation_sha256.as_deref(),
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    let rotation = SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        from_generation: state.generation,
+        to_generation,
+        previous_rotation_sha256: state.last_rotation_sha256.clone(),
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_signature: hex_encode(&old_key.sign(&payload).to_bytes()),
+        new_signature: hex_encode(&new_key.sign(&payload).to_bytes()),
+    };
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub fn apply_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    state: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    String,
+>{
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+        || rotation.to_generation != state.generation.saturating_add(1)
+        || state
+            .last_rotated_at_unix
+            .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err(
+            "factory release registry history witness rotation does not extend trust state".into(),
+        );
+    }
+    let next = FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        generation: rotation.to_generation,
+        current_public_key: rotation.new_public_key.clone(),
+        last_rotation_sha256: Some(
+            signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation_sha256(
+                rotation,
+            )?,
+        ),
+        last_rotated_at_unix: Some(rotation.rotated_at_unix),
+    };
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        &next,
+    )?;
+    Ok(next)
 }
 
 pub fn sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
@@ -431,6 +625,37 @@ pub fn verify_factory_release_state_transparency_external_gossip_organization_re
     Ok(report)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+    history: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistory,
+    checkpoint: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint,
+    witnesses: &[SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness],
+    trust_states: &[FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport, String>
+{
+    let trusted_witnesses = trust_states
+        .iter()
+        .map(|state| {
+            Ok((
+                state.witness_id.clone(),
+                factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+                    state,
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
+        history,
+        checkpoint,
+        witnesses,
+        &trusted_witnesses,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
+}
+
 pub fn parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
     source: &[u8],
 ) -> Result<
@@ -480,6 +705,40 @@ pub fn parse_signed_factory_release_state_transparency_external_gossip_organizat
         &witness,
     )?;
     Ok(witness)
+}
+
+pub fn parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    source: &[u8],
+) -> Result<
+    FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    String,
+>{
+    let state = parse_canonical(
+        source,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
+        "factory release transparency external gossip registry history checkpoint witness trust state",
+    )?;
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        &state,
+    )?;
+    Ok(state)
+}
+
+pub fn parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    source: &[u8],
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+    String,
+>{
+    let rotation = parse_canonical(
+        source,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES,
+        "signed factory release transparency external gossip registry history checkpoint witness key rotation",
+    )?;
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
 }
 
 pub fn parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report(
@@ -536,6 +795,32 @@ pub fn render_signed_factory_release_state_transparency_external_gossip_organiza
     )
 }
 
+pub fn render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    state: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<Vec<u8>, String> {
+    validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    render_bounded(
+        state,
+        MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
+        "factory release transparency external gossip registry history checkpoint witness trust state",
+    )
+}
+
+pub fn render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<Vec<u8>, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    render_bounded(
+        rotation,
+        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES,
+        "signed factory release transparency external gossip registry history checkpoint witness key rotation",
+    )
+}
+
 pub fn render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report(
     report: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
 ) -> Result<Vec<u8>, String> {
@@ -565,6 +850,18 @@ pub fn signed_factory_release_state_transparency_external_gossip_organization_re
         witness,
     )?;
     normalized_sha256(witness, "gossip registry history checkpoint witness")
+}
+
+pub fn signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation_sha256(
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<String, String> {
+    validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    normalized_sha256(
+        rotation,
+        "factory release registry history checkpoint witness key rotation",
+    )
 }
 
 pub fn validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
@@ -689,6 +986,127 @@ pub fn validate_signed_factory_release_state_transparency_external_gossip_organi
         .map_err(|_| "gossip registry history witness signature verification failed".into())
 }
 
+pub fn validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    state: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<(), String> {
+    if state.schema_version != 1
+        || state.generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || state
+            .last_rotated_at_unix
+            .is_some_and(|timestamp| timestamp > MAX_TIMESTAMP)
+    {
+        return Err(
+            "invalid factory release registry history witness trust-state invariants".into(),
+        );
+    }
+    validate_slug(
+        &state.witness_id,
+        "factory release registry history checkpoint witness id",
+    )?;
+    validate_key(
+        &state.current_public_key,
+        "current factory release registry history checkpoint witness public key",
+    )?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => Ok(()),
+        (0, _, _) => Err(
+            "initial factory release registry history witness trust state references rotation"
+                .into(),
+        ),
+        (_, Some(digest), Some(_)) => validate_digest(
+            digest,
+            "factory release registry history checkpoint witness rotation SHA-256",
+        ),
+        _ => {
+            Err("rotated factory release registry history witness trust state is incomplete".into())
+        }
+    }
+}
+
+pub fn validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    rotation: &SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.from_generation
+            >= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || rotation.to_generation != rotation.from_generation.saturating_add(1)
+        || rotation.to_generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || rotation.rotated_at_unix > MAX_TIMESTAMP
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err(
+            "invalid factory release registry history witness key-rotation invariants".into(),
+        );
+    }
+    validate_slug(
+        &rotation.witness_id,
+        "factory release registry history checkpoint witness id",
+    )?;
+    match (rotation.from_generation, &rotation.previous_rotation_sha256) {
+        (0, None) => {}
+        (0, Some(_)) => {
+            return Err(
+                "initial factory release registry history witness rotation cannot reference a predecessor"
+                    .into(),
+            );
+        }
+        (_, Some(digest)) => validate_digest(
+            digest,
+            "previous factory release registry history checkpoint witness rotation SHA-256",
+        )?,
+        (_, None) => {
+            return Err(
+                "advanced factory release registry history witness rotation requires predecessor evidence"
+                    .into(),
+            );
+        }
+    }
+    validate_key(
+        &rotation.old_public_key,
+        "old factory release registry history checkpoint witness public key",
+    )?;
+    validate_key(
+        &rotation.new_public_key,
+        "new factory release registry history checkpoint witness public key",
+    )?;
+    let payload = witness_key_rotation_payload(
+        &rotation.witness_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_rotation_sha256.as_deref(),
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    for (key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old factory release registry history checkpoint witness rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new factory release registry history checkpoint witness rotation",
+        ),
+    ] {
+        let key = hex_decode::<32>(key, label)?;
+        let signature = Signature::from_bytes(&hex_decode::<64>(signature, label)?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    Ok(())
+}
+
 pub fn validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report(
     report: &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
 ) -> Result<(), String> {
@@ -807,6 +1225,61 @@ pub fn signed_factory_release_state_transparency_external_gossip_organization_re
             "algorithm": {"const": "ed25519"},
             "public_key": key_schema(),
             "signature": signature_schema()
+        }
+    })
+}
+
+pub fn factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-v1.json",
+        "title": "Generation-chained factory-release registry history checkpoint witness trust state",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0, "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION},
+            "current_public_key": key_schema(),
+            "last_rotation_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "last_rotated_at_unix": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP}
+                ]
+            }
+        }
+    })
+}
+
+pub fn signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-key-rotation-v1.json",
+        "title": "Dual-signed factory-release registry history checkpoint witness key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0, "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION - 1},
+            "to_generation": {"type": "integer", "minimum": 1, "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION},
+            "previous_rotation_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "old_public_key": key_schema(),
+            "new_public_key": key_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": signature_schema(),
+            "new_signature": signature_schema()
         }
     })
 }
@@ -972,6 +1445,31 @@ fn witness_payload(
         witnessed_at_unix,
     })
     .map_err(|error| format!("serializing gossip registry history witness: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn witness_key_rotation_payload(
+    witness_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&str>,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessKeyRotationPayload {
+        domain: WITNESS_KEY_ROTATION_DOMAIN,
+        witness_id,
+        from_generation,
+        to_generation,
+        previous_rotation_sha256,
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+    })
+    .map_err(|error| {
+        format!("serializing factory release registry history witness key rotation: {error}")
+    })
 }
 
 fn trusted_witness_map(
@@ -1442,6 +1940,58 @@ mod tests {
             .is_err()
         );
 
+        let initial_witness_a_trust = new_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+            "witness-a",
+            &SigningKey::from_bytes(&[41; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let witness_b_trust = new_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+            "witness-b",
+            &SigningKey::from_bytes(&[42; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let witness_a_rotation = sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &initial_witness_a_trust,
+            &[41; 32],
+            &[43; 32],
+            109,
+        )
+        .unwrap();
+        let rotated_witness_a_trust = apply_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &initial_witness_a_trust,
+            &witness_a_rotation,
+        )
+        .unwrap();
+        let rotated_witness_a = sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+            &history,
+            &checkpoint,
+            "witness-a",
+            &[43; 32],
+            111,
+        )
+        .unwrap();
+        let rotated_report = verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+            &history,
+            &checkpoint,
+            &[rotated_witness_a.clone(), witness_b.clone()],
+            &[rotated_witness_a_trust, witness_b_trust.clone()],
+            2,
+            112,
+        )
+        .unwrap();
+        assert!(rotated_report.quorum_met);
+        assert!(
+            verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+                &history,
+                &checkpoint,
+                &[rotated_witness_a, witness_b.clone()],
+                &[initial_witness_a_trust, witness_b_trust],
+                2,
+                112,
+            )
+            .is_err()
+        );
+
         let below = verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
             &history,
             &checkpoint,
@@ -1497,6 +2047,176 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn rotates_registry_history_witness_trust_with_a_dual_signed_digest_chain() {
+        let old_secret = [61; 32];
+        let next_secret = [62; 32];
+        let final_secret = [63; 32];
+        let initial = new_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+            "witness-a",
+            &SigningKey::from_bytes(&old_secret).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(initial.generation, 0);
+        assert_eq!(
+            parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                &render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                    &initial,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+            initial
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &initial,
+                &next_secret,
+                &final_secret,
+                1_000,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &initial,
+                &old_secret,
+                &old_secret,
+                1_000,
+            )
+            .is_err()
+        );
+
+        let first = sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &initial,
+            &old_secret,
+            &next_secret,
+            1_000,
+        )
+        .unwrap();
+        let first_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &first,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &first_source,
+            )
+            .unwrap(),
+            first
+        );
+        assert!(
+            parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &serde_json::to_vec(&first).unwrap(),
+            )
+            .is_err()
+        );
+
+        let rotated = apply_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &initial,
+            &first,
+        )
+        .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert_eq!(
+            rotated.last_rotation_sha256,
+            Some(
+                signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation_sha256(
+                    &first,
+                )
+                .unwrap()
+            )
+        );
+        assert!(
+            apply_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &rotated,
+                &first,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &rotated,
+                &next_secret,
+                &final_secret,
+                999,
+            )
+            .is_err()
+        );
+
+        let second = sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &rotated,
+            &next_secret,
+            &final_secret,
+            1_001,
+        )
+        .unwrap();
+        let final_state = apply_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+            &rotated,
+            &second,
+        )
+        .unwrap();
+        assert_eq!(final_state.generation, 2);
+
+        let mut tampered_signature = second.clone();
+        let replacement = if tampered_signature.new_signature.starts_with("00") {
+            "ff"
+        } else {
+            "00"
+        };
+        tampered_signature
+            .new_signature
+            .replace_range(..2, replacement);
+        assert!(
+            validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &tampered_signature,
+            )
+            .is_err()
+        );
+        let mut skipped = second.clone();
+        skipped.to_generation += 1;
+        assert!(
+            validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &skipped,
+            )
+            .is_err()
+        );
+        let mut unchained = second.clone();
+        unchained.previous_rotation_sha256 = None;
+        assert!(
+            validate_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &unchained,
+            )
+            .is_err()
+        );
+
+        let mut exhausted = final_state;
+        exhausted.generation =
+            MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION;
+        assert!(
+            validate_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                &exhausted,
+            )
+            .is_ok()
+        );
+        assert!(
+            sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &exhausted,
+                &final_secret,
+                &[64; 32],
+                1_002,
+            )
+            .is_err()
+        );
+
+        for schema in [
+            factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema(),
+            signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema(),
+        ] {
+            assert_eq!(schema["additionalProperties"], false);
+        }
     }
 
     #[test]

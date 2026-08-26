@@ -258,6 +258,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Governed registry-root rotation v1 | Rotate the root and active governance atomically after the prospective root and both governance quorums bind one exact current state | `pcbex factory-release-state-transparency-external-gossip-organization-registry-governed-authority-rotation-verification-report-schema` |
 | Portable registry history audit v1 | Replay exact genesis and all five registry event kinds to compute the final state without trusting a copied snapshot | [History audit guide](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_AUDIT.md) |
 | Witnessed registry history checkpoint v1 | Pin the exact audited head with the retained root, monotonic local trust, and fresh distinct witnesses | [Checkpoint guide](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_CHECKPOINT.md) |
+| Registry-history witness rotation v1 | Advance identity-bound witness trust through dual-signed generation- and digest-chained key transitions | `pcbex factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

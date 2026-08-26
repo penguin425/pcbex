@@ -212,6 +212,7 @@ auditable release.
 | v1.497.0 | Governed factory-release external-gossip registry-root rotation | Require a distinct prospective root to sign successor governance for the exact active state, require retained and successor governance quorums over one root-and-governance handoff, atomically replace both trust values while preserving organizations, reject historical root reuse and role collisions in one serialized five-event chain, and emit a self-contained report without claiming independent governance control, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.498.0 | Portable factory-release external-gossip registry history audit | Export exact canonical genesis and all five typed selected-ledger event kinds into one bounded history, independently replay the production verifiers on any platform, and atomically emit a per-generation audit plus computed final registry without trusting a copied snapshot or claiming latest-head proof, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.499.0 | Witnessed factory-release external-gossip registry history checkpoints | Replay one portable five-event history, bind its exact audit and computed head under the final retained root, advance an immutable local trust state without rollback, equivocation, truncation, or time reversal, and require a fresh threshold of distinct role-disjoint checkpoint witnesses without claiming protected baseline storage, global non-equivocation, trusted time, real organizational independence, legal identity, ordering, payment, or exactly-once execution |
+| v1.500.0 | Factory-release registry-history witness key rotation | Preserve every v1.493–v1.499 wire artifact, bind each checkpoint-witness identity to a generation-zero key, advance it only through old/new dual-signed one-generation digest-chained transitions, and let the unchanged quorum consume current trust states while rejecting stale keys without claiming protected trust storage, global non-equivocation, trusted time, independent key custody, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2100,7 +2101,7 @@ latest head. Host-ledger rollback resistance, global non-equivocation, trusted
 time, independent governance or key custody, legal identity, capacity,
 ordering, payment, and exactly-once execution remain unproved.
 
-The current v1.499.0 milestone pins that portable head without changing any
+The released v1.499.0 milestone pins that portable head without changing any
 v1.493–v1.498 artifact. A domain-separated Ed25519 checkpoint binds the exact
 complete-history audit digest, computed final registry digest, generation,
 final event, active governance, retained root, and issue time. Signing succeeds
@@ -2127,5 +2128,27 @@ non-equivocation, trusted time, independent people or organizations, secure key
 custody, legal identity, capacity, ordering, payment, and exactly-once
 execution remain unproved.
 
-The planned follow-up sequence is checkpoint-witness key rotation in v1.500.0,
-bounded remote witnesses in v1.501.0, and receipt transparency in v1.502.0.
+The current v1.500.0 milestone preserves every v1.493–v1.499 wire artifact and
+adds identity-bound checkpoint-witness trust. A generation-zero state pins one
+stable witness identity and non-weak Ed25519 public key.
+
+Each rotation advances exactly one of 4,096 generations. The old and successor
+keys sign one domain-separated payload that binds both generations, the prior
+rotation digest, both keys, and a nondecreasing explicit time. Applying it
+authenticates both signatures before atomically publishing the successor trust
+state and current public key; exact replay, gaps, forks, same-key transitions,
+signature substitution, and time reversal fail closed.
+
+Quorum verification accepts either the unchanged v1.499 identity/key pairs or
+the new trust-state files, never both. It resolves each current key from the
+retained state and then reuses the complete-history verifier, so a stale state
+causes key-substitution failure and every current witness key remains disjoint
+from all historical registry roots and embedded governance authorities.
+
+The trust chain protects only consumers that retain the correct prior state.
+Protected baseline storage, global non-equivocation, trusted time, independent
+people or key custody, legal identity, capacity, ordering, payment, and
+exactly-once execution remain unproved.
+
+The planned follow-up sequence is bounded remote witnesses in v1.501.0 and
+receipt transparency in v1.502.0.
