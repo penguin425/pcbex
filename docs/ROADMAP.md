@@ -210,6 +210,7 @@ auditable release.
 | v1.495.0 | Factory-release external-gossip registry threshold governance | Root-sign one exact activation-state-bound policy with 2–100 distinct authority keys, require a configurable distinct-key threshold of at least two for every admission, suspension, or revocation, retain threshold transitions in the shared serialized generation chain, lock out root-only mutation after activation, and replay legacy transitions, root rotations, and threshold events into one self-contained quorum report without claiming independent key control, governance rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.496.0 | Factory-release external-gossip registry governance rotation | Root-sign successor governance against the exact active registry state, require both retained and successor thresholds over one next-generation rotation payload before changing membership, authority keys, or threshold, retain the event in the shared serialized generation chain, reject no-op rotation and stale governance, and replay all four event types into one self-contained report without claiming independent governance control, governed root rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.497.0 | Governed factory-release external-gossip registry-root rotation | Require a distinct prospective root to sign successor governance for the exact active state, require retained and successor governance quorums over one root-and-governance handoff, atomically replace both trust values while preserving organizations, reject historical root reuse and role collisions in one serialized five-event chain, and emit a self-contained report without claiming independent governance control, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.498.0 | Portable factory-release external-gossip registry history audit | Export exact canonical genesis and all five typed selected-ledger event kinds into one bounded history, independently replay the production verifiers on any platform, and atomically emit a per-generation audit plus computed final registry without trusting a copied snapshot or claiming latest-head proof, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2024,7 +2025,7 @@ organizations, or key custody. Host-ledger rollback resistance, trusted time,
 global non-equivocation, legal identity, capacity, ordering, payment, and
 exactly-once execution remain unproved.
 
-The current v1.496.0 milestone makes that active governance replaceable without
+The released v1.496.0 milestone makes that active governance replaceable without
 changing any v1.493–v1.495 wire artifact. The root signs a successor policy
 against the exact current registry generation and semantic state digest. The
 successor must change its threshold, identities, or keys; a reissued no-op
@@ -2049,7 +2050,7 @@ registry-root rotation, host-ledger rollback resistance, trusted time, global
 non-equivocation, legal identity, capacity, ordering, payment, and exactly-once
 execution remain unproved.
 
-The current v1.497.0 milestone closes that root-rotation gap without changing
+The released v1.497.0 milestone closes that root-rotation gap without changing
 any v1.493–v1.496 artifact. A distinct prospective root signs successor
 governance against the exact current generation and semantic registry digest,
 proving possession before the key can become authoritative.
@@ -2073,3 +2074,31 @@ Prospective-root possession and two threshold results do not prove independent
 people, organizations, or key custody. Host-ledger rollback resistance, trusted
 time, global non-equivocation, legal identity, capacity, ordering, payment, and
 exactly-once execution remain unproved.
+
+The current v1.498.0 milestone makes that complete five-event history portable
+without changing any v1.493–v1.497 artifact. One canonical bounded document
+embeds the exact empty generation-zero registry and exact artifact identity of
+every organization transition, root rotation, threshold transition,
+governance rotation, and governed root rotation.
+
+The Unix exporter independently pins the selected ledger manifest, immutable
+base policy, and registry genesis. It loads the selected history, replays it,
+requires the computed final registry to equal the selected state, then reloads
+the sources before guarded no-replace publication.
+
+The cross-platform auditor accepts only canonical pretty JSON, exact empty
+genesis, contiguous generations, and at most 4,096 events in 128 MiB. It calls
+the production apply verifier for each typed event, rejects signature or quorum
+failure, digest/time gaps, historical root reuse, and root/governance role
+collision, then atomically writes a 128 MiB-bounded audit and final registry.
+Each entry binds its event index, kind, generations, exact artifact identity,
+semantic event digest, resulting state digest, current root, and governance.
+
+This proves one supplied chain, not that its last generation is the selected
+latest head. Host-ledger rollback resistance, global non-equivocation, trusted
+time, independent governance or key custody, legal identity, capacity,
+ordering, payment, and exactly-once execution remain unproved.
+
+The planned follow-up sequence is a retained-root history checkpoint in
+v1.499.0, checkpoint-witness key rotation in v1.500.0, bounded remote witnesses
+in v1.501.0, and receipt transparency in v1.502.0.

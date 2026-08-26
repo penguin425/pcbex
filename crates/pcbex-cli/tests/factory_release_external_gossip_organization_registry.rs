@@ -167,6 +167,63 @@ fn export_registry(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn export_registry_history(
+    ledger: &Path,
+    ledger_id: &str,
+    policy: &Path,
+    policy_sha256: &str,
+    genesis: &Path,
+    genesis_sha256: &str,
+    output: &Path,
+) -> Output {
+    run(&[
+        "export-factory-release-state-transparency-external-gossip-organization-registry-history",
+        "--reservation-ledger",
+        path(ledger),
+        "--expected-ledger-id",
+        ledger_id,
+        "--base-observer-quorum-policy",
+        path(policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        policy_sha256,
+        "--registry-genesis",
+        path(genesis),
+        "--expected-registry-genesis-sha256",
+        genesis_sha256,
+        "--output",
+        path(output),
+    ])
+}
+
+fn audit_registry_history(history: &Path, output: &Path, final_registry_output: &Path) -> Output {
+    run(&[
+        "audit-factory-release-state-transparency-external-gossip-organization-registry-history",
+        "--history",
+        path(history),
+        "--output",
+        path(output),
+        "--final-registry-output",
+        path(final_registry_output),
+    ])
+}
+
+fn write_canonical_json(path: &Path, value: &Value) {
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
+    )
+    .unwrap();
+}
+
+fn exact_identity(value: &Value) -> Value {
+    let source = format!("{}\n", serde_json::to_string_pretty(value).unwrap());
+    serde_json::json!({
+        "bytes": source.len(),
+        "sha256": hex::encode(Sha256::digest(source.as_bytes())),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn sign_transition(
     registry: &Path,
     authority_secret: &Path,
@@ -2352,6 +2409,535 @@ fn activates_threshold_governance_and_rejects_root_only_registry_mutation() {
 }
 
 #[test]
+fn exports_and_independently_audits_complete_five_kind_registry_history() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(temporary.path()).unwrap();
+    let (ledger, ledger_id) = create_ledger(&root);
+    let policy = root.join("base-policy.json");
+    let policy_sha256 = write_policy(&policy);
+
+    let root_a_secret = root.join("root-a-secret.hex");
+    let root_a_public = root.join("root-a-public.hex");
+    let root_b_secret = root.join("root-b-secret.hex");
+    let root_c_secret = root.join("root-c-secret.hex");
+    for (secret_path, secret) in [
+        (&root_a_secret, [31; 32]),
+        (&root_b_secret, [32; 32]),
+        (&root_c_secret, [33; 32]),
+    ] {
+        write_hex(secret_path, secret, 0o600);
+    }
+    write_hex(
+        &root_a_public,
+        SigningKey::from_bytes(&[31; 32]).verifying_key().to_bytes(),
+        0o644,
+    );
+
+    let mut governance_keys = Vec::new();
+    for (name, secret) in [
+        ("a", [41; 32]),
+        ("b", [42; 32]),
+        ("c", [43; 32]),
+        ("d", [44; 32]),
+        ("e", [45; 32]),
+        ("f", [46; 32]),
+    ] {
+        let secret_path = root.join(format!("governance-{name}-secret.hex"));
+        let public_path = root.join(format!("governance-{name}-public.hex"));
+        write_hex(&secret_path, secret, 0o600);
+        write_hex(
+            &public_path,
+            SigningKey::from_bytes(&secret).verifying_key().to_bytes(),
+            0o644,
+        );
+        governance_keys.push((secret_path, public_path));
+    }
+
+    let genesis = root.join("registry-genesis.json");
+    let genesis_digest = root.join("registry-genesis.sha256");
+    successful(&[
+        "init-factory-release-state-transparency-external-gossip-organization-registry",
+        "--base-observer-quorum-policy",
+        path(&policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        &policy_sha256,
+        "--registry-id",
+        "portable-history",
+        "--authority-public-key",
+        path(&root_a_public),
+        "--output",
+        path(&genesis),
+        "--digest-output",
+        path(&genesis_digest),
+    ]);
+    let genesis_sha256 = fs::read_to_string(&genesis_digest).unwrap();
+    let genesis_sha256 = genesis_sha256.trim();
+    let generation_zero = root.join("generation-0.json");
+    export_registry(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &generation_zero,
+    );
+    let observer = root.join("observer-a.json");
+    export_observer(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        "lab-a",
+        "observer-a",
+        &observer,
+    );
+
+    let legacy_transition = root.join("legacy-transition.json");
+    let signed = sign_transition(
+        &generation_zero,
+        &root_a_secret,
+        "admit-observer",
+        "lab-a",
+        Some(&observer),
+        "1000",
+        &legacy_transition,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let generation_one = root.join("generation-1.json");
+    let applied = apply_transition(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &legacy_transition,
+        &generation_one,
+    );
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    let authority_rotation = root.join("authority-rotation.json");
+    let signed = sign_authority_rotation(
+        &generation_one,
+        &root_a_secret,
+        &root_b_secret,
+        "2000",
+        &authority_rotation,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let generation_two = root.join("generation-2.json");
+    let applied = apply_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &authority_rotation,
+        &generation_two,
+    );
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    let old_governance = root.join("old-governance.json");
+    let signed = sign_governance(
+        &generation_two,
+        &root_b_secret,
+        "2",
+        &[
+            ("authority-a", governance_keys[0].1.as_path()),
+            ("authority-b", governance_keys[1].1.as_path()),
+        ],
+        "2100",
+        &old_governance,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let threshold_transition = root.join("threshold-transition.json");
+    let signed = sign_threshold_transition(
+        &generation_two,
+        &old_governance,
+        &[
+            ("authority-a", governance_keys[0].0.as_path()),
+            ("authority-b", governance_keys[1].0.as_path()),
+        ],
+        "suspend-organization",
+        "lab-a",
+        None,
+        "3000",
+        &threshold_transition,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let generation_three = root.join("generation-3.json");
+    let applied = apply_threshold_transition(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &threshold_transition,
+        &generation_three,
+    );
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    let middle_governance = root.join("middle-governance.json");
+    let signed = sign_successor_governance(
+        &generation_three,
+        &root_b_secret,
+        "2",
+        &[
+            ("authority-c", governance_keys[2].1.as_path()),
+            ("authority-d", governance_keys[3].1.as_path()),
+        ],
+        "3100",
+        &middle_governance,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let governance_rotation = root.join("governance-rotation.json");
+    let signed = sign_governance_rotation(
+        &generation_three,
+        &old_governance,
+        &middle_governance,
+        &[
+            ("authority-a", governance_keys[0].0.as_path()),
+            ("authority-b", governance_keys[1].0.as_path()),
+        ],
+        &[
+            ("authority-c", governance_keys[2].0.as_path()),
+            ("authority-d", governance_keys[3].0.as_path()),
+        ],
+        "4000",
+        &governance_rotation,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let generation_four = root.join("generation-4.json");
+    let applied = apply_governance_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &governance_rotation,
+        &generation_four,
+    );
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    let final_governance = root.join("final-governance.json");
+    let signed = sign_successor_root_governance(
+        &generation_four,
+        &root_c_secret,
+        "2",
+        &[
+            ("authority-e", governance_keys[4].1.as_path()),
+            ("authority-f", governance_keys[5].1.as_path()),
+        ],
+        "4100",
+        &final_governance,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let governed_root_rotation = root.join("governed-root-rotation.json");
+    let signed = sign_governed_authority_rotation(
+        &generation_four,
+        &middle_governance,
+        &final_governance,
+        &[
+            ("authority-c", governance_keys[2].0.as_path()),
+            ("authority-d", governance_keys[3].0.as_path()),
+        ],
+        &[
+            ("authority-e", governance_keys[4].0.as_path()),
+            ("authority-f", governance_keys[5].0.as_path()),
+        ],
+        "5000",
+        &governed_root_rotation,
+    );
+    assert!(
+        signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&signed.stderr)
+    );
+    let generation_five = root.join("generation-5.json");
+    let applied = apply_governed_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &governed_root_rotation,
+        &generation_five,
+    );
+    assert!(
+        applied.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+
+    let history = root.join("registry-history.json");
+    let exported = export_registry_history(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &history,
+    );
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    let history_value: Value = serde_json::from_slice(&fs::read(&history).unwrap()).unwrap();
+    assert_eq!(history_value["schema_version"], 1);
+    assert_eq!(history_value["initial_registry"]["generation"], 0);
+    assert_eq!(history_value["events"].as_array().unwrap().len(), 5);
+    assert_eq!(
+        history_value["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "organization_transition",
+            "authority_key_rotation",
+            "threshold_transition",
+            "governance_rotation",
+            "governed_authority_key_rotation",
+        ]
+    );
+    for (event, source) in history_value["events"].as_array().unwrap().iter().zip([
+        &legacy_transition,
+        &authority_rotation,
+        &threshold_transition,
+        &governance_rotation,
+        &governed_root_rotation,
+    ]) {
+        let bytes = fs::read(source).unwrap();
+        assert_eq!(event["artifact"]["bytes"], bytes.len());
+        assert_eq!(
+            event["artifact"]["sha256"],
+            hex::encode(Sha256::digest(&bytes))
+        );
+    }
+
+    let audit = root.join("registry-history.audit.json");
+    let computed_final = root.join("registry-history.final.json");
+    let audited = audit_registry_history(&history, &audit, &computed_final);
+    assert!(
+        audited.status.success(),
+        "{}",
+        String::from_utf8_lossy(&audited.stderr)
+    );
+    assert_eq!(
+        fs::read(&computed_final).unwrap(),
+        fs::read(&generation_five).unwrap()
+    );
+    let audit_value: Value = serde_json::from_slice(&fs::read(&audit).unwrap()).unwrap();
+    assert_eq!(audit_value["event_count"], 5);
+    assert_eq!(audit_value["chain_valid"], true);
+    assert_eq!(audit_value["entries"].as_array().unwrap().len(), 5);
+    assert_eq!(audit_value["entries"][0]["from_generation"], 0);
+    assert_eq!(audit_value["entries"][4]["to_generation"], 5);
+    assert_eq!(
+        audit_value["entries"][4]["resulting_registry_sha256"],
+        audit_value["final_registry_sha256"]
+    );
+    assert_eq!(audit_value["final_registry"]["generation"], 5);
+    assert_eq!(
+        audit_value["final_registry"]["authority_public_key"],
+        public([33; 32])
+    );
+
+    let normalized_history = root.join("registry-history.normalized.json");
+    successful(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history",
+        path(&history),
+        "--output",
+        path(&normalized_history),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_history).unwrap(),
+        fs::read(&history).unwrap()
+    );
+    let normalized_audit = root.join("registry-history.audit.normalized.json");
+    successful(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history-audit",
+        path(&audit),
+        "--output",
+        path(&normalized_audit),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_audit).unwrap(),
+        fs::read(&audit).unwrap()
+    );
+
+    for (name, mutate) in [
+        (
+            "reordered",
+            (|value: &mut Value| value["events"].as_array_mut().unwrap().swap(0, 1))
+                as fn(&mut Value),
+        ),
+        (
+            "omitted",
+            (|value: &mut Value| {
+                value["events"].as_array_mut().unwrap().remove(1);
+            }) as fn(&mut Value),
+        ),
+        (
+            "replayed",
+            (|value: &mut Value| {
+                let first = value["events"][0].clone();
+                value["events"].as_array_mut().unwrap().insert(1, first);
+            }) as fn(&mut Value),
+        ),
+    ] {
+        let mut invalid = history_value.clone();
+        mutate(&mut invalid);
+        let invalid_history = root.join(format!("{name}-history.json"));
+        write_canonical_json(&invalid_history, &invalid);
+        let invalid_audit = root.join(format!("{name}-audit.json"));
+        let invalid_final = root.join(format!("{name}-final.json"));
+        let result = audit_registry_history(&invalid_history, &invalid_audit, &invalid_final);
+        assert!(
+            !result.status.success(),
+            "{name} history unexpectedly passed"
+        );
+        assert!(!invalid_audit.exists());
+        assert!(!invalid_final.exists());
+    }
+
+    let mut non_genesis = history_value.clone();
+    let final_registry = audit_value["final_registry"].clone();
+    non_genesis["initial_registry_artifact"] = exact_identity(&final_registry);
+    non_genesis["initial_registry"] = final_registry;
+    let non_genesis_history = root.join("non-genesis-history.json");
+    write_canonical_json(&non_genesis_history, &non_genesis);
+    let non_genesis_audit = root.join("non-genesis-audit.json");
+    let non_genesis_final = root.join("non-genesis-final.json");
+    let result =
+        audit_registry_history(&non_genesis_history, &non_genesis_audit, &non_genesis_final);
+    assert!(!result.status.success());
+    assert!(!non_genesis_audit.exists());
+    assert!(!non_genesis_final.exists());
+
+    let signature = history_value["events"][4]["rotation"]["new_approvals"][0]["signature"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut replacement = signature.clone();
+    replacement.replace_range(
+        ..2,
+        if signature.starts_with("00") {
+            "ff"
+        } else {
+            "00"
+        },
+    );
+    let rotation_source = fs::read_to_string(&governed_root_rotation).unwrap();
+    let tampered_rotation_source = rotation_source.replacen(&signature, &replacement, 1);
+    assert_ne!(tampered_rotation_source, rotation_source);
+    let original_rotation_sha256 = hex::encode(Sha256::digest(rotation_source.as_bytes()));
+    let tampered_rotation_sha256 = hex::encode(Sha256::digest(tampered_rotation_source.as_bytes()));
+    let history_source = fs::read_to_string(&history).unwrap();
+    let tampered_history_source = history_source
+        .replacen(&signature, &replacement, 1)
+        .replacen(&original_rotation_sha256, &tampered_rotation_sha256, 1);
+    assert_ne!(tampered_history_source, history_source);
+    let tampered_history = root.join("tampered-history.json");
+    fs::write(&tampered_history, tampered_history_source).unwrap();
+    let tampered_audit = root.join("tampered-audit.json");
+    let tampered_final = root.join("tampered-final.json");
+    let result = audit_registry_history(&tampered_history, &tampered_audit, &tampered_final);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("approval verification failed"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!tampered_audit.exists());
+    assert!(!tampered_final.exists());
+
+    let mut inconsistent_audit = audit_value;
+    inconsistent_audit["entries"][4]["resulting_registry_sha256"] = Value::String("0".repeat(64));
+    let inconsistent_audit_path = root.join("inconsistent-audit.json");
+    write_canonical_json(&inconsistent_audit_path, &inconsistent_audit);
+    let invalid_normalized = root.join("invalid-audit.normalized.json");
+    let result = run(&[
+        "validate-factory-release-state-transparency-external-gossip-organization-registry-history-audit",
+        path(&inconsistent_audit_path),
+        "--output",
+        path(&invalid_normalized),
+    ]);
+    assert!(!result.status.success());
+    assert!(!invalid_normalized.exists());
+
+    let second_export = export_registry_history(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &history,
+    );
+    assert!(!second_export.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&history).unwrap()).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+}
+
+#[test]
 fn publishes_closed_bounded_registry_schemas() {
     let temporary = tempfile::tempdir().unwrap();
     let root = fs::canonicalize(temporary.path()).unwrap();
@@ -2403,6 +2989,14 @@ fn publishes_closed_bounded_registry_schemas() {
         (
             "factory-release-state-transparency-external-gossip-organization-registry-governed-authority-rotation-verification-report-schema",
             "governed-authority-rotation-report.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-history-schema",
+            "history.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-history-audit-schema",
+            "history-audit.schema.json",
         ),
     ] {
         let output = root.join(filename);

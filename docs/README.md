@@ -131,6 +131,10 @@ boundary document for the artifact you plan to produce or trust.
   — require prospective-root possession plus retained and successor governance
   quorums before atomically replacing the root and active governance.
 
+- [Portable External-gossip Registry History Audit](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_AUDIT.md)
+  — export exact selected-ledger evidence and independently replay all five
+  event kinds from empty genesis to a computed final registry.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

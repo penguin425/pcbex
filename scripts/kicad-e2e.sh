@@ -2689,6 +2689,13 @@ factory_transparency_external_gossip_registry_governed_rotation_legacy_error="$o
 factory_transparency_external_gossip_registry_pre_root_governance_output="$output_directory/factory-release-transparency-external-gossip-registry-pre-root-governance-transition.json"
 factory_transparency_external_gossip_registry_pre_root_governance_error="$output_directory/factory-release-transparency-external-gossip-registry-pre-root-governance-transition.stderr"
 factory_transparency_external_gossip_registry_successor_root_transition="$output_directory/factory-release-transparency-external-gossip-registry-successor-root-transition.json"
+factory_transparency_external_gossip_registry_history_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-history.schema.json"
+factory_transparency_external_gossip_registry_history_audit_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-history-audit.schema.json"
+factory_transparency_external_gossip_registry_history="$output_directory/factory-release-transparency-external-gossip-organization-registry.history.json"
+factory_transparency_external_gossip_registry_history_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history.normalized.json"
+factory_transparency_external_gossip_registry_history_audit="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-audit.json"
+factory_transparency_external_gossip_registry_history_audit_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-audit.normalized.json"
+factory_transparency_external_gossip_registry_history_final="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-final.json"
 
 "$pcbex_binary" signed-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation-schema \
   --output "$factory_transparency_external_gossip_registry_governed_rotation_schema"
@@ -2841,6 +2848,37 @@ grep -Fq 'retained root trust' \
   --reason-sha256 "$factory_transparency_external_gossip_registry_reason_sha256" \
   --effective-at-unix "$factory_transparency_external_gossip_time" \
   --output "$factory_transparency_external_gossip_registry_successor_root_transition"
+
+# v1.498 exports exact selected-ledger artifacts into one portable history,
+# then derives the final registry exclusively by replaying all five event kinds.
+"$pcbex_binary" factory-release-state-transparency-external-gossip-organization-registry-history-schema \
+  --output "$factory_transparency_external_gossip_registry_history_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-organization-registry-history-audit-schema \
+  --output "$factory_transparency_external_gossip_registry_history_audit_schema"
+"$pcbex_binary" export-factory-release-state-transparency-external-gossip-organization-registry-history \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-genesis "$factory_transparency_external_gossip_registry_threshold_genesis" \
+  --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_threshold_genesis_digest" \
+  --output "$factory_transparency_external_gossip_registry_history"
+"$pcbex_binary" validate-factory-release-state-transparency-external-gossip-organization-registry-history \
+  "$factory_transparency_external_gossip_registry_history" \
+  --output "$factory_transparency_external_gossip_registry_history_normalized"
+cmp "$factory_transparency_external_gossip_registry_history" \
+  "$factory_transparency_external_gossip_registry_history_normalized"
+"$pcbex_binary" audit-factory-release-state-transparency-external-gossip-organization-registry-history \
+  --history "$factory_transparency_external_gossip_registry_history" \
+  --output "$factory_transparency_external_gossip_registry_history_audit" \
+  --final-registry-output "$factory_transparency_external_gossip_registry_history_final"
+"$pcbex_binary" validate-factory-release-state-transparency-external-gossip-organization-registry-history-audit \
+  "$factory_transparency_external_gossip_registry_history_audit" \
+  --output "$factory_transparency_external_gossip_registry_history_audit_normalized"
+cmp "$factory_transparency_external_gossip_registry_history_audit" \
+  "$factory_transparency_external_gossip_registry_history_audit_normalized"
+cmp "$factory_transparency_external_gossip_registry_governed_rotation_state_5" \
+  "$factory_transparency_external_gossip_registry_history_final"
 
 python3 - \
   "$factory_transparency_external_gossip_registry_threshold_genesis" \
@@ -3006,6 +3044,90 @@ for artifact in [new_governance_path, governed_rotation_path, report_path, state
         assert secret not in source, artifact
 
 for schema_path in (rotation_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_threshold_genesis" \
+  "$factory_transparency_external_gossip_registry_threshold_admission_a" \
+  "$factory_transparency_external_gossip_registry_threshold_root_rotation" \
+  "$factory_transparency_external_gossip_registry_threshold_admission_b" \
+  "$factory_transparency_external_gossip_registry_governance_rotation" \
+  "$factory_transparency_external_gossip_registry_governed_rotation" \
+  "$factory_transparency_external_gossip_registry_governed_rotation_state_5" \
+  "$factory_transparency_external_gossip_registry_history" \
+  "$factory_transparency_external_gossip_registry_history_audit" \
+  "$factory_transparency_external_gossip_registry_history_schema" \
+  "$factory_transparency_external_gossip_registry_history_audit_schema" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+genesis_path, *remaining = map(Path, sys.argv[1:])
+event_paths = remaining[:5]
+final_path, history_path, audit_path, history_schema_path, audit_schema_path = remaining[5:]
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":")).encode("ascii")
+
+def identity(source):
+    return {"bytes": len(source), "sha256": hashlib.sha256(source).hexdigest()}
+
+genesis_source = genesis_path.read_bytes()
+event_sources = [path.read_bytes() for path in event_paths]
+final_registry = json.loads(final_path.read_bytes())
+history = json.loads(history_path.read_bytes())
+audit = json.loads(audit_path.read_bytes())
+
+assert history["schema_version"] == 1
+assert history["initial_registry_artifact"] == identity(genesis_source)
+assert history["initial_registry"] == json.loads(genesis_source)
+assert history["initial_registry"]["generation"] == 0
+expected_kinds = [
+    "organization_transition",
+    "authority_key_rotation",
+    "threshold_transition",
+    "governance_rotation",
+    "governed_authority_key_rotation",
+]
+assert [event["kind"] for event in history["events"]] == expected_kinds
+for event, source in zip(history["events"], event_sources):
+    assert event["artifact"] == identity(source)
+
+assert audit["schema_version"] == 1
+assert audit["registry_id"] == history["initial_registry"]["registry_id"]
+assert audit["initial_registry_artifact"] == identity(genesis_source)
+assert audit["initial_registry_sha256"] == hashlib.sha256(
+    compact(history["initial_registry"])
+).hexdigest()
+assert audit["event_count"] == 5
+assert audit["chain_valid"] is True
+assert audit["final_registry"] == final_registry
+assert audit["final_registry_sha256"] == hashlib.sha256(
+    compact(final_registry)
+).hexdigest()
+assert [entry["kind"] for entry in audit["entries"]] == expected_kinds
+for index, (entry, event) in enumerate(zip(audit["entries"], history["events"])):
+    payload = event["transition"] if "transition" in event else event["rotation"]
+    assert entry["index"] == index
+    assert entry["from_generation"] == index
+    assert entry["to_generation"] == index + 1
+    assert entry["artifact"] == event["artifact"]
+    assert entry["event_sha256"] == hashlib.sha256(compact(payload)).hexdigest()
+
+for schema_path in (history_schema_path, audit_schema_path):
     schema = json.loads(schema_path.read_bytes())
     pending = [schema]
     while pending:
