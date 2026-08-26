@@ -211,6 +211,7 @@ auditable release.
 | v1.496.0 | Factory-release external-gossip registry governance rotation | Root-sign successor governance against the exact active registry state, require both retained and successor thresholds over one next-generation rotation payload before changing membership, authority keys, or threshold, retain the event in the shared serialized generation chain, reject no-op rotation and stale governance, and replay all four event types into one self-contained report without claiming independent governance control, governed root rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.497.0 | Governed factory-release external-gossip registry-root rotation | Require a distinct prospective root to sign successor governance for the exact active state, require retained and successor governance quorums over one root-and-governance handoff, atomically replace both trust values while preserving organizations, reject historical root reuse and role collisions in one serialized five-event chain, and emit a self-contained report without claiming independent governance control, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.498.0 | Portable factory-release external-gossip registry history audit | Export exact canonical genesis and all five typed selected-ledger event kinds into one bounded history, independently replay the production verifiers on any platform, and atomically emit a per-generation audit plus computed final registry without trusting a copied snapshot or claiming latest-head proof, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.499.0 | Witnessed factory-release external-gossip registry history checkpoints | Replay one portable five-event history, bind its exact audit and computed head under the final retained root, advance an immutable local trust state without rollback, equivocation, truncation, or time reversal, and require a fresh threshold of distinct role-disjoint checkpoint witnesses without claiming protected baseline storage, global non-equivocation, trusted time, real organizational independence, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2075,7 +2076,7 @@ people, organizations, or key custody. Host-ledger rollback resistance, trusted
 time, global non-equivocation, legal identity, capacity, ordering, payment, and
 exactly-once execution remain unproved.
 
-The current v1.498.0 milestone makes that complete five-event history portable
+The released v1.498.0 milestone makes that complete five-event history portable
 without changing any v1.493–v1.497 artifact. One canonical bounded document
 embeds the exact empty generation-zero registry and exact artifact identity of
 every organization transition, root rotation, threshold transition,
@@ -2099,6 +2100,32 @@ latest head. Host-ledger rollback resistance, global non-equivocation, trusted
 time, independent governance or key custody, legal identity, capacity,
 ordering, payment, and exactly-once execution remain unproved.
 
-The planned follow-up sequence is a retained-root history checkpoint in
-v1.499.0, checkpoint-witness key rotation in v1.500.0, bounded remote witnesses
-in v1.501.0, and receipt transparency in v1.502.0.
+The current v1.499.0 milestone pins that portable head without changing any
+v1.493–v1.498 artifact. A domain-separated Ed25519 checkpoint binds the exact
+complete-history audit digest, computed final registry digest, generation,
+final event, active governance, retained root, and issue time. Signing succeeds
+only with the root retained after replay, including after a governed rotation.
+
+Acceptance replays the supplied history and verifies the checkpoint signature
+before retaining one self-contained trust state. An optional prior state
+rejects generation rollback, same-generation equivocation, issue or acceptance
+time reversal, and every later history whose entry at the accepted generation
+does not preserve the exact event, registry state, root, and governance. Exact
+checkpoint retry returns the retained state. Initial acceptance remains valid
+only within 24 hours of issuance.
+
+Each independent witness also replays the complete history before signing the
+exact checkpoint digest. Quorum verification requires 2–100 configured,
+distinct identities and non-weak keys, 24-hour freshness, canonical member
+ordering, and key separation from every historical registry root and embedded
+governance authority. A valid below-threshold report is retained before an
+optional fail gate returns nonzero.
+
+This detects rollback or equivocation only for consumers that preserve and
+compare trust state or witness evidence. Protected baseline storage, global
+non-equivocation, trusted time, independent people or organizations, secure key
+custody, legal identity, capacity, ordering, payment, and exactly-once
+execution remain unproved.
+
+The planned follow-up sequence is checkpoint-witness key rotation in v1.500.0,
+bounded remote witnesses in v1.501.0, and receipt transparency in v1.502.0.

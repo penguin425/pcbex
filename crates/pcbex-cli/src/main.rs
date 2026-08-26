@@ -201,6 +201,7 @@ mod factory_release_state_transparency_external_consistency;
 mod factory_release_state_transparency_external_gossip;
 mod factory_release_state_transparency_external_gossip_quorum;
 mod factory_release_state_transparency_external_gossip_registry;
+mod factory_release_state_transparency_external_gossip_registry_checkpoint;
 mod factory_release_state_transparency_external_gossip_trust;
 mod factory_release_state_transparency_witness_quorum;
 mod final_bom;
@@ -556,6 +557,29 @@ use factory_release_state_transparency_external_gossip_registry::{
     signed_factory_release_state_transparency_external_gossip_organization_registry_governed_authority_key_rotation_json_schema,
     signed_factory_release_state_transparency_external_gossip_organization_registry_threshold_transition_json_schema,
     signed_factory_release_state_transparency_external_gossip_organization_registry_transition_json_schema,
+};
+use factory_release_state_transparency_external_gossip_registry_checkpoint::{
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_REPORT_BYTES,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES,
+    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_BYTES,
+    accept_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint,
+    factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state_json_schema,
+    factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema,
+    parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state,
+    parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report,
+    parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint,
+    parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness,
+    render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state,
+    render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report,
+    render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint,
+    render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness,
+    sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint,
+    sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness,
+    signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_json_schema,
+    signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_json_schema,
+    verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses,
 };
 #[cfg(unix)]
 use factory_release_state_transparency_external_gossip_trust::factory_release_state_transparency_external_gossip_observer_trust_state_sha256;
@@ -1633,6 +1657,54 @@ enum Command {
     },
     /// Validate and normalize an external-gossip organization-registry history audit.
     ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryAudit {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed retained-root registry-history checkpoint schema.
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical retained-root registry-history checkpoint.
+    ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed monotonic registry-history checkpoint trust-state schema.
+    FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical registry-history checkpoint trust state.
+    ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointTrustState
+    {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed independent registry-history checkpoint witness schema.
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessSchema
+    {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical registry-history checkpoint witness.
+    ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed registry-history checkpoint witness-quorum schema.
+    FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema
+    {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical registry-history checkpoint witness-quorum report.
+    ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorum
+    {
         input: CompactPath,
         #[arg(short, long)]
         output: Option<CompactPath>,
@@ -7081,6 +7153,90 @@ enum Command {
         /// New canonical final registry computed by replay, never copied from input state.
         #[arg(long)]
         final_registry_output: CompactPath,
+    },
+    /// Replay one portable history and sign its exact head with the retained root.
+    SignFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint {
+        /// Canonical complete registry history.
+        #[arg(long)]
+        history: CompactPath,
+        /// Hex-encoded 32-byte Ed25519 private key for the final retained root.
+        #[arg(long)]
+        authority_private_key: CompactPath,
+        /// Explicit checkpoint time; defaults to the current clock.
+        #[arg(long)]
+        issued_at_unix: Option<u64>,
+        /// New canonical retained-root checkpoint.
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify a checkpoint from genesis and pin or advance monotonic local trust.
+    AcceptFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint {
+        /// Canonical complete registry history.
+        #[arg(long)]
+        history: CompactPath,
+        /// Canonical retained-root checkpoint for that exact history head.
+        #[arg(long)]
+        checkpoint: CompactPath,
+        /// Optional previously accepted trust state that the new history must extend.
+        #[arg(long)]
+        baseline: Option<CompactPath>,
+        /// Independent acceptance time; defaults to the current clock.
+        #[arg(long)]
+        accepted_at_unix: Option<u64>,
+        /// New canonical checkpoint trust state.
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Independently replay and witness one exact retained-root history checkpoint.
+    SignFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+        /// Canonical complete registry history.
+        #[arg(long)]
+        history: CompactPath,
+        /// Canonical retained-root checkpoint for that exact history head.
+        #[arg(long)]
+        checkpoint: CompactPath,
+        /// Stable independently configured witness identity.
+        #[arg(long)]
+        witness_id: String,
+        /// Hex-encoded 32-byte Ed25519 witness private key.
+        #[arg(long)]
+        witness_private_key: CompactPath,
+        /// Explicit witness time; defaults to the current clock.
+        #[arg(long)]
+        witnessed_at_unix: Option<u64>,
+        /// New canonical signed witness.
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify fresh distinct witnesses over one exact retained-root history checkpoint.
+    VerifyFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnesses {
+        /// Canonical complete registry history.
+        #[arg(long)]
+        history: CompactPath,
+        /// Canonical retained-root checkpoint for that exact history head.
+        #[arg(long)]
+        checkpoint: CompactPath,
+        /// Canonical signed witness artifacts.
+        #[arg(long = "witness", required = true)]
+        witnesses: Vec<CompactPath>,
+        /// Trusted witness identities paired by position with public keys.
+        #[arg(long = "trusted-witness-id", required = true)]
+        trusted_witness_ids: Vec<String>,
+        /// Trusted witness public-key files paired by position with identities.
+        #[arg(long = "trusted-witness-public-key", required = true)]
+        trusted_witness_public_keys: Vec<CompactPath>,
+        /// Required distinct witness count.
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(2..=100))]
+        minimum_witnesses: u32,
+        /// Independent freshness-evaluation time; defaults to the current clock.
+        #[arg(long)]
+        evaluated_at_unix: Option<u64>,
+        /// Return nonzero after retaining the report when the threshold is not met.
+        #[arg(long)]
+        require_quorum: bool,
+        /// New canonical witness-quorum report.
+        #[arg(short, long)]
+        output: CompactPath,
     },
     /// Authority-sign one exact next-generation organization registry transition.
     SignFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition {
@@ -19822,6 +19978,178 @@ fn run_cli() -> Result<()> {
                         "rendering UTF-8 factory release transparency external gossip organization registry history audit report",
                     )?,
                     false,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
+        Command::SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_json_schema(),
+                output.as_deref(),
+                "signed factory release transparency external gossip organization registry history checkpoint schema output",
+            )?;
+        }
+        Command::ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated factory release transparency external gossip organization registry history checkpoint output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            let checkpoint = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &checkpoint,
+            )
+            .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
+        Command::FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointTrustStateSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state_json_schema(),
+                output.as_deref(),
+                "factory release transparency external gossip organization registry history checkpoint trust-state schema output",
+            )?;
+        }
+        Command::ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointTrustState {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated factory release transparency external gossip organization registry history checkpoint trust-state output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint trust state",
+            )?;
+            let state = parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
+                &source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
+                &state,
+            )
+            .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
+        Command::SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_json_schema(),
+                output.as_deref(),
+                "signed factory release transparency external gossip organization registry history checkpoint witness schema output",
+            )?;
+        }
+        Command::ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated factory release transparency external gossip organization registry history checkpoint witness output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint witness",
+            )?;
+            let witness = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                &source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                &witness,
+            )
+            .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
+        Command::FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema(),
+                output.as_deref(),
+                "factory release transparency external gossip organization registry history checkpoint witness-quorum schema output",
+            )?;
+        }
+        Command::ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessQuorum {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated factory release transparency external gossip organization registry history checkpoint witness-quorum output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_REPORT_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint witness quorum report",
+            )?;
+            let report = parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report(
+                &source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
                 )?;
             } else {
                 io::stdout().write_all(&rendered)?;
@@ -33729,6 +34057,374 @@ fn run_cli() -> Result<()> {
                 output.0.display(),
                 final_registry_output.0.display(),
             );
+        }
+        Command::SignFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint {
+            history,
+            authority_private_key,
+            issued_at_unix,
+            output,
+        } => {
+            let input_paths = [history.0.as_ref(), authority_private_key.0.as_ref()];
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &input_paths,
+                "signed factory release transparency external gossip organization registry history checkpoint output",
+            )?;
+            let prepared_output = prepare_atomic_new_file(output.0.as_ref())?;
+            let (history_source, history_identity) = read_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            let history_document = parse_factory_release_state_transparency_external_gossip_organization_registry_history(
+                &history_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let authority_secret = read_hex_key(
+                authority_private_key.0.as_ref(),
+                "factory release transparency external gossip registry history checkpoint retained-root private key",
+            )?;
+            let checkpoint = sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &history_document,
+                &authority_secret,
+                issued_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let checkpoint_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &checkpoint,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                &history_identity,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            persist_atomic_new_file_bytes(
+                prepared_output,
+                output.0.as_ref(),
+                &checkpoint_source,
+            )?;
+            eprintln!(
+                "signed factory release external gossip registry history checkpoint {} generation {}; checkpoint={}",
+                checkpoint.registry_id,
+                checkpoint.generation,
+                output.0.display(),
+            );
+        }
+        Command::AcceptFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpoint {
+            history,
+            checkpoint,
+            baseline,
+            accepted_at_unix,
+            output,
+        } => {
+            let mut input_paths = vec![history.0.as_ref(), checkpoint.0.as_ref()];
+            if let Some(path) = &baseline {
+                input_paths.push(path.0.as_ref());
+            }
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &input_paths,
+                "factory release transparency external gossip organization registry history checkpoint trust-state output",
+            )?;
+            let prepared_output = prepare_atomic_new_file(output.0.as_ref())?;
+            let (history_source, history_identity) = read_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            let history_document = parse_factory_release_state_transparency_external_gossip_organization_registry_history(
+                &history_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let (checkpoint_source, checkpoint_identity) = read_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            let checkpoint_document = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &checkpoint_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let baseline_document = if let Some(path) = &baseline {
+                let (source, identity) = read_exact_artifact(
+                    path.0.as_ref(),
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES,
+                    "factory release transparency external gossip organization registry history checkpoint baseline trust state",
+                )?;
+                let document = parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+                Some((document, identity))
+            } else {
+                None
+            };
+            let state = accept_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &history_document,
+                &checkpoint_document,
+                baseline_document.as_ref().map(|(document, _)| document),
+                accepted_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let state_source = render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
+                &state,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                &history_identity,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            require_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                &checkpoint_identity,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            if let (Some(path), Some((_, identity))) = (&baseline, &baseline_document) {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES,
+                    identity,
+                    "factory release transparency external gossip organization registry history checkpoint baseline trust state",
+                )?;
+            }
+            persist_atomic_new_file_bytes(prepared_output, output.0.as_ref(), &state_source)?;
+            eprintln!(
+                "accepted factory release external gossip registry history checkpoint {} generation {}; trust_state={}",
+                state.registry_id,
+                state.accepted_generation,
+                output.0.display(),
+            );
+        }
+        Command::SignFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+            history,
+            checkpoint,
+            witness_id,
+            witness_private_key,
+            witnessed_at_unix,
+            output,
+        } => {
+            let input_paths = [
+                history.0.as_ref(),
+                checkpoint.0.as_ref(),
+                witness_private_key.0.as_ref(),
+            ];
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &input_paths,
+                "signed factory release transparency external gossip organization registry history checkpoint witness output",
+            )?;
+            let prepared_output = prepare_atomic_new_file(output.0.as_ref())?;
+            let (history_source, history_identity) = read_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            let history_document = parse_factory_release_state_transparency_external_gossip_organization_registry_history(
+                &history_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let (checkpoint_source, checkpoint_identity) = read_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            let checkpoint_document = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &checkpoint_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let witness_secret = read_hex_key(
+                witness_private_key.0.as_ref(),
+                "factory release transparency external gossip registry history checkpoint witness private key",
+            )?;
+            let witness = sign_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                &history_document,
+                &checkpoint_document,
+                &witness_id,
+                &witness_secret,
+                witnessed_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let witness_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                &witness,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                &history_identity,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            require_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                &checkpoint_identity,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            persist_atomic_new_file_bytes(
+                prepared_output,
+                output.0.as_ref(),
+                &witness_source,
+            )?;
+            eprintln!(
+                "witnessed factory release external gossip registry history checkpoint {} generation {} as {}; witness={}",
+                witness.registry_id,
+                witness.generation,
+                witness.witness_id,
+                output.0.display(),
+            );
+        }
+        Command::VerifyFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnesses {
+            history,
+            checkpoint,
+            witnesses,
+            trusted_witness_ids,
+            trusted_witness_public_keys,
+            minimum_witnesses,
+            evaluated_at_unix,
+            require_quorum,
+            output,
+        } => {
+            if trusted_witness_ids.len() != trusted_witness_public_keys.len() {
+                bail!(
+                    "--trusted-witness-id and --trusted-witness-public-key counts must match"
+                );
+            }
+            if witnesses.len()
+                > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+                || trusted_witness_ids.len()
+                    > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+            {
+                bail!("factory release registry history checkpoint witness count exceeds 100");
+            }
+            let mut input_paths = vec![history.0.as_ref(), checkpoint.0.as_ref()];
+            input_paths.extend(witnesses.iter().map(|path| path.0.as_ref()));
+            input_paths.extend(
+                trusted_witness_public_keys
+                    .iter()
+                    .map(|path| path.0.as_ref()),
+            );
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &input_paths,
+                "factory release transparency external gossip organization registry history checkpoint witness-quorum output",
+            )?;
+            let prepared_output = prepare_atomic_new_file(output.0.as_ref())?;
+            let (history_source, history_identity) = read_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            let history_document = parse_factory_release_state_transparency_external_gossip_organization_registry_history(
+                &history_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let (checkpoint_source, checkpoint_identity) = read_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            let checkpoint_document = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+                &checkpoint_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let witness_documents = witnesses
+                .iter()
+                .map(|path| -> Result<_> {
+                    let (source, identity) = read_exact_artifact(
+                        path.0.as_ref(),
+                        MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_BYTES,
+                        "factory release transparency external gossip organization registry history checkpoint witness",
+                    )?;
+                    let witness = parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                        &source,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    Ok((witness, identity))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let trusted_witnesses = trusted_witness_ids
+                .into_iter()
+                .zip(&trusted_witness_public_keys)
+                .map(|(id, path)| -> Result<_> {
+                    let (source, identity) = read_exact_artifact(
+                        path.0.as_ref(),
+                        65,
+                        "trusted factory release registry history checkpoint witness public key",
+                    )?;
+                    let source = std::str::from_utf8(&source).context(
+                        "decoding trusted factory release registry history checkpoint witness public key",
+                    )?;
+                    let key = decode_hex_key(
+                        source.trim(),
+                        "trusted factory release registry history checkpoint witness public key",
+                    )?;
+                    Ok(((id, key), identity))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let witness_values = witness_documents
+                .iter()
+                .map(|(witness, _)| witness.clone())
+                .collect::<Vec<_>>();
+            let trusted_values = trusted_witnesses
+                .iter()
+                .map(|(trusted, _)| trusted.clone())
+                .collect::<Vec<_>>();
+            let report = verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
+                &history_document,
+                &checkpoint_document,
+                &witness_values,
+                &trusted_values,
+                minimum_witnesses,
+                evaluated_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let report_source = render_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                &history_identity,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            require_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BYTES,
+                &checkpoint_identity,
+                "factory release transparency external gossip organization registry history checkpoint",
+            )?;
+            for (path, (_, identity)) in witnesses.iter().zip(&witness_documents) {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    MAX_SIGNED_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_BYTES,
+                    identity,
+                    "factory release transparency external gossip organization registry history checkpoint witness",
+                )?;
+            }
+            for (path, (_, identity)) in trusted_witness_public_keys.iter().zip(&trusted_witnesses) {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    65,
+                    identity,
+                    "trusted factory release registry history checkpoint witness public key",
+                )?;
+            }
+            persist_atomic_new_file_bytes(prepared_output, output.0.as_ref(), &report_source)?;
+            eprintln!(
+                "factory release external gossip registry history checkpoint witness quorum: {}/{}; report={}",
+                report.valid_witnesses,
+                report.minimum_witnesses,
+                output.0.display(),
+            );
+            if require_quorum && !report.quorum_met {
+                bail!("factory release registry history checkpoint witness quorum was not met");
+            }
         }
         Command::SignFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryTransition {
             registry_state,
