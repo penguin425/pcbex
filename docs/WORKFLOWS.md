@@ -30,6 +30,8 @@ evidence your next consumer actually needs.
 | Durable observer-trust quorum plus organization authority | Governed external-log quorum eligibility | pin empty registry genesis → admit exact current trust states → retain signed transitions → bind durable v1.492 quorum to latest active organizations |
 | Governed observer registry plus successor authority key | Rotated registry authority trust | export latest registry → old/new dual-sign → serialized no-replace apply → replay mixed transition/rotation history → bind the durable observer quorum |
 | Rotated observer registry plus multiple administrators | Threshold-governed registry decisions | export latest registry → root-sign fixed governance → collect distinct administrator approvals → serialized no-replace apply → replay mixed history with root-only mutation locked out |
+| Threshold-governed observer registry plus successor policy | Rotated registry governance | export latest registry → root-sign state-bound successor governance → satisfy retained and successor quorums → serialized no-replace apply → replay four event types |
+| Rotatable governance plus a prospective registry root | Governed root handoff | export exact active state → prospective-root-sign successor governance → satisfy both governance quorums → atomically rotate root and governance → replay five event types |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |

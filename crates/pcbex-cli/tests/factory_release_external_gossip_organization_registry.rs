@@ -348,6 +348,36 @@ fn sign_successor_governance(
     command.output().unwrap()
 }
 
+fn sign_successor_root_governance(
+    registry: &Path,
+    successor_root_secret: &Path,
+    minimum_approvals: &str,
+    authorities: &[(&str, &Path)],
+    issued_at_unix: &str,
+    output: &Path,
+) -> Output {
+    let mut command = Command::new(binary());
+    command.args([
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-successor-root-governance",
+        "--registry-state",
+        path(registry),
+        "--successor-registry-authority-private-key",
+        path(successor_root_secret),
+        "--minimum-approvals",
+        minimum_approvals,
+    ]);
+    for (authority_id, public_key) in authorities {
+        command.args([
+            "--authority-id",
+            authority_id,
+            "--authority-public-key",
+            path(public_key),
+        ]);
+    }
+    command.args(["--issued-at-unix", issued_at_unix, "--output", path(output)]);
+    command.output().unwrap()
+}
+
 fn sign_governance_rotation(
     registry: &Path,
     old_governance: &Path,
@@ -360,6 +390,50 @@ fn sign_governance_rotation(
     let mut command = Command::new(binary());
     command.args([
         "sign-factory-release-state-transparency-external-gossip-organization-registry-governance-rotation",
+        "--registry-state",
+        path(registry),
+        "--old-governance",
+        path(old_governance),
+        "--new-governance",
+        path(new_governance),
+    ]);
+    for (authority_id, private_key) in old_signers {
+        command.args([
+            "--old-authority-id",
+            authority_id,
+            "--old-authority-private-key",
+            path(private_key),
+        ]);
+    }
+    for (authority_id, private_key) in new_signers {
+        command.args([
+            "--new-authority-id",
+            authority_id,
+            "--new-authority-private-key",
+            path(private_key),
+        ]);
+    }
+    command.args([
+        "--rotated-at-unix",
+        rotated_at_unix,
+        "--output",
+        path(output),
+    ]);
+    command.output().unwrap()
+}
+
+fn sign_governed_authority_rotation(
+    registry: &Path,
+    old_governance: &Path,
+    new_governance: &Path,
+    old_signers: &[(&str, &Path)],
+    new_signers: &[(&str, &Path)],
+    rotated_at_unix: &str,
+    output: &Path,
+) -> Output {
+    let mut command = Command::new(binary());
+    command.args([
+        "sign-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation",
         "--registry-state",
         path(registry),
         "--old-governance",
@@ -480,6 +554,38 @@ fn apply_governance_rotation(
 ) -> Output {
     run(&[
         "apply-factory-release-state-transparency-external-gossip-organization-registry-governance-rotation",
+        "--reservation-ledger",
+        path(ledger),
+        "--expected-ledger-id",
+        ledger_id,
+        "--base-observer-quorum-policy",
+        path(policy),
+        "--expected-base-observer-quorum-policy-sha256",
+        policy_sha256,
+        "--registry-genesis",
+        path(genesis),
+        "--expected-registry-genesis-sha256",
+        genesis_sha256,
+        "--rotation",
+        path(rotation),
+        "--output",
+        path(output),
+    ])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_governed_authority_rotation(
+    ledger: &Path,
+    ledger_id: &str,
+    policy: &Path,
+    policy_sha256: &str,
+    genesis: &Path,
+    genesis_sha256: &str,
+    rotation: &Path,
+    output: &Path,
+) -> Output {
+    run(&[
+        "apply-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation",
         "--reservation-ledger",
         path(ledger),
         "--expected-ledger-id",
@@ -1907,40 +2013,254 @@ fn activates_threshold_governance_and_rejects_root_only_registry_mutation() {
         fs::read(&rotation_retry_output).unwrap()
     );
 
+    let same_root_governance = root.join("same-root-successor-governance.json");
+    let same_root = sign_successor_root_governance(
+        &rotated_output,
+        &root_secret,
+        "2",
+        &[
+            ("authority-d", &authority_d_public),
+            ("authority-e", &authority_e_public),
+            ("authority-f", &authority_f_public),
+        ],
+        "1350",
+        &same_root_governance,
+    );
+    assert!(!same_root.status.success());
+    assert!(!same_root_governance.exists());
+    assert!(String::from_utf8_lossy(&same_root.stderr).contains("must differ"));
+
+    let successor_root_governance = root.join("successor-root-governance.json");
+    let successor_root_result = sign_successor_root_governance(
+        &rotated_output,
+        &successor_root,
+        "2",
+        &[
+            ("authority-f", &authority_f_public),
+            ("authority-d", &authority_d_public),
+            ("authority-e", &authority_e_public),
+        ],
+        "1350",
+        &successor_root_governance,
+    );
+    assert!(
+        successor_root_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&successor_root_result.stderr)
+    );
+    let successor_root_governance_value: Value =
+        serde_json::from_slice(&fs::read(&successor_root_governance).unwrap()).unwrap();
+    assert_eq!(successor_root_governance_value["registry_generation"], 3);
+    assert_eq!(
+        successor_root_governance_value["registry_authority_public_key"],
+        public([71; 32])
+    );
+
+    let insufficient_root_rotation = root.join("insufficient-governed-root-rotation.json");
+    let insufficient_root = sign_governed_authority_rotation(
+        &rotated_output,
+        &successor_governance,
+        &successor_root_governance,
+        &[
+            ("authority-d", &authority_d_secret),
+            ("authority-e", &authority_e_secret),
+            ("authority-f", &authority_f_secret),
+        ],
+        &[("authority-d", &authority_d_secret)],
+        "1400",
+        &insufficient_root_rotation,
+    );
+    assert!(!insufficient_root.status.success());
+    assert!(!insufficient_root_rotation.exists());
+    assert!(String::from_utf8_lossy(&insufficient_root.stderr).contains("new governance"));
+
+    let governed_root_rotation = root.join("governed-root-rotation.json");
+    let governed_root_signed = sign_governed_authority_rotation(
+        &rotated_output,
+        &successor_governance,
+        &successor_root_governance,
+        &[
+            ("authority-f", &authority_f_secret),
+            ("authority-d", &authority_d_secret),
+            ("authority-e", &authority_e_secret),
+        ],
+        &[
+            ("authority-e", &authority_e_secret),
+            ("authority-d", &authority_d_secret),
+        ],
+        "1400",
+        &governed_root_rotation,
+    );
+    assert!(
+        governed_root_signed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&governed_root_signed.stderr)
+    );
+    let governed_root_value: Value =
+        serde_json::from_slice(&fs::read(&governed_root_rotation).unwrap()).unwrap();
+    assert_eq!(governed_root_value["from_generation"], 3);
+    assert_eq!(governed_root_value["to_generation"], 4);
+    assert_eq!(governed_root_value["old_public_key"], public([31; 32]));
+    assert_eq!(governed_root_value["new_public_key"], public([71; 32]));
+
+    let tampered_root_rotation = root.join("tampered-governed-root-rotation.json");
+    let governed_root_source = fs::read_to_string(&governed_root_rotation).unwrap();
+    let new_signature = governed_root_value["new_approvals"][0]["signature"]
+        .as_str()
+        .unwrap();
+    fs::write(
+        &tampered_root_rotation,
+        governed_root_source.replacen(new_signature, &"0".repeat(128), 1),
+    )
+    .unwrap();
+    let tampered_root_output = root.join("tampered-governed-root-output.json");
+    let tampered_root = apply_governed_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &tampered_root_rotation,
+        &tampered_root_output,
+    );
+    assert!(!tampered_root.status.success());
+    assert!(!tampered_root_output.exists());
+    assert!(
+        String::from_utf8_lossy(&tampered_root.stderr).contains("approval verification failed")
+    );
+
+    let root_rotated_output = root.join("governed-root-rotated.json");
+    let root_rotated = apply_governed_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &governed_root_rotation,
+        &root_rotated_output,
+    );
+    assert!(
+        root_rotated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&root_rotated.stderr)
+    );
+    let root_rotated_value: Value =
+        serde_json::from_slice(&fs::read(&root_rotated_output).unwrap()).unwrap();
+    assert_eq!(root_rotated_value["generation"], 4);
+    assert_eq!(root_rotated_value["authority_public_key"], public([71; 32]));
+    assert_eq!(
+        root_rotated_value["active_governance_sha256"],
+        governed_root_value["new_governance_sha256"]
+    );
+    assert_eq!(
+        root_rotated_value["organizations"],
+        rotated_value["organizations"]
+    );
+    let governed_root_retry_output = root.join("governed-root-rotation-retry.json");
+    assert!(
+        apply_governed_authority_rotation(
+            &ledger,
+            &ledger_id,
+            &policy,
+            &policy_sha256,
+            &genesis,
+            genesis_sha256,
+            &governed_root_rotation,
+            &governed_root_retry_output,
+        )
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read(&root_rotated_output).unwrap(),
+        fs::read(&governed_root_retry_output).unwrap()
+    );
+
+    let reused_root_governance = root.join("reused-root-governance.json");
+    assert!(
+        sign_successor_root_governance(
+            &root_rotated_output,
+            &root_secret,
+            "2",
+            &[
+                ("authority-d", &authority_d_public),
+                ("authority-e", &authority_e_public),
+                ("authority-f", &authority_f_public),
+            ],
+            "1450",
+            &reused_root_governance,
+        )
+        .status
+        .success()
+    );
+    let reused_root_rotation = root.join("reused-root-rotation.json");
+    assert!(
+        sign_governed_authority_rotation(
+            &root_rotated_output,
+            &successor_root_governance,
+            &reused_root_governance,
+            &[
+                ("authority-d", &authority_d_secret),
+                ("authority-e", &authority_e_secret),
+            ],
+            &[
+                ("authority-d", &authority_d_secret),
+                ("authority-e", &authority_e_secret),
+            ],
+            "1450",
+            &reused_root_rotation,
+        )
+        .status
+        .success()
+    );
+    let reused_root_output = root.join("reused-root-output.json");
+    let reused_root = apply_governed_authority_rotation(
+        &ledger,
+        &ledger_id,
+        &policy,
+        &policy_sha256,
+        &genesis,
+        genesis_sha256,
+        &reused_root_rotation,
+        &reused_root_output,
+    );
+    assert!(!reused_root.status.success());
+    assert!(!reused_root_output.exists());
+    assert!(String::from_utf8_lossy(&reused_root.stderr).contains("historical root key"));
+
     let old_governance_transition = root.join("old-governance-transition.json");
     let old_governance_result = sign_threshold_transition(
-        &rotated_output,
-        &governance,
+        &root_rotated_output,
+        &successor_governance,
         &[
-            ("authority-a", &authority_a_secret),
-            ("authority-b", &authority_b_secret),
+            ("authority-d", &authority_d_secret),
+            ("authority-e", &authority_e_secret),
+            ("authority-f", &authority_f_secret),
         ],
         "revoke-organization",
         "lab-a",
         None,
-        "1400",
+        "1500",
         &old_governance_transition,
     );
     assert!(!old_governance_result.status.success());
     assert!(!old_governance_transition.exists());
-    assert!(
-        String::from_utf8_lossy(&old_governance_result.stderr)
-            .contains("retained active governance")
-    );
+    assert!(String::from_utf8_lossy(&old_governance_result.stderr).contains("retained root trust"));
     let revocation = root.join("successor-governance-revocation.json");
     assert!(
         sign_threshold_transition(
-            &rotated_output,
-            &successor_governance,
+            &root_rotated_output,
+            &successor_root_governance,
             &[
                 ("authority-d", &authority_d_secret),
                 ("authority-e", &authority_e_secret),
-                ("authority-f", &authority_f_secret),
             ],
             "revoke-organization",
             "lab-a",
             None,
-            "1400",
+            "1500",
             &revocation,
         )
         .status
@@ -1963,7 +2283,7 @@ fn activates_threshold_governance_and_rejects_root_only_registry_mutation() {
         String::from_utf8_lossy(&revoked.stderr)
     );
     let revoked_value: Value = serde_json::from_slice(&fs::read(&revoked_output).unwrap()).unwrap();
-    assert_eq!(revoked_value["generation"], 4);
+    assert_eq!(revoked_value["generation"], 5);
     assert_eq!(revoked_value["organizations"][0]["status"], "revoked");
 
     let exported = root.join("threshold-exported.json");
@@ -2000,6 +2320,16 @@ fn activates_threshold_governance_and_rejects_root_only_registry_mutation() {
         })
         .collect::<Vec<_>>();
     assert_eq!(governance_rotation_records.len(), 1);
+    let governed_authority_rotation_records = fs::read_dir(&ledger)
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|entry| {
+            entry.file_name().to_string_lossy().starts_with(
+                "factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation-v1-",
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(governed_authority_rotation_records.len(), 1);
     for entry in fs::read_dir(&ledger).unwrap() {
         let source = fs::read(entry.unwrap().path()).unwrap();
         for secret in [
@@ -2010,6 +2340,7 @@ fn activates_threshold_governance_and_rejects_root_only_registry_mutation() {
             hex::encode([64; 32]),
             hex::encode([65; 32]),
             hex::encode([66; 32]),
+            hex::encode([71; 32]),
         ] {
             assert!(
                 !source
@@ -2050,6 +2381,10 @@ fn publishes_closed_bounded_registry_schemas() {
             "governance-rotation.schema.json",
         ),
         (
+            "signed-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation-schema",
+            "governed-authority-rotation.schema.json",
+        ),
+        (
             "factory-release-state-transparency-external-gossip-organization-registry-verification-report-schema",
             "report.schema.json",
         ),
@@ -2064,6 +2399,10 @@ fn publishes_closed_bounded_registry_schemas() {
         (
             "factory-release-state-transparency-external-gossip-organization-registry-governance-rotation-verification-report-schema",
             "governance-rotation-report.schema.json",
+        ),
+        (
+            "factory-release-state-transparency-external-gossip-organization-registry-governed-authority-rotation-verification-report-schema",
+            "governed-authority-rotation-report.schema.json",
         ),
     ] {
         let output = root.join(filename);
