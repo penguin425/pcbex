@@ -2666,6 +2666,359 @@ for schema_path in (rotation_schema_path, report_schema_path):
         elif isinstance(value, list):
             pending.extend(value)
 PY
+
+# v1.497 rotates the registry root and active governance atomically only after
+# the retained and successor governance quorums approve one state-bound event.
+factory_transparency_external_gossip_registry_governed_rotation_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation.schema.json"
+factory_transparency_external_gossip_registry_governed_rotation_report_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation-report.schema.json"
+factory_transparency_external_gossip_registry_successor_root_private="$output_directory/factory-release-transparency-external-gossip-registry-successor-root.private.hex"
+factory_transparency_external_gossip_registry_successor_root_public="$output_directory/factory-release-transparency-external-gossip-registry-successor-root.public.hex"
+factory_transparency_external_gossip_registry_governed_authority_g_private="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-g.private.hex"
+factory_transparency_external_gossip_registry_governed_authority_g_public="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-g.public.hex"
+factory_transparency_external_gossip_registry_governed_authority_h_private="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-h.private.hex"
+factory_transparency_external_gossip_registry_governed_authority_h_public="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-h.public.hex"
+factory_transparency_external_gossip_registry_governed_authority_i_private="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-i.private.hex"
+factory_transparency_external_gossip_registry_governed_authority_i_public="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-i.public.hex"
+factory_transparency_external_gossip_registry_successor_root_governance="$output_directory/factory-release-transparency-external-gossip-registry-successor-root-governance.json"
+factory_transparency_external_gossip_registry_governed_rotation="$output_directory/factory-release-transparency-external-gossip-registry-governed-authority-rotation.json"
+factory_transparency_external_gossip_registry_governed_rotation_state_5="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation.state-5.json"
+factory_transparency_external_gossip_registry_governed_rotation_report="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation.report.json"
+factory_transparency_external_gossip_registry_governed_rotation_replay="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation-replay.report.json"
+factory_transparency_external_gossip_registry_governed_rotation_legacy_output="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation-legacy.report.json"
+factory_transparency_external_gossip_registry_governed_rotation_legacy_error="$output_directory/factory-release-transparency-external-gossip-organization-registry-governed-authority-rotation-legacy.stderr"
+factory_transparency_external_gossip_registry_pre_root_governance_output="$output_directory/factory-release-transparency-external-gossip-registry-pre-root-governance-transition.json"
+factory_transparency_external_gossip_registry_pre_root_governance_error="$output_directory/factory-release-transparency-external-gossip-registry-pre-root-governance-transition.stderr"
+factory_transparency_external_gossip_registry_successor_root_transition="$output_directory/factory-release-transparency-external-gossip-registry-successor-root-transition.json"
+
+"$pcbex_binary" signed-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation-schema \
+  --output "$factory_transparency_external_gossip_registry_governed_rotation_schema"
+"$pcbex_binary" factory-release-state-transparency-external-gossip-organization-registry-governed-authority-rotation-verification-report-schema \
+  --output "$factory_transparency_external_gossip_registry_governed_rotation_report_schema"
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_successor_root_private" \
+  "$factory_transparency_external_gossip_registry_successor_root_public" \
+  "$factory_transparency_external_gossip_registry_governed_authority_g_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_g_public" \
+  "$factory_transparency_external_gossip_registry_governed_authority_h_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_h_public" \
+  "$factory_transparency_external_gossip_registry_governed_authority_i_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_i_public" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+paths = list(map(Path, sys.argv[1:]))
+
+def write_keypair(private_path, public_path, marker):
+    seed = bytes([marker]) * 32
+    private_key = Ed25519PrivateKey.from_private_bytes(seed)
+    public_key = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    private_path.write_text(seed.hex() + "\n", encoding="ascii")
+    public_path.write_text(public_key.hex() + "\n", encoding="ascii")
+    os.chmod(private_path, 0o600)
+
+write_keypair(paths[0], paths[1], 88)
+write_keypair(paths[2], paths[3], 89)
+write_keypair(paths[4], paths[5], 90)
+write_keypair(paths[6], paths[7], 91)
+PY
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-successor-root-governance \
+  --registry-state "$factory_transparency_external_gossip_registry_governance_rotation_state_4" \
+  --successor-registry-authority-private-key "$factory_transparency_external_gossip_registry_successor_root_private" \
+  --minimum-approvals 2 \
+  --authority-id registry-admin-i \
+  --authority-public-key "$factory_transparency_external_gossip_registry_governed_authority_i_public" \
+  --authority-id registry-admin-g \
+  --authority-public-key "$factory_transparency_external_gossip_registry_governed_authority_g_public" \
+  --authority-id registry-admin-h \
+  --authority-public-key "$factory_transparency_external_gossip_registry_governed_authority_h_public" \
+  --issued-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_successor_root_governance"
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation \
+  --registry-state "$factory_transparency_external_gossip_registry_governance_rotation_state_4" \
+  --old-governance "$factory_transparency_external_gossip_registry_successor_governance" \
+  --new-governance "$factory_transparency_external_gossip_registry_successor_root_governance" \
+  --old-authority-id registry-admin-f \
+  --old-authority-private-key "$factory_transparency_external_gossip_registry_successor_authority_f_private" \
+  --old-authority-id registry-admin-d \
+  --old-authority-private-key "$factory_transparency_external_gossip_registry_successor_authority_d_private" \
+  --old-authority-id registry-admin-e \
+  --old-authority-private-key "$factory_transparency_external_gossip_registry_successor_authority_e_private" \
+  --new-authority-id registry-admin-h \
+  --new-authority-private-key "$factory_transparency_external_gossip_registry_governed_authority_h_private" \
+  --new-authority-id registry-admin-g \
+  --new-authority-private-key "$factory_transparency_external_gossip_registry_governed_authority_g_private" \
+  --rotated-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_governed_rotation"
+
+"$pcbex_binary" apply-factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-genesis "$factory_transparency_external_gossip_registry_threshold_genesis" \
+  --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_threshold_genesis_digest" \
+  --rotation "$factory_transparency_external_gossip_registry_governed_rotation" \
+  --output "$factory_transparency_external_gossip_registry_governed_rotation_state_5"
+
+verify_factory_transparency_external_gossip_registry_governed_rotation() {
+  "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum-with-organization-registry-governed-authority-rotation \
+    --reservation-ledger "$monotonic_release_ledger" \
+    --expected-ledger-id "$signed_release_reservation_id" \
+    --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+    --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+    --registry-genesis "$factory_transparency_external_gossip_registry_threshold_genesis" \
+    --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_threshold_genesis_digest" \
+    --observer-trust-report "$factory_transparency_external_gossip_trust_report_a" \
+    --require-quorum --require-accepted \
+    --output "$1"
+}
+
+verify_factory_transparency_external_gossip_registry_governed_rotation \
+  "$factory_transparency_external_gossip_registry_governed_rotation_report"
+verify_factory_transparency_external_gossip_registry_governed_rotation \
+  "$factory_transparency_external_gossip_registry_governed_rotation_replay"
+cmp "$factory_transparency_external_gossip_registry_governed_rotation_report" \
+  "$factory_transparency_external_gossip_registry_governed_rotation_replay"
+
+if "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-quorum-with-organization-registry-governance-rotation \
+  --reservation-ledger "$monotonic_release_ledger" \
+  --expected-ledger-id "$signed_release_reservation_id" \
+  --base-observer-quorum-policy "$factory_transparency_external_gossip_quorum_policy" \
+  --expected-base-observer-quorum-policy-sha256 "$factory_transparency_external_gossip_quorum_policy_digest" \
+  --registry-genesis "$factory_transparency_external_gossip_registry_threshold_genesis" \
+  --expected-registry-genesis-sha256 "$factory_transparency_external_gossip_registry_threshold_genesis_digest" \
+  --observer-trust-report "$factory_transparency_external_gossip_trust_report_a" \
+  --output "$factory_transparency_external_gossip_registry_governed_rotation_legacy_output" \
+  2>"$factory_transparency_external_gossip_registry_governed_rotation_legacy_error"; then
+  echo "expected the v1.496 registry verifier to reject governed authority rotation" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_governed_rotation_legacy_output"
+grep -Fq 'governance-rotation history event' \
+  "$factory_transparency_external_gossip_registry_governed_rotation_legacy_error"
+
+if "$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition \
+  --registry-state "$factory_transparency_external_gossip_registry_governed_rotation_state_5" \
+  --governance "$factory_transparency_external_gossip_registry_successor_governance" \
+  --authority-id registry-admin-d \
+  --authority-private-key "$factory_transparency_external_gossip_registry_successor_authority_d_private" \
+  --authority-id registry-admin-e \
+  --authority-private-key "$factory_transparency_external_gossip_registry_successor_authority_e_private" \
+  --authority-id registry-admin-f \
+  --authority-private-key "$factory_transparency_external_gossip_registry_successor_authority_f_private" \
+  --action suspend-organization \
+  --organization-id independent-observer-org-a \
+  --reason-sha256 "$factory_transparency_external_gossip_registry_reason_sha256" \
+  --effective-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_pre_root_governance_output" \
+  2>"$factory_transparency_external_gossip_registry_pre_root_governance_error"; then
+  echo "expected the governed registry root to reject pre-rotation governance" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_pre_root_governance_output"
+grep -Fq 'retained root trust' \
+  "$factory_transparency_external_gossip_registry_pre_root_governance_error"
+
+"$pcbex_binary" sign-factory-release-state-transparency-external-gossip-organization-registry-threshold-transition \
+  --registry-state "$factory_transparency_external_gossip_registry_governed_rotation_state_5" \
+  --governance "$factory_transparency_external_gossip_registry_successor_root_governance" \
+  --authority-id registry-admin-g \
+  --authority-private-key "$factory_transparency_external_gossip_registry_governed_authority_g_private" \
+  --authority-id registry-admin-h \
+  --authority-private-key "$factory_transparency_external_gossip_registry_governed_authority_h_private" \
+  --action suspend-organization \
+  --organization-id independent-observer-org-a \
+  --reason-sha256 "$factory_transparency_external_gossip_registry_reason_sha256" \
+  --effective-at-unix "$factory_transparency_external_gossip_time" \
+  --output "$factory_transparency_external_gossip_registry_successor_root_transition"
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_threshold_genesis" \
+  "$factory_transparency_external_gossip_registry_threshold_admission_a" \
+  "$factory_transparency_external_gossip_registry_threshold_root_rotation" \
+  "$factory_transparency_external_gossip_registry_threshold_admission_b" \
+  "$factory_transparency_external_gossip_registry_governance_rotation" \
+  "$factory_transparency_external_gossip_registry_governed_rotation" \
+  "$factory_transparency_external_gossip_registry_governance_rotation_state_4" \
+  "$factory_transparency_external_gossip_registry_governed_rotation_state_5" \
+  "$factory_transparency_external_gossip_registry_successor_governance" \
+  "$factory_transparency_external_gossip_registry_successor_root_governance" \
+  "$factory_transparency_external_gossip_registry_governed_rotation_report" \
+  "$factory_transparency_external_gossip_registry_governed_rotation_schema" \
+  "$factory_transparency_external_gossip_registry_governed_rotation_report_schema" \
+  "$monotonic_release_ledger" \
+  "$factory_transparency_external_gossip_registry_successor_root_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_g_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_h_private" \
+  "$factory_transparency_external_gossip_registry_governed_authority_i_private" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+genesis_path, legacy_path, root_rotation_path, threshold_path, governance_rotation_path, \
+    governed_rotation_path, state_4_path, state_5_path, old_governance_path, \
+    new_governance_path, report_path, rotation_schema_path, report_schema_path, \
+    ledger_path, *private_paths = map(Path, sys.argv[1:])
+
+def compact(value):
+    return json.dumps(value, separators=(",", ":")).encode("ascii")
+
+def identity(source):
+    return {"bytes": len(source), "sha256": hashlib.sha256(source).hexdigest()}
+
+sources = [
+    genesis_path.read_bytes(),
+    legacy_path.read_bytes(),
+    root_rotation_path.read_bytes(),
+    threshold_path.read_bytes(),
+    governance_rotation_path.read_bytes(),
+    governed_rotation_path.read_bytes(),
+]
+state_4 = json.loads(state_4_path.read_bytes())
+state_5 = json.loads(state_5_path.read_bytes())
+old_governance = json.loads(old_governance_path.read_bytes())
+new_governance = json.loads(new_governance_path.read_bytes())
+rotation = json.loads(sources[-1])
+report_source = report_path.read_bytes()
+report = json.loads(report_source)
+
+old_governance_sha256 = hashlib.sha256(compact(old_governance)).hexdigest()
+new_governance_sha256 = hashlib.sha256(compact(new_governance)).hexdigest()
+assert new_governance["registry_generation"] == 4
+assert new_governance["registry_state_sha256"] == hashlib.sha256(compact(state_4)).hexdigest()
+assert new_governance["registry_authority_public_key"] != state_4["authority_public_key"]
+assert new_governance["minimum_approvals"] == 2
+assert [item["authority_id"] for item in new_governance["authorities"]] == [
+    "registry-admin-g", "registry-admin-h", "registry-admin-i"
+]
+assert rotation["from_generation"] == 4
+assert rotation["to_generation"] == 5
+assert rotation["previous_transition_sha256"] == hashlib.sha256(compact(json.loads(sources[-2]))).hexdigest()
+assert rotation["old_public_key"] == state_4["authority_public_key"]
+assert rotation["new_public_key"] == new_governance["registry_authority_public_key"]
+assert rotation["old_governance_sha256"] == old_governance_sha256
+assert rotation["new_governance_sha256"] == new_governance_sha256
+assert rotation["old_governance"] == old_governance
+assert rotation["new_governance"] == new_governance
+assert [item["authority_id"] for item in rotation["old_approvals"]] == [
+    "registry-admin-d", "registry-admin-e", "registry-admin-f"
+]
+assert [item["authority_id"] for item in rotation["new_approvals"]] == [
+    "registry-admin-g", "registry-admin-h"
+]
+assert state_5["generation"] == 5
+assert state_5["authority_public_key"] == rotation["new_public_key"]
+assert state_5["active_governance_sha256"] == new_governance_sha256
+assert state_5["organizations"] == state_4["organizations"]
+
+assert report["status"] == "verified"
+assert report["quorum_met"] is True
+assert report["registry_history_event_count"] == 5
+assert report["registry_authority_rotation_count"] == 1
+assert report["registry_threshold_transition_count"] == 1
+assert report["registry_governance_rotation_count"] == 1
+assert report["registry_governed_authority_rotation_count"] == 1
+assert report["current_registry"] == state_5
+assert report["active_governance"] == new_governance
+assert report["active_governance_sha256"] == new_governance_sha256
+assert [event["kind"] for event in report["registry_history_events"]] == [
+    "organization_transition", "authority_key_rotation", "threshold_transition",
+    "governance_rotation", "governed_authority_key_rotation"
+]
+for event, source in zip(report["registry_history_events"], sources[1:]):
+    assert event["artifact"] == identity(source)
+for claim in (
+    "registry_genesis_pin_matched",
+    "complete_registry_history_verified",
+    "registry_authority_transition_signatures_verified",
+    "registry_authority_rotation_dual_signatures_verified",
+    "registry_authority_successor_possession_verified",
+    "registry_authority_key_history_unique",
+    "governance_root_signatures_verified",
+    "governance_authority_identities_unique",
+    "governance_authority_keys_unique",
+    "governance_threshold_approvals_verified",
+    "governance_rotation_old_quorum_verified",
+    "governance_rotation_new_quorum_verified",
+    "successor_governance_state_binding_verified",
+    "governed_authority_rotation_old_quorum_verified",
+    "governed_authority_rotation_new_quorum_verified",
+    "successor_registry_root_possession_verified",
+    "registry_root_and_governance_rotated_atomically",
+    "root_only_registry_mutations_locked_out",
+    "registry_generation_chain_verified",
+    "registry_digest_chain_verified",
+    "registry_timestamps_monotonic",
+    "registry_authority_role_separation_verified",
+    "current_observer_trust_admissions_verified",
+    "selected_observer_organizations_active",
+    "registry_effective_before_quorum_evaluation_verified",
+    "selected_ledger_latest_registry_verified",
+    "selected_ledger_observer_trust_report_verified",
+    "selected_ledger_latest_observer_rotations_verified",
+    "authority_threshold_governance_verified",
+):
+    assert report[claim] is True, claim
+for claim in (
+    "selected_ledger_registry_bound_report_committed",
+    "selected_ledger_rollback_resistance_verified",
+    "global_non_equivocation_verified",
+    "trusted_time_verified",
+    "independent_governance_control_verified",
+    "independent_organization_operation_verified",
+    "factory_legal_identity_verified",
+    "capacity_reserved",
+    "order_placed",
+    "payment_performed",
+    "exactly_once_execution_verified",
+):
+    assert report[claim] is False, claim
+
+rotation_record_name = re.compile(
+    r"factory-release-state-transparency-external-gossip-organization-registry-governed-authority-key-rotation-v1-[0-9a-f]{32}-[0-9]{4}\.json"
+)
+report_record_name = re.compile(
+    r"factory-release-state-transparency-external-gossip-organization-registry-governed-authority-rotation-v1-[0-9a-f]{64}-[0-9]{4}-[0-9a-f]{32}\.json"
+)
+rotation_records = [path for path in ledger_path.iterdir() if rotation_record_name.fullmatch(path.name)]
+assert len(rotation_records) == 1
+assert rotation_records[0].read_bytes() == sources[-1]
+report_records = [path for path in ledger_path.iterdir() if report_record_name.fullmatch(path.name)]
+assert len(report_records) == 1
+assert report_records[0].read_bytes() == report_source
+
+secrets = [path.read_text(encoding="ascii").strip().encode() for path in private_paths]
+for artifact in [new_governance_path, governed_rotation_path, report_path, state_5_path, *ledger_path.iterdir()]:
+    source = artifact.read_bytes()
+    for secret in secrets:
+        assert secret not in source, artifact
+
+for schema_path in (rotation_schema_path, report_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
 }
 "$pcbex_binary" verify-circuit-kicad-handoff \
   examples/circuit-spec-v2.json "$generated_schematic" \

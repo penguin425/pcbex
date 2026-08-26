@@ -209,6 +209,7 @@ auditable release.
 | v1.494.0 | Factory-release external-gossip registry authority key rotation | Preserve every v1.493 wire artifact while adding a dual-signed one-generation authority handoff, require both current-key authorization and successor-key possession, reject historical authority-key reuse and every observer-role collision, serialize transition/rotation races on the pinned ledger manifest, and replay one typed mixed history into a self-contained quorum report without claiming threshold governance, host-ledger rollback resistance, trusted time, global non-equivocation, real organization independence, legal identity, ordering, payment, or exactly-once execution |
 | v1.495.0 | Factory-release external-gossip registry threshold governance | Root-sign one exact activation-state-bound policy with 2–100 distinct authority keys, require a configurable distinct-key threshold of at least two for every admission, suspension, or revocation, retain threshold transitions in the shared serialized generation chain, lock out root-only mutation after activation, and replay legacy transitions, root rotations, and threshold events into one self-contained quorum report without claiming independent key control, governance rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.496.0 | Factory-release external-gossip registry governance rotation | Root-sign successor governance against the exact active registry state, require both retained and successor thresholds over one next-generation rotation payload before changing membership, authority keys, or threshold, retain the event in the shared serialized generation chain, reject no-op rotation and stale governance, and replay all four event types into one self-contained report without claiming independent governance control, governed root rotation, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.497.0 | Governed factory-release external-gossip registry-root rotation | Require a distinct prospective root to sign successor governance for the exact active state, require retained and successor governance quorums over one root-and-governance handoff, atomically replace both trust values while preserving organizations, reject historical root reuse and role collisions in one serialized five-event chain, and emit a self-contained report without claiming independent governance control, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2047,3 +2048,28 @@ the policies may overlap and one operator may control several keys. Governed
 registry-root rotation, host-ledger rollback resistance, trusted time, global
 non-equivocation, legal identity, capacity, ordering, payment, and exactly-once
 execution remain unproved.
+
+The current v1.497.0 milestone closes that root-rotation gap without changing
+any v1.493–v1.496 artifact. A distinct prospective root signs successor
+governance against the exact current generation and semantic registry digest,
+proving possession before the key can become authoritative.
+
+One governed-authority rotation binds the exact next generation, preceding
+event digest, old and new root keys, old and new governance digests, and
+nondecreasing time. Retained and successor governance each satisfy their own
+ordered distinct-key threshold over the same domain-separated payload.
+
+Application atomically replaces the registry root and active governance digest
+while preserving organizations and observer admissions. The selected-ledger
+loader admits exactly one of five event types per generation, rejects every
+historical root reuse and role collision, and keeps later threshold transitions
+operational under the successor root and governance.
+
+The self-contained verifier replays the complete five-event history from the
+pinned genesis and exact v1.492 observer-trust report. The v1.496 verifier fails
+closed when it encounters the new event.
+
+Prospective-root possession and two threshold results do not prove independent
+people, organizations, or key custody. Host-ledger rollback resistance, trusted
+time, global non-equivocation, legal identity, capacity, ordering, payment, and
+exactly-once execution remain unproved.

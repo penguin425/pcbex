@@ -1014,6 +1014,11 @@
     {
       "id": "factory-release-transparency-external-gossip-registry-governance-rotation",
       "release": "v1.496.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-gossip-registry-governed-authority-key-rotation",
+      "release": "v1.497.0",
       "status": "current"
     }
   ]

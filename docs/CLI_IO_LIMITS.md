@@ -819,6 +819,34 @@ overlap. Governed registry-root rotation, host-ledger rollback resistance,
 global non-equivocation, trusted time, legal identity, ordering, payment, and
 exactly-once execution remain false.
 
+## Factory-state external gossip governed registry-root rotation limits
+
+The v1.497 governed root rotation is capped at 256 KiB. It embeds retained and
+successor governance documents plus ordered old/new approval sets of at most
+100 members each. The five-event history remains bounded to 4,096 generations,
+and the self-contained verification report remains capped at 128 MiB.
+
+Successor governance must bind the exact current registry generation and
+semantic digest under a distinct prospective-root Ed25519 signature. Governance
+thresholds remain 2–100. Issue and rotation times are bounded by
+`999999999999999` and may not precede retained state.
+
+One payload binds the exact next generation, prior event digest, old/new root
+keys, old/new governance digests, and rotation time. Both approval sets must
+satisfy their own governance. Applying it changes the root and active
+governance together while preserving organizations and observer admissions.
+
+All five mutation filenames share one descriptor-pinned manifest lock and
+generation namespace. Exact retry converges; cross-type conflict, gap, fork,
+stale state, signature substitution, historical root reuse, observer-role or
+governance-role collision, and time rollback fail closed. The v1.496 verifier
+rejects the fifth event.
+
+Quorum satisfaction and prospective-root possession do not prove independent
+people, organizations, or key custody. Host-ledger rollback resistance, global
+non-equivocation, trusted time, legal identity, ordering, payment, and
+exactly-once execution remain false.
+
 ## Subprocess limits
 
 Rust CLI integrations use a shared shell-free runner. Standard input is closed

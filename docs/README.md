@@ -127,6 +127,10 @@ boundary document for the artifact you plan to produce or trust.
   — require both retained and successor quorums before changing governance
   membership, authority keys, or threshold.
 
+- [Governed External-gossip Registry-root Rotation](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GOVERNED_ROOT_ROTATION.md)
+  — require prospective-root possession plus retained and successor governance
+  quorums before atomically replacing the root and active governance.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
