@@ -67,6 +67,10 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
   external head, acquire bounded remote observations, and require policy-pinned
   organizations to agree on one exact signed head.
 
+- **Witness portable registry heads:** Replay complete governance history,
+  rotate witness trust, and acquire canonical remote endorsements with
+  hash-bound transport receipts.
+
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
 
@@ -259,6 +263,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Portable registry history audit v1 | Replay exact genesis and all five registry event kinds to compute the final state without trusting a copied snapshot | [History audit guide](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_AUDIT.md) |
 | Witnessed registry history checkpoint v1 | Pin the exact audited head with the retained root, monotonic local trust, and fresh distinct witnesses | [Checkpoint guide](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_CHECKPOINT.md) |
 | Registry-history witness rotation v1 | Advance identity-bound witness trust through dual-signed generation- and digest-chained key transitions | `pcbex factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-schema` |
+| Remote registry-history witness v1 | Acquire one canonical witness through bounded no-redirect HTTPS, replay the complete local history, and retain a hash-bound receipt | `pcbex remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-receipt-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

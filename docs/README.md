@@ -135,7 +135,7 @@ boundary document for the artifact you plan to produce or trust.
   — export exact selected-ledger evidence and independently replay all five
   event kinds from empty genesis to a computed final registry.
 
-- [Witnessed External-gossip Registry History Checkpoints](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_CHECKPOINT.md)
+- [Witnessed and Remote External-gossip Registry History Checkpoints](FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_CHECKPOINT.md)
   — retain root-signed audited heads, reject rollback or equivocation against a
   local baseline, require fresh distinct checkpoint witnesses, and rotate each
   identity-bound witness key through a dual-signed trust chain.

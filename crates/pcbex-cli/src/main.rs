@@ -238,6 +238,7 @@ mod procurement_authorization;
 mod procurement_authorization_reservation;
 mod remote_approval_gossip;
 mod remote_approval_gossip_registry_checkpoint_witness;
+mod remote_factory_release_state_transparency_external_gossip_registry_checkpoint_witness;
 mod remote_policy;
 mod remote_policy_lifecycle_gossip;
 mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
@@ -934,6 +935,14 @@ use remote_approval_gossip_registry_checkpoint_witness::{
     verify_remote_approval_registry_history_receipt_quorum_log_checkpoint,
     verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses,
     verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses_with_trust_states,
+};
+use remote_factory_release_state_transparency_external_gossip_registry_checkpoint_witness::{
+    MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_BYTES,
+    parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt,
+    remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_json_schema,
+    render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt,
+    request_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness,
+    request_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_with_trust_state,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_policy_lifecycle_gossip::{
@@ -1705,6 +1714,19 @@ enum Command {
     },
     /// Validate one canonical registry-history checkpoint witness.
     ValidateFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed hash-bound remote registry-history checkpoint witness receipt schema.
+    RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptSchema
+    {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical remote registry-history checkpoint witness receipt.
+    ValidateRemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt
+    {
         input: CompactPath,
         #[arg(short, long)]
         output: Option<CompactPath>,
@@ -7302,6 +7324,50 @@ enum Command {
         /// New canonical signed witness.
         #[arg(short, long)]
         output: CompactPath,
+    },
+    /// Acquire and immediately verify one registry-history checkpoint witness over bounded HTTPS.
+    RequestFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+        /// Canonical complete registry history used for immediate local replay.
+        #[arg(long)]
+        history: CompactPath,
+        /// Canonical locally accepted retained-root checkpoint trust state.
+        #[arg(long)]
+        checkpoint_trust_state: CompactPath,
+        /// HTTPS witness endpoint.
+        #[arg(long)]
+        endpoint: String,
+        /// Hex-encoded directly pinned 32-byte Ed25519 witness public key.
+        #[arg(
+            long,
+            required_unless_present = "witness_key_trust_state",
+            conflicts_with = "witness_key_trust_state"
+        )]
+        public_key: Option<CompactPath>,
+        /// Canonical rotatable witness key trust state; conflicts with a direct key.
+        #[arg(
+            long,
+            required_unless_present = "public_key",
+            conflicts_with = "public_key"
+        )]
+        witness_key_trust_state: Option<CompactPath>,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        /// End-to-end request timeout in seconds.
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        /// Test-only deterministic freshness-evaluation time; defaults to the current clock.
+        #[arg(long, hide = true)]
+        evaluated_at_unix: Option<u64>,
+        /// New canonical signed witness compatible with the existing quorum command.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// New canonical hash-bound transport receipt.
+        #[arg(long)]
+        receipt_output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// Verify fresh distinct witnesses over one exact retained-root history checkpoint.
     VerifyFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnesses {
@@ -20204,6 +20270,49 @@ fn run_cli() -> Result<()> {
             .map_err(anyhow::Error::msg)?;
             let rendered = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
                 &witness,
+            )
+            .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
+        Command::RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_json_schema(),
+                output.as_deref(),
+                "remote factory release registry history checkpoint witness receipt schema output",
+            )?;
+        }
+        Command::ValidateRemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated remote factory release registry history checkpoint witness receipt output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_BYTES,
+                "remote factory release registry history checkpoint witness receipt",
+            )?;
+            let receipt = parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt(
+                &source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt(
+                &receipt,
             )
             .map_err(anyhow::Error::msg)?;
             if let Some(output) = output.as_deref() {
@@ -34729,6 +34838,145 @@ fn run_cli() -> Result<()> {
                 witness.generation,
                 witness.witness_id,
                 output.0.display(),
+            );
+        }
+        Command::RequestFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness {
+            history,
+            checkpoint_trust_state,
+            endpoint,
+            public_key,
+            witness_key_trust_state,
+            bearer_token_env,
+            timeout_seconds,
+            evaluated_at_unix,
+            output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            let key_evidence_path = public_key
+                .as_ref()
+                .map(|path| path.0.as_ref())
+                .or_else(|| {
+                    witness_key_trust_state
+                        .as_ref()
+                        .map(|path| path.0.as_ref())
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "remote factory release registry history checkpoint witness key evidence is absent"
+                    )
+                })?;
+            let input_paths = [
+                history.0.as_ref(),
+                checkpoint_trust_state.0.as_ref(),
+                key_evidence_path,
+            ];
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &input_paths,
+                "remote factory release registry history checkpoint witness output",
+            )?;
+            reject_pipeline_output_aliases(
+                receipt_output.0.as_ref(),
+                &input_paths,
+                "remote factory release registry history checkpoint witness receipt output",
+            )?;
+            require_distinct_outputs(
+                [Some(output.0.as_ref()), Some(receipt_output.0.as_ref())],
+                "remote factory release registry history checkpoint witness",
+            )?;
+            let (history_source, history_identity) = read_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            let (checkpoint_state_source, checkpoint_state_identity) = read_exact_artifact(
+                checkpoint_trust_state.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES,
+                "factory release registry history checkpoint trust state",
+            )?;
+            let key_evidence_limit = if public_key.is_some() {
+                65
+            } else {
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_BYTES
+            };
+            let (key_evidence_source, key_evidence_identity) = read_exact_artifact(
+                key_evidence_path,
+                key_evidence_limit,
+                "remote factory release registry history checkpoint witness key evidence",
+            )?;
+            let evaluated_at_unix = evaluated_at_unix.unwrap_or(current_unix_seconds()?);
+            let (witness, receipt) = if public_key.is_some() {
+                let key_source = std::str::from_utf8(&key_evidence_source).context(
+                    "decoding trusted remote factory release registry history checkpoint witness public key",
+                )?;
+                let trusted_public_key = decode_hex_key(
+                    key_source.trim(),
+                    "trusted remote factory release registry history checkpoint witness public key",
+                )?;
+                request_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                    &history_source,
+                    &checkpoint_state_source,
+                    &endpoint,
+                    &trusted_public_key,
+                    bearer_token_env.as_deref(),
+                    timeout_seconds,
+                    evaluated_at_unix,
+                    allow_http_loopback,
+                )
+            } else {
+                request_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_with_trust_state(
+                    &history_source,
+                    &checkpoint_state_source,
+                    &endpoint,
+                    &key_evidence_source,
+                    bearer_token_env.as_deref(),
+                    timeout_seconds,
+                    evaluated_at_unix,
+                    allow_http_loopback,
+                )
+            }
+            .map_err(anyhow::Error::msg)?;
+            let witness_source = render_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+                &witness,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let receipt_source = render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt(
+                &receipt,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                history.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_BYTES,
+                &history_identity,
+                "factory release transparency external gossip organization registry history",
+            )?;
+            require_exact_artifact(
+                checkpoint_trust_state.0.as_ref(),
+                MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUST_STATE_BYTES,
+                &checkpoint_state_identity,
+                "factory release registry history checkpoint trust state",
+            )?;
+            require_exact_artifact(
+                key_evidence_path,
+                key_evidence_limit,
+                &key_evidence_identity,
+                "remote factory release registry history checkpoint witness key evidence",
+            )?;
+            let witness_document = String::from_utf8(witness_source)
+                .context("rendering UTF-8 remote factory release registry history checkpoint witness")?;
+            let receipt_document = String::from_utf8(receipt_source)
+                .context("rendering UTF-8 remote factory release registry history checkpoint witness receipt")?;
+            write_new_file_set(&[
+                (output.0.as_ref(), witness_document.as_str()),
+                (receipt_output.0.as_ref(), receipt_document.as_str()),
+            ])?;
+            eprintln!(
+                "verified remote factory release registry history checkpoint witness {} for generation {}; witness={}; receipt={}",
+                witness.witness_id,
+                witness.generation,
+                output.0.display(),
+                receipt_output.0.display(),
             );
         }
         Command::VerifyFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnesses {
