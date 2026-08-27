@@ -3471,6 +3471,66 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         fs::read(&direct_receipt_quorum_report).unwrap()
     );
 
+    let quorum_bound_checkpoint =
+        root.join("registry-witness-receipts.direct-quorum.bound-checkpoint.json");
+    successful(&[
+        "sign-approval-log-with-remote-factory-release-registry-history-checkpoint-witness-receipt-quorum",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--private-key",
+        path(&witness_a_next_secret),
+        "--signer-id",
+        "factory-release-registry-receipt-log",
+        "--output",
+        path(&quorum_bound_checkpoint),
+    ]);
+    let quorum_bound_checkpoint_value: Value =
+        serde_json::from_slice(&fs::read(&quorum_bound_checkpoint).unwrap()).unwrap();
+    assert_eq!(quorum_bound_checkpoint_value["entry_count"], 2);
+    assert_eq!(
+        quorum_bound_checkpoint_value["log_sha256"],
+        direct_quorum_value["approval_log_sha256"]
+    );
+    let quorum_bound_verification =
+        root.join("registry-witness-receipts.direct-quorum.bound-verification.json");
+    successful(&[
+        "verify-approval-log",
+        path(&direct_receipt_quorum_log),
+        "--checkpoint",
+        path(&quorum_bound_checkpoint),
+        "--public-key",
+        path(&witness_a_next_public),
+        "--output",
+        path(&quorum_bound_verification),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&quorum_bound_verification).unwrap()).unwrap()["verified"],
+        true
+    );
+
+    let mismatched_quorum_checkpoint =
+        root.join("registry-witness-receipts.direct-quorum.mismatched-checkpoint.json");
+    let private_key_must_not_be_read = root.join("factory-quorum-forbidden-missing.key");
+    let mismatched = run(&[
+        "sign-approval-log-with-remote-factory-release-registry-history-checkpoint-witness-receipt-quorum",
+        path(&receipt_log_empty),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--private-key",
+        path(&private_key_must_not_be_read),
+        "--signer-id",
+        "factory-release-registry-receipt-log",
+        "--output",
+        path(&mismatched_quorum_checkpoint),
+    ]);
+    assert!(!mismatched.status.success());
+    assert!(
+        String::from_utf8_lossy(&mismatched.stderr)
+            .contains("does not match the remote factory release receipt quorum log binding")
+    );
+    assert!(!mismatched_quorum_checkpoint.exists());
+
     let trusted_receipt_quorum_log = root.join("registry-witness-receipts.trusted-quorum.log.json");
     let trusted_receipt_quorum_report =
         root.join("registry-witness-receipts.trusted-quorum.report.json");
