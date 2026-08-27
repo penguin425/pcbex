@@ -350,6 +350,8 @@ The contract does not prove:
 - factory identity, capacity, order placement, payment, or exactly-once
   execution.
 
-Version 1.504 should add atomic verifier-bound receipt admission quorum. Every
-v1.503 command except the explicit v1.501 remote-request command remains
-network-free.
+Version 1.504 adds verifier-bound receipt admission quorum and a report bound to
+the exact resulting log. See the
+[receipt quorum admission guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_ADMISSION.md).
+Every admission command except the explicit v1.501 remote-request command
+remains network-free.

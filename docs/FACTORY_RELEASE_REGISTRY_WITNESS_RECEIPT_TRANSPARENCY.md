@@ -151,3 +151,7 @@ Version 1.503 adds that stronger verifier-bound path. Use the
 when append must independently replay the retained complete history,
 checkpoint trust, exact response bytes, current witness trust, freshness, and
 signature instead of trusting the original acquisition boundary.
+
+Version 1.504 extends the same boundary to a configurable distinct-witness
+threshold. See the
+[receipt quorum admission guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_ADMISSION.md).

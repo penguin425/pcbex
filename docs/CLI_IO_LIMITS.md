@@ -925,6 +925,17 @@ re-reads all six inputs by byte count and SHA-256 before publishing one
 alias-free no-clobber log snapshot. Final reread detects sequential changes; it
 does not create an atomic filesystem snapshot across same-principal inputs.
 
+The v1.504 quorum append accepts 1–100 receipt/response pairs and requires a
+2–100 witness threshold. It applies the same per-file limits, accepts either
+paired direct identity/key files or witness trust-state files for the whole
+invocation, and caps its canonical report at 128 KiB. The complete history and
+checkpoint context are reconstructed once; every member is then reverified
+before the production quorum verifier rejects repeated identities or keys. The
+report additionally rejects repeated receipt, response, or witness digests.
+All inputs are re-read before the log and exact-log-bound report are published
+as one alias-free no-clobber output set. Threshold failure creates neither
+output.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

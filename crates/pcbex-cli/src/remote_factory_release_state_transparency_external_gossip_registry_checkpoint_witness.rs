@@ -11,12 +11,14 @@
 
 use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
 use crate::factory_release_state_transparency_external_gossip_registry::{
+    FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistory,
     MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION,
     parse_factory_release_state_transparency_external_gossip_organization_registry_history,
 };
 use crate::factory_release_state_transparency_external_gossip_registry_checkpoint::{
     FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointTrustState,
     FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES,
     SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness,
     accept_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint,
     factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trusted_public_key,
@@ -30,7 +32,11 @@ use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{env, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+    time::Duration,
+};
 
 const PROTOCOL: &str = "pcbex-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-v1";
 const ADAPTER: &str = "remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-https-v1";
@@ -38,6 +44,8 @@ const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_TIMESTAMP: u64 = 999_999_999_999_999;
 pub(crate) const MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_BYTES: u64 =
     64 * 1024;
+pub(crate) const MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES: u64 =
+    128 * 1024;
 
 #[derive(Debug, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -71,6 +79,51 @@ pub(crate) struct RemoteFactoryReleaseStateTransparencyExternalGossipOrganizatio
     pub(crate) witness_key_generation: Option<u64>,
     pub(crate) witnessed_at_unix: u64,
     pub(crate) verified: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumMember
+{
+    pub(crate) witness_id: String,
+    pub(crate) witness_public_key: String,
+    pub(crate) witness_key_trust_state_sha256: Option<String>,
+    pub(crate) witness_key_generation: Option<u64>,
+    pub(crate) receipt_sha256: String,
+    pub(crate) request_sha256: String,
+    pub(crate) response_sha256: String,
+    pub(crate) witness_sha256: String,
+    pub(crate) witnessed_at_unix: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport
+{
+    pub(crate) schema_version: u32,
+    pub(crate) registry_id: String,
+    pub(crate) generation: u64,
+    pub(crate) history_sha256: String,
+    pub(crate) checkpoint_sha256: String,
+    pub(crate) checkpoint_trust_state_sha256: String,
+    pub(crate) evaluated_at_unix: u64,
+    pub(crate) minimum_witnesses: u32,
+    pub(crate) valid_witnesses: u32,
+    pub(crate) members: Vec<RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumMember>,
+    pub(crate) quorum_met: bool,
+    pub(crate) approval_log_id: Option<String>,
+    pub(crate) approval_log_entry_count: Option<u64>,
+    pub(crate) approval_log_head_sha256: Option<String>,
+    pub(crate) approval_log_sha256: Option<String>,
+}
+
+struct RemoteReceiptVerificationContext {
+    history: FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistory,
+    checkpoint_state:
+        FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointTrustState,
+    history_sha256: String,
+    checkpoint_trust_state_sha256: String,
+    request_sha256: String,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -196,10 +249,341 @@ pub(crate) fn verify_remote_factory_release_state_transparency_external_gossip_o
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum(
+    receipts: &[RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt],
+    history_source: &[u8],
+    checkpoint_trust_state_source: &[u8],
+    response_documents: &[Vec<u8>],
+    trusted_witnesses: &[(String, [u8; 32])],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<
+    (
+        Vec<RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt>,
+        RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    ),
+    String,
+>{
+    if receipts.len() != trusted_witnesses.len() {
+        return Err("remote factory release receipt and trusted witness counts must match".into());
+    }
+    let mut trusted = BTreeMap::new();
+    for (witness_id, public_key) in trusted_witnesses {
+        validate_slug(witness_id, "registry history witness id")?;
+        validate_nonweak_public_key(public_key, "trusted registry history witness key")?;
+        if trusted.insert(witness_id.as_str(), public_key).is_some() {
+            return Err(
+                "remote factory release receipt quorum repeats a trusted witness identity".into(),
+            );
+        }
+    }
+    let context =
+        prepare_remote_receipt_verification_context(history_source, checkpoint_trust_state_source)?;
+    verify_remote_receipt_quorum(
+        receipts,
+        response_documents,
+        &context,
+        trusted_witnesses,
+        minimum_witnesses,
+        evaluated_at_unix,
+        |receipt, response| {
+            let public_key = trusted.get(receipt.witness_id.as_str()).ok_or_else(|| {
+                "remote factory release receipt quorum witness identity is untrusted".to_string()
+            })?;
+            verify_remote_receipt_binding(
+                receipt,
+                &context,
+                response,
+                public_key,
+                None,
+                evaluated_at_unix,
+            )
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_with_trust_states(
+    receipts: &[RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt],
+    history_source: &[u8],
+    checkpoint_trust_state_source: &[u8],
+    response_documents: &[Vec<u8>],
+    witness_key_trust_state_sources: &[Vec<u8>],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<
+    (
+        Vec<RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt>,
+        RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    ),
+    String,
+>{
+    if receipts.len() != witness_key_trust_state_sources.len() {
+        return Err(
+            "remote factory release receipt and witness trust-state counts must match".into(),
+        );
+    }
+    let mut trust_states = BTreeMap::new();
+    for source in witness_key_trust_state_sources {
+        let state =
+            parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                source,
+            )?;
+        let public_key =
+            factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+                &state,
+            )?;
+        let witness_id = state.witness_id.clone();
+        if trust_states
+            .insert(witness_id, (state, sha256(source), public_key))
+            .is_some()
+        {
+            return Err(
+                "remote factory release receipt quorum repeats a witness trust identity".into(),
+            );
+        }
+    }
+    let trusted_witnesses = trust_states
+        .iter()
+        .map(|(witness_id, (_, _, public_key))| (witness_id.clone(), *public_key))
+        .collect::<Vec<_>>();
+    let context =
+        prepare_remote_receipt_verification_context(history_source, checkpoint_trust_state_source)?;
+    verify_remote_receipt_quorum(
+        receipts,
+        response_documents,
+        &context,
+        &trusted_witnesses,
+        minimum_witnesses,
+        evaluated_at_unix,
+        |receipt, response| {
+            let (state, digest, public_key) = trust_states
+                .get(receipt.witness_id.as_str())
+                .ok_or_else(|| {
+                    "remote factory release receipt quorum witness trust state is absent"
+                        .to_string()
+                })?;
+            verify_remote_receipt_binding(
+                receipt,
+                &context,
+                response,
+                public_key,
+                Some((state, digest.clone())),
+                evaluated_at_unix,
+            )
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_remote_receipt_quorum(
+    receipts: &[RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt],
+    response_documents: &[Vec<u8>],
+    context: &RemoteReceiptVerificationContext,
+    trusted_witnesses: &[(String, [u8; 32])],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+    mut verify: impl FnMut(
+        &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt,
+        &[u8],
+    ) -> Result<
+        SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness,
+        String,
+    >,
+) -> Result<
+    (
+        Vec<RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt>,
+        RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    ),
+    String,
+>{
+    if !(2..=MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES as u32)
+        .contains(&minimum_witnesses)
+        || receipts.is_empty()
+        || receipts.len()
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+        || receipts.len() != response_documents.len()
+    {
+        return Err("remote factory release receipt quorum input count is invalid".into());
+    }
+    let mut verified = Vec::with_capacity(receipts.len());
+    for (receipt, response) in receipts.iter().zip(response_documents) {
+        let witness = verify(receipt, response)?;
+        let receipt_source = serde_json::to_vec(receipt).map_err(|error| {
+            format!("serializing remote factory release witness receipt: {error}")
+        })?;
+        verified.push((
+            receipt.clone(),
+            witness,
+            RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumMember {
+                witness_id: receipt.witness_id.clone(),
+                witness_public_key: receipt.witness_public_key.clone(),
+                witness_key_trust_state_sha256: receipt.witness_key_trust_state_sha256.clone(),
+                witness_key_generation: receipt.witness_key_generation,
+                receipt_sha256: sha256(&receipt_source),
+                request_sha256: receipt.request_sha256.clone(),
+                response_sha256: receipt.response_sha256.clone(),
+                witness_sha256: receipt.witness_sha256.clone(),
+                witnessed_at_unix: receipt.witnessed_at_unix,
+            },
+        ));
+    }
+    let witnesses = verified
+        .iter()
+        .map(|(_, witness, _)| witness.clone())
+        .collect::<Vec<_>>();
+    let witness_report =
+        verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
+            &context.history,
+            &context.checkpoint_state.signed_checkpoint,
+            &witnesses,
+            trusted_witnesses,
+            minimum_witnesses,
+            evaluated_at_unix,
+        )?;
+    verified.sort_by(|left, right| left.2.witness_id.cmp(&right.2.witness_id));
+    let members = verified
+        .iter()
+        .map(|(_, _, member)| member.clone())
+        .collect::<Vec<_>>();
+    if witness_report.members.len() != members.len()
+        || witness_report
+            .members
+            .iter()
+            .zip(&members)
+            .any(|(witness, receipt)| {
+                witness.witness_id != receipt.witness_id
+                    || witness.public_key != receipt.witness_public_key
+                    || witness.witness_sha256 != receipt.witness_sha256
+            })
+    {
+        return Err(
+            "remote factory release receipt quorum does not match its witness quorum".into(),
+        );
+    }
+    let report = RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport {
+        schema_version: 1,
+        registry_id: context.checkpoint_state.registry_id.clone(),
+        generation: context.checkpoint_state.accepted_generation,
+        history_sha256: context.history_sha256.clone(),
+        checkpoint_sha256: context.checkpoint_state.checkpoint_sha256.clone(),
+        checkpoint_trust_state_sha256: context.checkpoint_trust_state_sha256.clone(),
+        evaluated_at_unix,
+        minimum_witnesses,
+        valid_witnesses: witness_report.valid_witnesses,
+        members,
+        quorum_met: witness_report.quorum_met,
+        approval_log_id: None,
+        approval_log_entry_count: None,
+        approval_log_head_sha256: None,
+        approval_log_sha256: None,
+    };
+    validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+        &report,
+    )?;
+    Ok((
+        verified
+            .into_iter()
+            .map(|(receipt, _, _)| receipt)
+            .collect(),
+        report,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn verify_remote_receipt(
     receipt: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt,
     history_source: &[u8],
     checkpoint_trust_state_source: &[u8],
+    response_bytes: &[u8],
+    trusted_public_key: &[u8; 32],
+    witness_key_trust_state: Option<(
+        &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+        String,
+    )>,
+    evaluated_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness,
+    String,
+> {
+    let context =
+        prepare_remote_receipt_verification_context(history_source, checkpoint_trust_state_source)?;
+    let witness = verify_remote_receipt_binding(
+        receipt,
+        &context,
+        response_bytes,
+        trusted_public_key,
+        witness_key_trust_state,
+        evaluated_at_unix,
+    )?;
+    let trusted_witnesses = vec![(witness.witness_id.clone(), *trusted_public_key)];
+    let report =
+        verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
+            &context.history,
+            &context.checkpoint_state.signed_checkpoint,
+            std::slice::from_ref(&witness),
+            &trusted_witnesses,
+            2,
+            evaluated_at_unix,
+        )?;
+    if report.valid_witnesses != 1 || report.quorum_met {
+        return Err(
+            "remote factory release registry history checkpoint witness admission produced an invalid single-witness result"
+                .into(),
+        );
+    }
+    Ok(witness)
+}
+
+fn prepare_remote_receipt_verification_context(
+    history_source: &[u8],
+    checkpoint_trust_state_source: &[u8],
+) -> Result<RemoteReceiptVerificationContext, String> {
+    let history =
+        parse_factory_release_state_transparency_external_gossip_organization_registry_history(
+            history_source,
+        )?;
+    let checkpoint_state =
+        parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
+            checkpoint_trust_state_source,
+        )?;
+    let reconstructed =
+        accept_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+            &history,
+            &checkpoint_state.signed_checkpoint,
+            None,
+            checkpoint_state.accepted_at_unix,
+        )?;
+    if reconstructed != checkpoint_state {
+        return Err(
+            "factory release registry history checkpoint trust state does not match the complete history"
+                .into(),
+        );
+    }
+    let request_bytes =
+        serde_json::to_vec(&RemoteRegistryHistoryCheckpointWitnessRequest {
+            schema_version: 1,
+            protocol: PROTOCOL,
+            checkpoint_trust_state: &checkpoint_state,
+        })
+        .map_err(|error| {
+            format!(
+                "serializing remote factory release registry history checkpoint witness request: {error}"
+            )
+        })?;
+    Ok(RemoteReceiptVerificationContext {
+        history,
+        checkpoint_state,
+        history_sha256: sha256(history_source),
+        checkpoint_trust_state_sha256: sha256(checkpoint_trust_state_source),
+        request_sha256: sha256(&request_bytes),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_remote_receipt_binding(
+    receipt: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt,
+    context: &RemoteReceiptVerificationContext,
     response_bytes: &[u8],
     trusted_public_key: &[u8; 32],
     witness_key_trust_state: Option<(
@@ -226,44 +610,12 @@ fn verify_remote_receipt(
     }
     validate_nonweak_public_key(trusted_public_key, "trusted registry history witness key")?;
 
-    let history =
-        parse_factory_release_state_transparency_external_gossip_organization_registry_history(
-            history_source,
-        )?;
-    let checkpoint_state =
-        parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
-            checkpoint_trust_state_source,
-        )?;
-    let reconstructed =
-        accept_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
-            &history,
-            &checkpoint_state.signed_checkpoint,
-            None,
-            checkpoint_state.accepted_at_unix,
-        )?;
-    if reconstructed != checkpoint_state {
-        return Err(
-            "factory release registry history checkpoint trust state does not match the complete history"
-                .into(),
-        );
-    }
-
-    let request_bytes = serde_json::to_vec(&RemoteRegistryHistoryCheckpointWitnessRequest {
-        schema_version: 1,
-        protocol: PROTOCOL,
-        checkpoint_trust_state: &checkpoint_state,
-    })
-    .map_err(|error| {
-        format!(
-            "serializing remote factory release registry history checkpoint witness request: {error}"
-        )
-    })?;
-    if receipt.registry_id != checkpoint_state.registry_id
-        || receipt.generation != checkpoint_state.accepted_generation
-        || receipt.history_sha256 != sha256(history_source)
-        || receipt.checkpoint_sha256 != checkpoint_state.checkpoint_sha256
-        || receipt.checkpoint_trust_state_sha256 != sha256(checkpoint_trust_state_source)
-        || receipt.request_sha256 != sha256(&request_bytes)
+    if receipt.registry_id != context.checkpoint_state.registry_id
+        || receipt.generation != context.checkpoint_state.accepted_generation
+        || receipt.history_sha256 != context.history_sha256
+        || receipt.checkpoint_sha256 != context.checkpoint_state.checkpoint_sha256
+        || receipt.checkpoint_trust_state_sha256 != context.checkpoint_trust_state_sha256
+        || receipt.request_sha256 != context.request_sha256
     {
         return Err(
             "remote factory release registry history checkpoint witness receipt is bound to different retained evidence"
@@ -320,22 +672,6 @@ fn verify_remote_receipt(
         );
     }
 
-    let trusted_witnesses = vec![(witness.witness_id.clone(), *trusted_public_key)];
-    let report =
-        verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
-            &history,
-            &checkpoint_state.signed_checkpoint,
-            std::slice::from_ref(&witness),
-            &trusted_witnesses,
-            2,
-            evaluated_at_unix,
-        )?;
-    if report.valid_witnesses != 1 || report.quorum_met {
-        return Err(
-            "remote factory release registry history checkpoint witness admission produced an invalid single-witness result"
-                .into(),
-        );
-    }
     Ok(witness)
 }
 
@@ -550,6 +886,36 @@ pub(crate) fn parse_remote_factory_release_state_transparency_external_gossip_or
     Ok(receipt)
 }
 
+pub(crate) fn render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+    report: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+) -> Result<Vec<u8>, String> {
+    validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+        report,
+    )?;
+    render_bounded(
+        report,
+        MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+        "remote factory release registry history checkpoint witness receipt quorum report",
+    )
+}
+
+pub(crate) fn parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+    source: &[u8],
+) -> Result<
+    RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    String,
+>{
+    let report = parse_canonical(
+        source,
+        MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+        "remote factory release registry history checkpoint witness receipt quorum report",
+    )?;
+    validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+        &report,
+    )?;
+    Ok(report)
+}
+
 pub(crate) fn remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_json_schema()
 -> Value {
     let digest = digest_schema();
@@ -599,6 +965,233 @@ pub(crate) fn remote_factory_release_state_transparency_external_gossip_organiza
             "verified": {"const": true}
         }
     })
+}
+
+pub(crate) fn remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report_json_schema()
+-> Value {
+    let digest = digest_schema();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-receipt-quorum-report-v1.json",
+        "title": "pcbex verifier-bound remote factory-release registry-history witness receipt quorum",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "registry_id", "generation", "history_sha256",
+            "checkpoint_sha256", "checkpoint_trust_state_sha256",
+            "evaluated_at_unix", "minimum_witnesses", "valid_witnesses",
+            "members", "quorum_met", "approval_log_id",
+            "approval_log_entry_count", "approval_log_head_sha256",
+            "approval_log_sha256"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "registry_id": slug_schema(),
+            "generation": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+            },
+            "history_sha256": digest.clone(),
+            "checkpoint_sha256": digest.clone(),
+            "checkpoint_trust_state_sha256": digest.clone(),
+            "evaluated_at_unix": {
+                "type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP
+            },
+            "minimum_witnesses": {
+                "type": "integer", "minimum": 2,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+            },
+            "valid_witnesses": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+            },
+            "members": {
+                "type": "array",
+                "maxItems": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "witness_id", "witness_public_key",
+                        "witness_key_trust_state_sha256", "witness_key_generation",
+                        "receipt_sha256", "request_sha256", "response_sha256",
+                        "witness_sha256", "witnessed_at_unix"
+                    ],
+                    "properties": {
+                        "witness_id": slug_schema(),
+                        "witness_public_key": digest.clone(),
+                        "witness_key_trust_state_sha256": {
+                            "oneOf": [{"type": "null"}, digest.clone()]
+                        },
+                        "witness_key_generation": {
+                            "oneOf": [
+                                {"type": "null"},
+                                {
+                                    "type": "integer", "minimum": 0,
+                                    "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+                                }
+                            ]
+                        },
+                        "receipt_sha256": digest.clone(),
+                        "request_sha256": digest.clone(),
+                        "response_sha256": digest.clone(),
+                        "witness_sha256": digest.clone(),
+                        "witnessed_at_unix": {
+                            "type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP
+                        }
+                    }
+                }
+            },
+            "quorum_met": {"type": "boolean"},
+            "approval_log_id": {"oneOf": [{"type": "null"}, slug_schema()]},
+            "approval_log_entry_count": {
+                "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+            },
+            "approval_log_head_sha256": {
+                "oneOf": [{"type": "null"}, digest.clone()]
+            },
+            "approval_log_sha256": {
+                "oneOf": [{"type": "null"}, digest]
+            }
+        }
+    })
+}
+
+pub(crate) fn validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+    report: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+) -> Result<(), String> {
+    if report.schema_version != 1
+        || report.generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || report.evaluated_at_unix > MAX_TIMESTAMP
+        || !(2..=MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES as u32)
+            .contains(&report.minimum_witnesses)
+        || report.members.len()
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+        || report.valid_witnesses as usize != report.members.len()
+        || report.quorum_met != (report.valid_witnesses >= report.minimum_witnesses)
+    {
+        return Err(
+            "remote factory release receipt quorum report invariants are invalid".into(),
+        );
+    }
+    validate_slug(&report.registry_id, "registry id")?;
+    for (digest, label) in [
+        (&report.history_sha256, "registry history SHA-256"),
+        (
+            &report.checkpoint_sha256,
+            "registry history checkpoint SHA-256",
+        ),
+        (
+            &report.checkpoint_trust_state_sha256,
+            "registry history checkpoint trust-state SHA-256",
+        ),
+    ] {
+        validate_digest(digest, label)?;
+    }
+    match (
+        &report.approval_log_id,
+        report.approval_log_entry_count,
+        &report.approval_log_head_sha256,
+        &report.approval_log_sha256,
+    ) {
+        (None, None, None, None) => {}
+        (Some(log_id), Some(entry_count), Some(head), Some(log_digest)) => {
+            if !report.quorum_met {
+                return Err(
+                    "remote factory release receipt quorum cannot bind a log before quorum".into(),
+                );
+            }
+            validate_slug(log_id, "approval transparency log id")?;
+            if entry_count < report.valid_witnesses as u64 {
+                return Err("remote factory release receipt quorum log has too few entries".into());
+            }
+            validate_digest(head, "approval transparency log head SHA-256")?;
+            validate_digest(log_digest, "approval transparency log SHA-256")?;
+        }
+        _ => {
+            return Err("remote factory release receipt quorum log binding is incomplete".into());
+        }
+    }
+    let mut previous_id: Option<&str> = None;
+    let mut ids = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    let mut receipts = BTreeSet::new();
+    let mut responses = BTreeSet::new();
+    let mut witnesses = BTreeSet::new();
+    let mut request_sha256: Option<&str> = None;
+    let mut uses_trust_state: Option<bool> = None;
+    for member in &report.members {
+        validate_slug(&member.witness_id, "registry history witness id")?;
+        let public_key = decode_hex::<32>(&member.witness_public_key, "witness public key")?;
+        validate_nonweak_public_key(&public_key, "witness public key")?;
+        if previous_id.is_some_and(|previous| previous >= member.witness_id.as_str())
+            || !ids.insert(member.witness_id.as_str())
+            || !keys.insert(member.witness_public_key.as_str())
+            || !receipts.insert(member.receipt_sha256.as_str())
+            || !responses.insert(member.response_sha256.as_str())
+            || !witnesses.insert(member.witness_sha256.as_str())
+        {
+            return Err(
+                "remote factory release receipt quorum members must be sorted and distinct".into(),
+            );
+        }
+        previous_id = Some(&member.witness_id);
+        match (
+            &member.witness_key_trust_state_sha256,
+            member.witness_key_generation,
+        ) {
+            (None, None) => {
+                if uses_trust_state == Some(true) {
+                    return Err(
+                        "remote factory release receipt quorum cannot mix witness key modes".into(),
+                    );
+                }
+                uses_trust_state = Some(false);
+            }
+            (Some(digest), Some(generation)) => {
+                if uses_trust_state == Some(false) {
+                    return Err(
+                        "remote factory release receipt quorum cannot mix witness key modes".into(),
+                    );
+                }
+                uses_trust_state = Some(true);
+                validate_digest(digest, "witness key trust-state SHA-256")?;
+                if generation
+                    > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+                {
+                    return Err(
+                        "remote factory release receipt quorum witness key generation is outside its bound"
+                            .into(),
+                    );
+                }
+            }
+            _ => {
+                return Err(
+                    "remote factory release receipt quorum trust-state binding is incomplete"
+                        .into(),
+                );
+            }
+        }
+        for (digest, label) in [
+            (&member.receipt_sha256, "receipt SHA-256"),
+            (&member.request_sha256, "request SHA-256"),
+            (&member.response_sha256, "response SHA-256"),
+            (&member.witness_sha256, "witness SHA-256"),
+        ] {
+            validate_digest(digest, label)?;
+        }
+        if request_sha256.is_some_and(|request| request != member.request_sha256) {
+            return Err(
+                "remote factory release receipt quorum members use different requests".into(),
+            );
+        }
+        request_sha256 = Some(&member.request_sha256);
+        if member.witnessed_at_unix > report.evaluated_at_unix {
+            return Err("remote factory release receipt quorum member is future-dated".into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_remote_receipt(
@@ -934,5 +1527,124 @@ mod tests {
         let mut incomplete = receipt;
         incomplete.witness_key_generation = None;
         assert!(validate_remote_receipt(&incomplete).is_err());
+
+        let report = RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumReport {
+            schema_version: 1,
+            registry_id: "factory-registry".into(),
+            generation: 5,
+            history_sha256: "1".repeat(64),
+            checkpoint_sha256: "2".repeat(64),
+            checkpoint_trust_state_sha256: "3".repeat(64),
+            evaluated_at_unix: 1_000,
+            minimum_witnesses: 2,
+            valid_witnesses: 2,
+            members: vec![
+                RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumMember {
+                    witness_id: "witness-a".into(),
+                    witness_public_key: hex::encode(
+                        SigningKey::from_bytes(&[91; 32]).verifying_key().to_bytes(),
+                    ),
+                    witness_key_trust_state_sha256: None,
+                    witness_key_generation: None,
+                    receipt_sha256: "4".repeat(64),
+                    request_sha256: "5".repeat(64),
+                    response_sha256: "6".repeat(64),
+                    witness_sha256: "7".repeat(64),
+                    witnessed_at_unix: 999,
+                },
+                RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceiptQuorumMember {
+                    witness_id: "witness-b".into(),
+                    witness_public_key: hex::encode(
+                        SigningKey::from_bytes(&[92; 32]).verifying_key().to_bytes(),
+                    ),
+                    witness_key_trust_state_sha256: None,
+                    witness_key_generation: None,
+                    receipt_sha256: "9".repeat(64),
+                    request_sha256: "5".repeat(64),
+                    response_sha256: "a".repeat(64),
+                    witness_sha256: "b".repeat(64),
+                    witnessed_at_unix: 998,
+                },
+            ],
+            quorum_met: true,
+            approval_log_id: Some("factory-receipts".into()),
+            approval_log_entry_count: Some(2),
+            approval_log_head_sha256: Some("c".repeat(64)),
+            approval_log_sha256: Some("d".repeat(64)),
+        };
+        let source = render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+            &report,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+                &source,
+            )
+            .unwrap(),
+            report
+        );
+        let mut duplicate = report.clone();
+        duplicate.members[1].witness_public_key = duplicate.members[0].witness_public_key.clone();
+        assert!(
+            validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+                &duplicate,
+            )
+            .is_err()
+        );
+
+        for field in ["receipt", "response", "witness"] {
+            let mut duplicate = report.clone();
+            match field {
+                "receipt" => {
+                    duplicate.members[1].receipt_sha256 =
+                        duplicate.members[0].receipt_sha256.clone();
+                }
+                "response" => {
+                    duplicate.members[1].response_sha256 =
+                        duplicate.members[0].response_sha256.clone();
+                }
+                "witness" => {
+                    duplicate.members[1].witness_sha256 =
+                        duplicate.members[0].witness_sha256.clone();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+                    &duplicate,
+                )
+                .is_err(),
+                "accepted duplicate {field} digest"
+            );
+        }
+
+        let mut mixed_key_modes = report.clone();
+        mixed_key_modes.members[1].witness_key_trust_state_sha256 = Some("8".repeat(64));
+        mixed_key_modes.members[1].witness_key_generation = Some(1);
+        assert!(
+            validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+                &mixed_key_modes,
+            )
+            .is_err()
+        );
+
+        let mut different_request = report.clone();
+        different_request.members[1].request_sha256 = "e".repeat(64);
+        assert!(
+            validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+                &different_request,
+            )
+            .is_err()
+        );
+
+        let mut bound_without_quorum = report;
+        bound_without_quorum.minimum_witnesses = 3;
+        bound_without_quorum.quorum_met = false;
+        assert!(
+            validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report(
+                &bound_without_quorum,
+            )
+            .is_err()
+        );
     }
 }
