@@ -36,6 +36,7 @@ evidence your next consumer actually needs.
 | Canonical factory-release registry witness receipt | Signed receipt transparency history | validate the closed v1.501 receipt → normalize exact receipt/checkpoint/request/response/witness bindings → append a new log snapshot → sign and verify the exact head |
 | Retained factory-release registry witness evidence | Verifier-bound receipt admission | replay complete history → reconstruct checkpoint trust and request → match exact response and current witness trust → re-verify freshness/signature → append and sign the successor log |
 | Multiple retained factory-release registry witness receipts | Verifier-bound receipt quorum admission | replay one complete history/checkpoint context → reverify each exact receipt/response/key source → reject duplicate witnesses or evidence → require threshold → append in canonical order and retain an exact-log-bound report |
+| Quorum-bound factory receipt log and report | Restricted checkpoint signing | validate canonical met quorum → verify complete log chain and exact ID/count/head/digest → match every ordered factory-receipt suffix event → read private key → emit the existing generic checkpoint |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |

@@ -146,5 +146,8 @@ It also does not prove factory capacity, order placement, payment, fulfillment,
 or exactly-once execution. The final input check is sequential; it is not an
 atomic same-principal filesystem snapshot.
 
-The next boundary should bind receipt-quorum-aware signing to this exact report
-and log suffix, refusing partial, extended, or unrelated logs.
+Version 1.505 adds the
+[receipt-quorum log signing gate](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md).
+It refuses partial, extended, substituted, unbound, or unrelated logs before
+reading private signing material. A dedicated receipt-quorum signature domain
+remains a separate follow-up.

@@ -152,6 +152,10 @@ boundary document for the artifact you plan to produce or trust.
   — require a configurable set of distinct independently reverified receipts
   and bind the canonical members to the exact resulting log.
 
+- [Factory-release Receipt-quorum Log Signing](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md)
+  — issue a generic approval-log checkpoint only when the complete log and its
+  factory-receipt suffix exactly match one successful quorum report.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

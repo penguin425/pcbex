@@ -936,6 +936,15 @@ All inputs are re-read before the log and exact-log-bound report are published
 as one alias-free no-clobber output set. Threshold failure creates neither
 output.
 
+The v1.505 signing gate accepts one approval transparency log under the generic
+128 MiB ceiling, one canonical v1.504 quorum report under 128 KiB, and one
+private-key file under 1 KiB. It validates the complete log chain, exact
+ID/count/head/digest, met quorum, and every ordered factory-receipt suffix event
+before reading private signing material. The log, report, and key are re-read by
+byte count and SHA-256 before one alias-free no-clobber generic checkpoint is
+published. The existing checkpoint schema and verification limits do not
+change.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

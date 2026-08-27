@@ -2746,6 +2746,11 @@ factory_transparency_external_gossip_registry_history_checkpoint_receipt_log="$o
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.log.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.report.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.report.normalized.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_checkpoint="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.bound-checkpoint.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_verification="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.bound-verification.json"
+factory_transparency_external_gossip_registry_history_checkpoint_mismatched_receipt_quorum_checkpoint="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.mismatched-checkpoint.json"
+factory_transparency_external_gossip_registry_history_checkpoint_mismatched_receipt_quorum_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.mismatched-checkpoint.stderr"
+factory_transparency_external_gossip_registry_history_checkpoint_private_key_must_not_be_read="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.forbidden-missing.key"
 factory_transparency_external_gossip_registry_history_checkpoint_trusted_receipt_quorum_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.trusted.log.json"
 factory_transparency_external_gossip_registry_history_checkpoint_trusted_receipt_quorum_report="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.trusted.report.json"
 factory_transparency_external_gossip_registry_history_checkpoint_below_receipt_quorum_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.below.log.json"
@@ -3583,6 +3588,38 @@ test "$(jq -r '.entries[1].event.outcome' "$factory_transparency_external_gossip
   --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report_normalized"
 cmp "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
   "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report_normalized"
+
+# v1.505 signs only the exact log and factory-receipt suffix bound by the met
+# quorum report, and rejects public-evidence mismatch before private-key access.
+"$pcbex_binary" sign-approval-log-with-remote-factory-release-registry-history-checkpoint-witness-receipt-quorum \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log" \
+  --quorum-report "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  --private-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_next_private" \
+  --signer-id factory-release-registry-receipt-log \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_checkpoint"
+"$pcbex_binary" verify-approval-log \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_checkpoint" \
+  --public-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_next_public" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_verification"
+test "$(jq -r '.verified' "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_verification")" = true
+test "$(jq -r '.entry_count' "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_checkpoint")" -eq 2
+test "$(jq -r '.log_sha256' "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_checkpoint")" = \
+  "$(jq -r '.approval_log_sha256' "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report")"
+
+if "$pcbex_binary" sign-approval-log-with-remote-factory-release-registry-history-checkpoint-witness-receipt-quorum \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_empty" \
+  --quorum-report "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  --private-key "$factory_transparency_external_gossip_registry_history_checkpoint_private_key_must_not_be_read" \
+  --signer-id factory-release-registry-receipt-log \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_mismatched_receipt_quorum_checkpoint" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_mismatched_receipt_quorum_error"; then
+  echo "expected mismatched factory receipt quorum log signing to fail" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_mismatched_receipt_quorum_checkpoint"
+grep -Fq 'does not match the remote factory release receipt quorum log binding' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_mismatched_receipt_quorum_error"
 
 "$pcbex_binary" append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt-quorum \
   "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_empty" \
