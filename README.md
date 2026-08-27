@@ -69,7 +69,7 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 
 - **Witness portable registry heads:** Replay complete governance history,
   rotate witness trust, and acquire canonical remote endorsements with
-  hash-bound transport receipts.
+  hash-bound transport receipts that can enter a signed transparency chain.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
@@ -264,6 +264,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Witnessed registry history checkpoint v1 | Pin the exact audited head with the retained root, monotonic local trust, and fresh distinct witnesses | [Checkpoint guide](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_HISTORY_CHECKPOINT.md) |
 | Registry-history witness rotation v1 | Advance identity-bound witness trust through dual-signed generation- and digest-chained key transitions | `pcbex factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-schema` |
 | Remote registry-history witness v1 | Acquire one canonical witness through bounded no-redirect HTTPS, replay the complete local history, and retain a hash-bound receipt | `pcbex remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-receipt-schema` |
+| Registry witness receipt transparency v1 | Normalize one canonical verified receipt into the existing signed, anchored, witnessed approval-log chain | [Receipt transparency guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_TRANSPARENCY.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -317,6 +318,7 @@ the security model for each adapter.
 | [Transparency Witness Quorum](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_WITNESS_QUORUM.md) | Require independent configured organizations to endorse one exact latest checkpoint |
 | [Transparency External Anchor](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_ANCHOR.md) | Anchor the exact witness-quorum report in a separately trusted signed Merkle view |
 | [Transparency External Gossip Quorum](docs/FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_QUORUM.md) | Acquire remote views safely and require exact-head agreement across observer organizations |
+| [Registry Witness Receipt Transparency](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_TRANSPARENCY.md) | Publish canonical remote-witness receipts through the existing signed append-only log controls |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the

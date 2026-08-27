@@ -2736,6 +2736,13 @@ factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_
 factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_b_receipt_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-b.remote.receipt.normalized.json"
 factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_a_rotated="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-a.rotated.remote.json"
 factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_a_rotated_receipt="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.witness-a.rotated.remote.receipt.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_empty="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-log.0.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-log.1.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_checkpoint="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-log.checkpoint.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_verification="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-log.verification.json"
+factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt.rejected.json"
+factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-log.rejected.json"
+factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-log.rejected.stderr"
 factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_port="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.remote-witness.port"
 factory_transparency_external_gossip_registry_history_checkpoint_role_collision="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.role-collision.json"
 factory_transparency_external_gossip_registry_history_checkpoint_role_collision_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.role-collision.stderr"
@@ -3488,6 +3495,72 @@ cmp "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a
 wait "$factory_registry_checkpoint_witness_server_pid"
 factory_registry_checkpoint_witness_server_pid=""
 unset PCBEX_E2E_FACTORY_REGISTRY_WITNESS_TOKEN
+
+# v1.502 admits the canonical verified receipt to the existing signed approval
+# transparency chain without changing any v1.501 witness or receipt bytes.
+"$pcbex_binary" init-approval-log \
+  --log-id factory-release-registry-witness-receipts \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_empty"
+"$pcbex_binary" append-approval-log \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_empty" \
+  --artifact "$factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_a_rotated_receipt" \
+  --kind remote-factory-release-registry-history-checkpoint-witness-receipt \
+  --recorded-at-unix "$((factory_transparency_external_gossip_checkpoint_evaluated_at + 1))" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log"
+"$pcbex_binary" sign-approval-log \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log" \
+  --private-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_next_private" \
+  --signer-id factory-release-registry-receipt-log \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_checkpoint"
+"$pcbex_binary" verify-approval-log \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_checkpoint" \
+  --public-key "$factory_transparency_external_gossip_registry_history_checkpoint_witness_a_next_public" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_verification"
+
+jq '.verified = false' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_a_rotated_receipt" \
+  >"$factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt"
+if "$pcbex_binary" append-approval-log \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log" \
+  --artifact "$factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt" \
+  --kind remote-factory-release-registry-history-checkpoint-witness-receipt \
+  --recorded-at-unix "$((factory_transparency_external_gossip_checkpoint_evaluated_at + 2))" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt_log" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt_error"; then
+  echo "expected a false remote-witness verification decision to fail receipt-log append" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt_log"
+grep -Fq 'receipt invariants are invalid' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_rejected_receipt_error"
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_remote_witness_a_rotated_receipt" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_verification" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+receipt_path, log_path, verification_path = map(Path, sys.argv[1:])
+receipt = json.loads(receipt_path.read_bytes())
+log = json.loads(log_path.read_bytes())
+verification = json.loads(verification_path.read_bytes())
+event = log["entries"][0]["event"]
+compact_receipt = json.dumps(receipt, separators=(",", ":")).encode("ascii")
+
+assert log["log_id"] == "factory-release-registry-witness-receipts"
+assert event["artifact_kind"] == \
+    "remote_factory_release_registry_history_checkpoint_witness_receipt"
+assert event["artifact_sha256"] == hashlib.sha256(compact_receipt).hexdigest()
+assert event["subject_id"] == receipt["checkpoint_sha256"]
+assert event["request_sha256"] == receipt["request_sha256"]
+assert event["session_sha256"] == receipt["response_sha256"]
+assert event["outcome"] == f'verified-witness:{receipt["witness_id"]}'
+assert verification["verified"] is True
+PY
 
 "$pcbex_binary" verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses \
   --history "$factory_transparency_external_gossip_registry_history" \

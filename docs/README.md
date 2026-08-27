@@ -140,6 +140,10 @@ boundary document for the artifact you plan to produce or trust.
   local baseline, require fresh distinct checkpoint witnesses, and rotate each
   identity-bound witness key through a dual-signed trust chain.
 
+- [Factory-release Registry Witness Receipt Transparency](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_TRANSPARENCY.md)
+  — normalize canonical verified remote-witness receipts into the existing
+  signed, anchored, consistency-proved, gossiped, and witnessed hash chain.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

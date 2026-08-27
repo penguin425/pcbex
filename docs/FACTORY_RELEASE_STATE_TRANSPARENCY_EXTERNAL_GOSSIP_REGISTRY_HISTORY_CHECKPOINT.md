@@ -3,9 +3,9 @@
 Pin one audited registry head. Detect rollback and equivocation across retained
 consumers.
 
-The v1.501 contract preserves every v1.500 artifact and CLI verification path.
-It adds bounded remote witness acquisition with immediate complete-history
-verification and hash-bound transport receipts.
+The v1.502 contract preserves every v1.501 artifact and CLI verification path.
+It adds structural admission of canonical remote-witness receipts into the
+existing signed approval transparency chain.
 
 > [!IMPORTANT]
 > A checkpoint protects only consumers that retain and supply their previous
@@ -34,6 +34,8 @@ verification and hash-bound transport receipts.
 - **Binds the transport:** Records the exact history, checkpoint trust state,
   request, response, witness, endpoint, key mode, and evaluation time in a
   canonical receipt.
+- **Publishes receipt history:** Normalizes the receipt, checkpoint, request,
+  response, and witness identities into a signed append-only log snapshot.
 - **Separates key roles:** Rejects checkpoint-witness keys reused by any current
   or historical registry root or embedded governance authority.
 - **Retains negative evidence:** Writes a valid below-threshold quorum report
@@ -184,7 +186,28 @@ through witness verification before publishing either output.
 > responses, oversized bodies, duplicate keys, unknown fields, and
 > non-canonical witness bytes fail closed.
 
-### 6. Verify the witness quorum
+### 6. Publish the receipt history
+
+Append a verified remote receipt to a new transparency-log snapshot:
+
+```bash
+pcbex init-approval-log \
+  --log-id factory-release-registry-witness-receipts \
+  --output receipt-log.0.json
+
+pcbex append-approval-log receipt-log.0.json \
+  --artifact registry.history.witness-b.remote-receipt.json \
+  --kind remote-factory-release-registry-history-checkpoint-witness-receipt \
+  --recorded-at-unix 1787702580 \
+  --output receipt-log.1.json
+```
+
+Sign `receipt-log.1.json` with `sign-approval-log`. Existing approval-log
+anchors, consistency proofs, gossip, and witness quorum then apply unchanged.
+See [Receipt Transparency](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_TRANSPARENCY.md)
+for the full trust boundary.
+
+### 7. Verify the witness quorum
 
 Supply the current trust state for every configured witness. Witness and trust
 state order does not affect the canonical member order.
@@ -229,7 +252,8 @@ portable v1.498 history
                           │                                           │
                           └──── complete-history replay ◀── remote witness
                                                 │             + receipt
-                                                └── exact quorum ─────┘
+                                                ├── exact quorum ─────┘
+                                                └── signed receipt log
 ```
 
 Every signing and verification path calls the production history auditor. No
@@ -247,13 +271,16 @@ operation trusts a copied final registry or a caller-supplied audit result.
 | Witness-quorum report | 128 KiB | Checkpoint and audit digests, evaluation time, threshold, sorted members, decision |
 | Remote response | 1 MiB transport ceiling | Must also fit the unchanged 32 KiB canonical signed-witness contract |
 | Remote transport receipt | 64 KiB | Endpoint, exact input/request/response/witness digests, key mode, times, verified result |
+| Receipt transparency log | 100,000 entries and 128 MiB generic file ceiling | Monotonic sequence/time, predecessor/self digests, normalized receipt bindings |
 | Witness/trust sets | 100 entries | Distinct identities and distinct non-weak Ed25519 keys |
 | Acceptance delay | 24 hours | `accepted_at_unix - issued_at_unix` |
 | Witness freshness | 24 hours | `evaluated_at_unix - witnessed_at_unix` |
 
-All seven retained documents use canonical pretty JSON with one trailing LF. Parsers
-reject duplicate keys, unknown fields, non-canonical formatting, weak keys,
-invalid self-signatures, oversized inputs, and generation values above 4,096.
+All seven v1.499–v1.501 registry documents use canonical pretty JSON with one
+trailing LF. Their parsers reject duplicate keys, unknown fields,
+non-canonical formatting, weak keys, invalid self-signatures, oversized inputs,
+and generation values above 4,096. The v1.502 event enters the existing bounded
+approval-log format.
 
 ## Schemas and validators
 
@@ -294,6 +321,9 @@ A passing accepted checkpoint proves that:
 - its receipt hashes the exact local history and checkpoint trust-state bytes,
   exact HTTP request and response bytes, normalized witness, key mode, endpoint,
   and evaluation time;
+- an appended receipt event binds the canonical compact receipt digest and its
+  checkpoint, request, response, and witness identities into the exact signed
+  log head;
 - a passing quorum report contains fresh signatures from enough distinct,
   currently trusted, role-disjoint witness keys over one exact checkpoint.
 
@@ -308,10 +338,11 @@ The contract does not prove:
 - that configured keys belong to independent people or legal organizations;
 - that the HTTPS operator is the intended legal entity or is operationally
   independent from any other witness;
-- that a locally generated transport receipt is externally signed, globally
-  published, or independently witnessed;
+- that structural append replayed the retained history, checkpoint trust,
+  response bytes, or witness signature;
+- that a locally generated receipt was externally signed or globally observed;
 - factory identity, capacity, order placement, payment, or exactly-once
   execution.
 
-Version 1.502 adds transparency for the v1.501 transport receipts. Every command
+Version 1.503 should add verifier-bound receipt admission. Every v1.502 command
 except the explicit v1.501 remote-request command remains network-free.
