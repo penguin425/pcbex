@@ -3636,6 +3636,37 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "append_verified_remote_factory_release_registry_history_witness_receipt",
+            "Verify and append factory registry witness receipt",
+            "Replay complete factory registry history, retained checkpoint trust, exact response bytes, witness trust, freshness, and the Ed25519 signature before appending one receipt.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "log", "receipt", "history", "checkpoint_trust_state",
+                    "response", "output"
+                ],
+                "properties": {
+                    "log": {"type": "string"},
+                    "receipt": {"type": "string"},
+                    "history": {"type": "string"},
+                    "checkpoint_trust_state": {"type": "string"},
+                    "response": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "witness_key_trust_state": {"type": "string"},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                },
+                "oneOf": [
+                    {"required": ["public_key"], "not": {"required": ["witness_key_trust_state"]}},
+                    {"required": ["witness_key_trust_state"], "not": {"required": ["public_key"]}}
+                ]
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "append_verified_remote_approval_registry_history_witness_receipt_quorum",
             "Verify and append approval registry witness receipt quorum",
             "Atomically append only after distinct trusted witnesses, keys, exact responses, freshness, and signatures meet the configured quorum.",
@@ -5239,6 +5270,12 @@ fn call_tool(
         }
         "append_verified_remote_approval_registry_history_witness_receipt" => {
             append_verified_remote_approval_registry_history_witness_receipt(
+                arguments,
+                cancellation,
+            )?
+        }
+        "append_verified_remote_factory_release_registry_history_witness_receipt" => {
+            append_verified_remote_factory_release_registry_history_witness_receipt(
                 arguments,
                 cancellation,
             )?
@@ -11235,6 +11272,72 @@ fn append_verified_remote_approval_registry_history_witness_receipt(
     ))
 }
 
+fn append_verified_remote_factory_release_registry_history_witness_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "log",
+            "receipt",
+            "history",
+            "checkpoint_trust_state",
+            "response",
+            "public_key",
+            "witness_key_trust_state",
+            "evaluated_at_unix",
+            "recorded_at_unix",
+            "output",
+        ],
+    )?;
+    let public_key = optional_string(&arguments, "public_key")?;
+    let witness_trust_state = optional_string(&arguments, "witness_key_trust_state")?;
+    if public_key.is_some() == witness_trust_state.is_some() {
+        return Err(json!({
+            "detail": "exactly one of public_key or witness_key_trust_state is required"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt".into(),
+        required_string(&arguments, "log")?,
+        "--receipt".into(),
+        required_string(&arguments, "receipt")?,
+        "--history".into(),
+        required_string(&arguments, "history")?,
+        "--checkpoint-trust-state".into(),
+        required_string(&arguments, "checkpoint_trust_state")?,
+        "--response".into(),
+        required_string(&arguments, "response")?,
+    ];
+    if let Some(path) = public_key {
+        command.extend(["--public-key".into(), path]);
+    }
+    if let Some(path) = witness_trust_state {
+        command.extend(["--witness-key-trust-state".into(), path]);
+    }
+    optional_nonnegative_integer(
+        &arguments,
+        "evaluated_at_unix",
+        "--evaluated-at-unix",
+        &mut command,
+    )?;
+    optional_nonnegative_integer(
+        &arguments,
+        "recorded_at_unix",
+        "--recorded-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let log = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "log": log}),
+    ))
+}
+
 fn append_verified_remote_approval_registry_history_witness_receipt_quorum(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -15622,7 +15725,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 153);
+        assert_eq!(tools.len(), 154);
         let named = |name: &str| {
             tools
                 .iter()
@@ -16516,6 +16619,21 @@ mod tests {
         );
         assert_eq!(
             named("append_verified_remote_approval_registry_history_witness_receipt")["annotations"]
+                ["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("append_verified_remote_factory_release_registry_history_witness_receipt")["inputSchema"]
+                ["required"][2],
+            "history"
+        );
+        assert_eq!(
+            named("append_verified_remote_factory_release_registry_history_witness_receipt")["inputSchema"]
+                ["oneOf"][1]["required"][0],
+            "witness_key_trust_state"
+        );
+        assert_eq!(
+            named("append_verified_remote_factory_release_registry_history_witness_receipt")["annotations"]
                 ["destructiveHint"],
             true
         );

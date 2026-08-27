@@ -146,7 +146,8 @@ The contract does not prove that:
 - the system has global non-equivocation, factory capacity, ordering, payment,
   or exactly-once execution.
 
-Version 1.503 should add verifier-bound admission. That command should require
-the retained complete history, checkpoint trust state, exact response bytes,
-and direct or generation-chained witness trust, then replay v1.501 verification
-before append.
+Version 1.503 adds that stronger verifier-bound path. Use the
+[receipt admission guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_ADMISSION.md)
+when append must independently replay the retained complete history,
+checkpoint trust, exact response bytes, current witness trust, freshness, and
+signature instead of trusting the original acquisition boundary.

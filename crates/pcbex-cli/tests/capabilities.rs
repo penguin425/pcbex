@@ -173,6 +173,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "init-approval-log",
         "append-approval-log",
         "append-verified-remote-approval-registry-history-checkpoint-witness-receipt",
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
         "append-verified-remote-approval-registry-history-checkpoint-witness-receipt-quorum",
         "signed-remote-approval-registry-history-receipt-quorum-log-checkpoint-schema",
         "remote-approval-registry-history-receipt-quorum-log-checkpoint-verification-schema",

@@ -215,6 +215,7 @@ auditable release.
 | v1.500.0 | Factory-release registry-history witness key rotation | Preserve every v1.493–v1.499 wire artifact, bind each checkpoint-witness identity to a generation-zero key, advance it only through old/new dual-signed one-generation digest-chained transitions, and let the unchanged quorum consume current trust states while rejecting stale keys without claiming protected trust storage, global non-equivocation, trusted time, independent key custody, legal identity, ordering, payment, or exactly-once execution |
 | v1.501.0 | Remote factory-release registry-history checkpoint witnesses | Preserve every v1.493–v1.500 artifact and quorum interface, acquire one canonical checkpoint witness through bounded no-redirect HTTPS using either a directly pinned key or current witness trust state, immediately replay the exact complete local history before atomic witness/receipt retention, and hash-bind the history, checkpoint trust state, request, response, witness, key mode, endpoint, and time without claiming protected local state, trusted time, endpoint legal identity, operational independence, global non-equivocation, receipt publication, ordering, payment, or exactly-once execution |
 | v1.502.0 | Factory-release registry witness receipt transparency | Preserve every v1.493–v1.501 artifact and request/quorum path, structurally validate one canonical verified transport receipt, normalize its exact receipt, checkpoint, request, response, and witness identities into the existing signed hash-chain log, and reuse its anchor, consistency, gossip, witness rotation, and quorum controls without claiming verifier-bound admission, protected log state, trusted time, external receipt authenticity or publication, global non-equivocation, operational independence, legal identity, ordering, payment, or exactly-once execution |
+| v1.503.0 | Verifier-bound factory-release registry receipt admission | Preserve every v1.493–v1.502 artifact while adding one dedicated immutable-admission path that reloads and audits the exact complete registry history, reconstructs retained checkpoint trust and the exact request, matches the retained response bytes and receipt/witness digests, requires direct or current generation-bound witness trust, and re-verifies freshness, role disjointness, and the Ed25519 signature before one alias-free no-clobber append without claiming multi-witness admission quorum, protected local state, trusted time, endpoint or receipt authenticity, global publication/non-equivocation, independent operation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2145,7 +2146,7 @@ and disjointness from every historical root and embedded governance authority.
 The witness and a 64 KiB receipt are published together only after exact input
 revalidation.
 
-The current v1.502.0 milestone admits that closed canonical receipt as a new
+The v1.502.0 milestone admits that closed canonical receipt as a new
 event kind in the existing approval transparency log. Append rejects unknown
 fields, non-canonical bytes, false verification decisions, invalid bounds, weak
 witness keys, malformed trust-generation bindings, and invalid endpoint or
@@ -2163,4 +2164,21 @@ trusted time, endpoint or receipt authenticity, independent operators, global
 non-equivocation, external publication, capacity, ordering, payment, and
 exactly-once execution remain unproved.
 
-The planned follow-up is verifier-bound receipt admission in v1.503.0.
+The current v1.503.0 milestone adds a dedicated verifier-bound admission path.
+It captures the log, canonical receipt, complete history, retained checkpoint
+trust state, exact response bytes, and exactly one direct key or rotatable
+witness trust state. It independently replays the complete history,
+reconstructs the checkpoint trust state and request, checks every raw digest
+and trust-generation binding, and re-verifies witness freshness, role
+disjointness, identity, key, and Ed25519 signature before appending the same
+v1.502 event shape.
+
+Every input is re-read by byte count and SHA-256 before the prepared log
+snapshot is published. This is sequential change detection, not a
+same-principal atomic snapshot. It does not protect retained inputs or log
+storage, establish trusted time, authenticate endpoint/legal identity, prove
+independent operation or global publication/non-equivocation, or establish
+capacity, ordering, payment, or exactly-once execution.
+
+The planned follow-up is atomic verifier-bound receipt quorum admission in
+v1.504.0.
