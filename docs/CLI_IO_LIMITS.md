@@ -872,10 +872,10 @@ exactly-once execution.
 
 ## Factory-state external gossip registry history-checkpoint limits
 
-The v1.499 signed checkpoint and signed witness are each capped at 32 KiB. The
-accepted checkpoint trust state is capped at 64 KiB, and the witness-quorum
-report is capped at 128 KiB. Every command replays the canonical v1.498 history,
-which retains its 128 MiB and 4,096-event bounds.
+The unchanged v1.499 signed checkpoint and signed witness are each capped at
+32 KiB. The accepted checkpoint trust state is capped at 64 KiB, and the
+witness-quorum report is capped at 128 KiB. Every checkpoint command replays
+the canonical v1.498 history, which retains its 128 MiB and 4,096-event bounds.
 
 Acceptance must occur no earlier than checkpoint issuance and no more than
 86,400 seconds later. A supplied baseline requires the same registry identity,
@@ -888,9 +888,16 @@ trusted identity/key pairs. Witnesses must be no older than 86,400 seconds at
 evaluation, cannot be future-dated, and must use distinct non-weak Ed25519 keys
 that do not reuse any registry root or embedded governance authority key.
 
-All four artifacts require canonical pretty JSON plus LF and reject duplicate
-or unknown keys. Single outputs use guarded no-replace publication after exact
-public-input revalidation. A valid below-threshold report is retained before
+The v1.500 witness trust state and dual-signed rotation are each capped at
+32 KiB. Trust generations range from 0 to 4,096. Each successor advances by
+exactly one, binds the previous rotation digest, uses a distinct non-weak key,
+and carries a nondecreasing time no greater than `999999999999999`.
+
+All six artifacts require canonical pretty JSON plus LF and reject duplicate
+or unknown keys. Rotation apply publishes the next trust state and exported
+public key as one alias-free no-clobber set after exact input revalidation.
+Quorum verification accepts direct identity/key pairs or trust-state files,
+never both. A valid below-threshold report is retained before
 `--require-quorum` returns nonzero.
 
 ## Subprocess limits

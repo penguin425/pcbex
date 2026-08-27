@@ -3,10 +3,9 @@
 Pin one audited registry head. Detect rollback and equivocation across retained
 consumers.
 
-The v1.499 contract signs the exact output of the portable v1.498 history
-audit with the registry root retained at that final generation. Consumers keep
-an immutable trust state, while independent witnesses endorse the same exact
-checkpoint under distinct Ed25519 keys.
+The v1.500 contract preserves every v1.499 checkpoint and witness byte. It adds
+identity-bound witness trust that advances through generation-chained,
+dual-signed Ed25519 key rotations.
 
 > [!IMPORTANT]
 > A checkpoint protects only consumers that retain and supply their previous
@@ -25,6 +24,8 @@ checkpoint under distinct Ed25519 keys.
   previously accepted prefix.
 - **Requires fresh witnesses:** Verifies a configurable threshold of 2–100
   distinct identities and keys over one exact checkpoint.
+- **Rotates without substitution:** Requires both retained-key authorization
+  and successor-key possession before advancing one witness generation.
 - **Separates key roles:** Rejects checkpoint-witness keys reused by any current
   or historical registry root or embedded governance authority.
 - **Retains negative evidence:** Writes a valid below-threshold quorum report
@@ -82,7 +83,52 @@ checkpoint at the same generation fails as equivocation.
 > Copying the newest file over an unprotected path does not preserve the
 > monotonic guarantee.
 
-### 3. Create independent witnesses
+### 3. Pin and rotate witness trust
+
+Initialize one generation-zero trust state for each configured witness:
+
+```bash
+pcbex init-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust \
+  --witness-id witness-a \
+  --public-key witness-a.public.hex \
+  --output witness-a.trust.0.json
+
+pcbex init-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust \
+  --witness-id witness-b \
+  --public-key witness-b.public.hex \
+  --output witness-b.trust.0.json
+```
+
+Rotate `witness-a` only after both the retained and successor private keys sign
+the same transition:
+
+```bash
+pcbex sign-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-key-rotation \
+  --trust-state witness-a.trust.0.json \
+  --old-private-key witness-a.secret.hex \
+  --new-private-key witness-a.next.secret.hex \
+  --rotated-at-unix 1787702470 \
+  --output witness-a.rotation.1.json
+
+pcbex apply-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-key-rotation \
+  --trust-state witness-a.trust.0.json \
+  --rotation witness-a.rotation.1.json \
+  --output witness-a.trust.1.json \
+  --public-key-output witness-a.current.public.hex
+```
+
+The apply command verifies both signatures, the exact next generation, the
+predecessor digest, and nondecreasing rotation time before publishing both
+outputs atomically. Use the standalone export command when only the current
+public key needs to be derived again:
+
+```bash
+pcbex export-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-key \
+  --trust-state witness-a.trust.1.json \
+  --output witness-a.current-again.public.hex
+```
+
+### 4. Create independent witnesses
 
 Each witness independently receives both the complete history and checkpoint.
 It replays the history before signing.
@@ -92,17 +138,17 @@ pcbex sign-factory-release-state-transparency-external-gossip-organization-regis
   --history registry.history.json \
   --checkpoint registry.history.checkpoint.json \
   --witness-id witness-a \
-  --witness-private-key witness-a.secret.hex \
+  --witness-private-key witness-a.next.secret.hex \
   --witnessed-at-unix 1787702500 \
   --output registry.history.witness-a.json
 ```
 
 Repeat with a different identity and key for `witness-b`.
 
-### 4. Verify the witness quorum
+### 5. Verify the witness quorum
 
-Trusted identities and public-key files pair by position. Witness artifact
-order does not affect the canonical member order.
+Supply the current trust state for every configured witness. Witness and trust
+state order does not affect the canonical member order.
 
 ```bash
 pcbex verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses \
@@ -110,15 +156,17 @@ pcbex verify-factory-release-state-transparency-external-gossip-organization-reg
   --checkpoint registry.history.checkpoint.json \
   --witness registry.history.witness-b.json \
   --witness registry.history.witness-a.json \
-  --trusted-witness-id witness-b \
-  --trusted-witness-id witness-a \
-  --trusted-witness-public-key witness-b.public.hex \
-  --trusted-witness-public-key witness-a.public.hex \
+  --witness-trust-state witness-b.trust.0.json \
+  --witness-trust-state witness-a.trust.1.json \
   --minimum-witnesses 2 \
   --evaluated-at-unix 1787702600 \
   --require-quorum \
   --output registry.history.witness-quorum.json
 ```
+
+The direct v1.499 `--trusted-witness-id` and
+`--trusted-witness-public-key` arguments remain supported. Direct keys and
+trust states cannot be mixed in one verification.
 
 ## Verification flow
 
@@ -132,9 +180,13 @@ portable v1.498 history
                                                  │
                            ┌─────────────────────┼─────────────────────┐
                            ▼                     ▼                     ▼
-                     local trust state      witness A             witness B
-                           │                     │                     │
-                           └──────────── exact checkpoint quorum ──────┘
+                  checkpoint trust      witness A trust       witness B trust
+                                                │                     │
+                                         dual-signed rotation         │
+                                                │                     │
+                                                ▼                     ▼
+                                           witness A             witness B
+                                                └── exact quorum ─────┘
 ```
 
 Every signing and verification path calls the production history auditor. No
@@ -147,12 +199,14 @@ operation trusts a copied final registry or a caller-supplied audit result.
 | Signed checkpoint | 32 KiB | Registry, generation, audit/final-state digests, final transition, governance, root, issue time, signature |
 | Accepted trust state | 64 KiB | Exact checkpoint plus accepted generation and acceptance time |
 | Signed witness | 32 KiB | Exact checkpoint SHA-256, witness identity/key, witness time, signature |
+| Witness trust state | 32 KiB | Identity, generation, current key, last rotation digest and time |
+| Signed witness-key rotation | 32 KiB | Adjacent generations, predecessor digest, old/new keys, rotation time, both signatures |
 | Witness-quorum report | 128 KiB | Checkpoint and audit digests, evaluation time, threshold, sorted members, decision |
 | Witness/trust sets | 100 entries | Distinct identities and distinct non-weak Ed25519 keys |
 | Acceptance delay | 24 hours | `accepted_at_unix - issued_at_unix` |
 | Witness freshness | 24 hours | `evaluated_at_unix - witnessed_at_unix` |
 
-All four documents use canonical pretty JSON with one trailing LF. Parsers
+All six documents use canonical pretty JSON with one trailing LF. Parsers
 reject duplicate keys, unknown fields, non-canonical formatting, weak keys,
 invalid self-signatures, oversized inputs, and generation values above 4,096.
 
@@ -164,13 +218,15 @@ Print the recursively closed schemas:
 pcbex signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-schema
 pcbex factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-trust-state-schema
 pcbex signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-schema
+pcbex factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-schema
+pcbex signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-key-rotation-schema
 pcbex factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-quorum-schema
 ```
 
 Each schema has a matching `validate-...` command. Validators authenticate the
-self-contained checkpoint or witness signature and preserve canonical bytes.
-The quorum-report validator checks structure and invariants; use the full
-`verify-...-witnesses` command to replay its underlying evidence.
+self-contained checkpoint, witness, or both rotation signatures and preserve
+canonical bytes. The trust-state and quorum-report validators check structure
+and invariants; use apply or full quorum verification to replay their evidence.
 
 ## What a passing result proves
 
@@ -182,19 +238,22 @@ A passing accepted checkpoint proves that:
 - the signer controls the root retained at the final generation;
 - when a baseline is supplied, the new history contains its exact previously
   accepted generation and state;
+- an applied rotation was authorized by the retained key and proves possession
+  of the distinct successor key over one exact next-generation payload;
 - a passing quorum report contains fresh signatures from enough distinct,
-  configured, role-disjoint witness keys over one exact checkpoint.
+  currently trusted, role-disjoint witness keys over one exact checkpoint.
 
 ## What it does not prove
 
 The contract does not prove:
 
 - rollback resistance when the consumer loses or replaces its baseline;
+- rollback resistance when a witness trust state is lost or replaced;
 - global non-equivocation among consumers that never exchange checkpoints;
 - trusted wall-clock time or secure private-key custody;
 - that configured keys belong to independent people or legal organizations;
 - factory identity, capacity, order placement, payment, or exactly-once
   execution.
 
-Version 1.500 adds generation-chained checkpoint-witness key rotation. Until
-then, changing a trusted witness key requires an out-of-band trust update.
+Version 1.501 adds bounded remote checkpoint witnesses with hash-bound transport
+receipts. Version 1.500 performs no network requests.
