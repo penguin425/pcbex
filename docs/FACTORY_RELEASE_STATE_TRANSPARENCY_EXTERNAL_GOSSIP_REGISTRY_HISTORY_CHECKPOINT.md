@@ -324,6 +324,10 @@ A passing accepted checkpoint proves that:
 - an appended receipt event binds the canonical compact receipt digest and its
   checkpoint, request, response, and witness identities into the exact signed
   log head;
+- a verifier-bound append additionally replayed the exact complete history,
+  reconstructed retained checkpoint trust and request bytes, matched the exact
+  response and current trust generation, and re-verified freshness, role
+  separation, and the witness signature at admission time;
 - a passing quorum report contains fresh signatures from enough distinct,
   currently trusted, role-disjoint witness keys over one exact checkpoint.
 
@@ -338,11 +342,14 @@ The contract does not prove:
 - that configured keys belong to independent people or legal organizations;
 - that the HTTPS operator is the intended legal entity or is operationally
   independent from any other witness;
-- that structural append replayed the retained history, checkpoint trust,
-  response bytes, or witness signature;
+- that the optional structural append replayed the retained history,
+  checkpoint trust, response bytes, or witness signature;
+- that verifier-bound input revalidation formed an atomic same-principal
+  filesystem snapshot or protected any retained input from rollback;
 - that a locally generated receipt was externally signed or globally observed;
 - factory identity, capacity, order placement, payment, or exactly-once
   execution.
 
-Version 1.503 should add verifier-bound receipt admission. Every v1.502 command
-except the explicit v1.501 remote-request command remains network-free.
+Version 1.504 should add atomic verifier-bound receipt admission quorum. Every
+v1.503 command except the explicit v1.501 remote-request command remains
+network-free.

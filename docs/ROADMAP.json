@@ -1044,6 +1044,11 @@
     {
       "id": "factory-release-transparency-external-gossip-registry-history-witness-receipt-transparency",
       "release": "v1.502.0",
+      "status": "released"
+    },
+    {
+      "id": "verifier-bound-factory-release-registry-witness-receipt-admission",
+      "release": "v1.503.0",
       "status": "current"
     }
   ]

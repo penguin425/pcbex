@@ -916,6 +916,15 @@ response, and witness identities. Append is structural admission: it does not
 reload the complete registry history, checkpoint trust state, response bytes,
 or witness trust evidence.
 
+The v1.503 verifier-bound append additionally requires the canonical complete
+history, checkpoint trust state, exact signed-witness response, and either a
+65-byte direct public-key file or a 32 KiB witness trust state. It applies the
+existing 128 MiB history/log, 64 KiB checkpoint-trust/receipt, and 32 KiB
+response/trust-state ceilings, replays every verifier before append, and
+re-reads all six inputs by byte count and SHA-256 before publishing one
+alias-free no-clobber log snapshot. Final reread detects sequential changes; it
+does not create an atomic filesystem snapshot across same-principal inputs.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

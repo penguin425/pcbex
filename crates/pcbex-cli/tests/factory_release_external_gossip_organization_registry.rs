@@ -3329,6 +3329,7 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
     );
 
     let receipt_log_empty = root.join("registry-witness-receipts.log.0.json");
+    let direct_receipt_log = root.join("registry-witness-receipts.direct.log.1.json");
     let receipt_log = root.join("registry-witness-receipts.log.1.json");
     let receipt_log_checkpoint = root.join("registry-witness-receipts.checkpoint.json");
     let receipt_log_verification = root.join("registry-witness-receipts.verification.json");
@@ -3340,12 +3341,40 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         path(&receipt_log_empty),
     ]);
     successful(&[
-        "append-approval-log",
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
         path(&receipt_log_empty),
-        "--artifact",
+        "--receipt",
+        path(&remote_witness_b_receipt),
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_witness_b),
+        "--public-key",
+        path(&witness_b_public),
+        "--evaluated-at-unix",
+        "5400",
+        "--recorded-at-unix",
+        "5401",
+        "--output",
+        path(&direct_receipt_log),
+    ]);
+    successful(&[
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
+        path(&receipt_log_empty),
+        "--receipt",
         path(&remote_rotated_witness_a_receipt),
-        "--kind",
-        "remote-factory-release-registry-history-checkpoint-witness-receipt",
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_rotated_witness_a),
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5400",
         "--recorded-at-unix",
         "5401",
         "--output",
@@ -3408,12 +3437,20 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
     let rejected_receipt_log = root.join("registry-witness-receipts.rejected-log.json");
     write_canonical_json(&rejected_receipt, &rejected_receipt_value);
     let rejected = run(&[
-        "append-approval-log",
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
         path(&receipt_log),
-        "--artifact",
+        "--receipt",
         path(&rejected_receipt),
-        "--kind",
-        "remote-factory-release-registry-history-checkpoint-witness-receipt",
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_rotated_witness_a),
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5401",
         "--recorded-at-unix",
         "5402",
         "--output",
@@ -3421,6 +3458,109 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
     ]);
     assert!(!rejected.status.success());
     assert!(!rejected_receipt_log.exists());
+
+    let mut truncated_history_value = history_value.clone();
+    truncated_history_value["events"]
+        .as_array_mut()
+        .unwrap()
+        .pop();
+    let truncated_history = root.join("registry-history.truncated-at-admission.json");
+    write_canonical_json(&truncated_history, &truncated_history_value);
+    let truncated_history_log = root.join("registry-witness-receipts.truncated-history.json");
+    let rejected = run(&[
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
+        path(&receipt_log),
+        "--receipt",
+        path(&remote_rotated_witness_a_receipt),
+        "--history",
+        path(&truncated_history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_rotated_witness_a),
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5401",
+        "--recorded-at-unix",
+        "5402",
+        "--output",
+        path(&truncated_history_log),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!truncated_history_log.exists());
+
+    let substituted_response_log = root.join("registry-witness-receipts.substituted-response.json");
+    let rejected = run(&[
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
+        path(&receipt_log),
+        "--receipt",
+        path(&remote_rotated_witness_a_receipt),
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_witness_b),
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5401",
+        "--recorded-at-unix",
+        "5402",
+        "--output",
+        path(&substituted_response_log),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!substituted_response_log.exists());
+
+    let stale_trust_log = root.join("registry-witness-receipts.stale-trust.json");
+    let rejected = run(&[
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
+        path(&receipt_log),
+        "--receipt",
+        path(&remote_rotated_witness_a_receipt),
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_rotated_witness_a),
+        "--witness-key-trust-state",
+        path(&witness_a_initial_trust),
+        "--evaluated-at-unix",
+        "5401",
+        "--recorded-at-unix",
+        "5402",
+        "--output",
+        path(&stale_trust_log),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!stale_trust_log.exists());
+
+    let stale_admission_log = root.join("registry-witness-receipts.stale-admission.json");
+    let rejected = run(&[
+        "append-verified-remote-factory-release-registry-history-checkpoint-witness-receipt",
+        path(&receipt_log),
+        "--receipt",
+        path(&remote_rotated_witness_a_receipt),
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--response",
+        path(&remote_rotated_witness_a),
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "91703",
+        "--recorded-at-unix",
+        "91703",
+        "--output",
+        path(&stale_admission_log),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!stale_admission_log.exists());
 
     let mixed_direct_quorum = root.join("registry-history.checkpoint.mixed-remote-quorum.json");
     successful(&[

@@ -142,6 +142,204 @@ pub(crate) fn request_remote_factory_release_state_transparency_external_gossip_
 }
 
 #[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt(
+    receipt: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt,
+    history_source: &[u8],
+    checkpoint_trust_state_source: &[u8],
+    response_bytes: &[u8],
+    trusted_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness,
+    String,
+> {
+    verify_remote_receipt(
+        receipt,
+        history_source,
+        checkpoint_trust_state_source,
+        response_bytes,
+        trusted_public_key,
+        None,
+        evaluated_at_unix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_with_trust_state(
+    receipt: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt,
+    history_source: &[u8],
+    checkpoint_trust_state_source: &[u8],
+    response_bytes: &[u8],
+    witness_key_trust_state_source: &[u8],
+    evaluated_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness,
+    String,
+> {
+    let trust_state =
+        parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trust_state(
+            witness_key_trust_state_source,
+        )?;
+    let trusted_public_key =
+        factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+            &trust_state,
+        )?;
+    verify_remote_receipt(
+        receipt,
+        history_source,
+        checkpoint_trust_state_source,
+        response_bytes,
+        &trusted_public_key,
+        Some((&trust_state, sha256(witness_key_trust_state_source))),
+        evaluated_at_unix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_remote_receipt(
+    receipt: &RemoteFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessReceipt,
+    history_source: &[u8],
+    checkpoint_trust_state_source: &[u8],
+    response_bytes: &[u8],
+    trusted_public_key: &[u8; 32],
+    witness_key_trust_state: Option<(
+        &FactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+        String,
+    )>,
+    evaluated_at_unix: u64,
+) -> Result<
+    SignedFactoryReleaseStateTransparencyExternalGossipOrganizationRegistryHistoryCheckpointWitness,
+    String,
+> {
+    validate_remote_receipt(receipt)?;
+    if evaluated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "remote factory release registry history checkpoint witness admission time is outside its bound"
+                .into(),
+        );
+    }
+    if evaluated_at_unix < receipt.evaluated_at_unix {
+        return Err(
+            "remote factory release registry history checkpoint witness receipt is future-dated at admission"
+                .into(),
+        );
+    }
+    validate_nonweak_public_key(trusted_public_key, "trusted registry history witness key")?;
+
+    let history =
+        parse_factory_release_state_transparency_external_gossip_organization_registry_history(
+            history_source,
+        )?;
+    let checkpoint_state =
+        parse_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_trust_state(
+            checkpoint_trust_state_source,
+        )?;
+    let reconstructed =
+        accept_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint(
+            &history,
+            &checkpoint_state.signed_checkpoint,
+            None,
+            checkpoint_state.accepted_at_unix,
+        )?;
+    if reconstructed != checkpoint_state {
+        return Err(
+            "factory release registry history checkpoint trust state does not match the complete history"
+                .into(),
+        );
+    }
+
+    let request_bytes = serde_json::to_vec(&RemoteRegistryHistoryCheckpointWitnessRequest {
+        schema_version: 1,
+        protocol: PROTOCOL,
+        checkpoint_trust_state: &checkpoint_state,
+    })
+    .map_err(|error| {
+        format!(
+            "serializing remote factory release registry history checkpoint witness request: {error}"
+        )
+    })?;
+    if receipt.registry_id != checkpoint_state.registry_id
+        || receipt.generation != checkpoint_state.accepted_generation
+        || receipt.history_sha256 != sha256(history_source)
+        || receipt.checkpoint_sha256 != checkpoint_state.checkpoint_sha256
+        || receipt.checkpoint_trust_state_sha256 != sha256(checkpoint_trust_state_source)
+        || receipt.request_sha256 != sha256(&request_bytes)
+    {
+        return Err(
+            "remote factory release registry history checkpoint witness receipt is bound to different retained evidence"
+                .into(),
+        );
+    }
+    if response_bytes.is_empty()
+        || response_bytes.len() as u64 > MAX_RESPONSE_BYTES
+        || receipt.response_bytes != response_bytes.len() as u64
+        || receipt.response_sha256 != sha256(response_bytes)
+    {
+        return Err(
+            "remote factory release registry history checkpoint witness receipt response binding is invalid"
+                .into(),
+        );
+    }
+    let witness =
+        parse_signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness(
+            response_bytes,
+        )?;
+    if receipt.witness_sha256
+        != signed_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_sha256(
+            &witness,
+        )?
+        || receipt.witness_id != witness.witness_id
+        || receipt.witness_public_key != witness.public_key
+        || receipt.witnessed_at_unix != witness.witnessed_at_unix
+    {
+        return Err(
+            "remote factory release registry history checkpoint witness receipt describes different witness evidence"
+                .into(),
+        );
+    }
+    let expected_trust_binding = witness_key_trust_state
+        .as_ref()
+        .map(|(state, digest)| (Some(digest.clone()), Some(state.generation)))
+        .unwrap_or((None, None));
+    if (
+        receipt.witness_key_trust_state_sha256.clone(),
+        receipt.witness_key_generation,
+    ) != expected_trust_binding
+    {
+        return Err(
+            "remote factory release registry history checkpoint witness receipt trust binding is invalid"
+                .into(),
+        );
+    }
+    if let Some((trust_state, _)) = &witness_key_trust_state
+        && witness.witness_id != trust_state.witness_id
+    {
+        return Err(
+            "remote factory release registry history checkpoint witness identity does not match its trust state"
+                .into(),
+        );
+    }
+
+    let trusted_witnesses = vec![(witness.witness_id.clone(), *trusted_public_key)];
+    let report =
+        verify_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witnesses(
+            &history,
+            &checkpoint_state.signed_checkpoint,
+            std::slice::from_ref(&witness),
+            &trusted_witnesses,
+            2,
+            evaluated_at_unix,
+        )?;
+    if report.valid_witnesses != 1 || report.quorum_met {
+        return Err(
+            "remote factory release registry history checkpoint witness admission produced an invalid single-witness result"
+                .into(),
+        );
+    }
+    Ok(witness)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn request_remote_witness(
     history_source: &[u8],
     checkpoint_trust_state_source: &[u8],
