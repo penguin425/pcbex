@@ -1049,6 +1049,11 @@
     {
       "id": "verifier-bound-factory-release-registry-witness-receipt-admission",
       "release": "v1.503.0",
+      "status": "released"
+    },
+    {
+      "id": "verifier-bound-factory-release-registry-witness-receipt-admission-quorum",
+      "release": "v1.504.0",
       "status": "current"
     }
   ]

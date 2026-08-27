@@ -155,6 +155,6 @@ One admitted receipt is still selected-witness evidence. It does not prove a
 multi-witness admission quorum, factory capacity, ordering, payment, or
 exactly-once execution.
 
-Version 1.504 should require a configurable threshold of distinct independently
-reverified receipts before appending their canonically ordered events as one
-transaction.
+Version 1.504 adds the configurable distinct-witness threshold. Use the
+[receipt quorum admission guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+when multiple independently reverified receipts must succeed together.
