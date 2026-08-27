@@ -150,4 +150,5 @@ Version 1.505 adds the
 [receipt-quorum log signing gate](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md).
 It refuses partial, extended, substituted, unbound, or unrelated logs before
 reading private signing material. A dedicated receipt-quorum signature domain
-remains a separate follow-up.
+is available through the v1.506
+[factory receipt-quorum checkpoint](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md).
