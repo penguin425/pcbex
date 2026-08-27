@@ -1150,6 +1150,7 @@ enum ApprovalArtifactKindArg {
     SignedPolicyPack,
     RemoteRegistryHistoryCheckpointWitnessReceipt,
     RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt,
 }
 
 impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
@@ -1165,6 +1166,9 @@ impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
             }
             ApprovalArtifactKindArg::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt => {
                 Self::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt
+            }
+            ApprovalArtifactKindArg::RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt => {
+                Self::RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt
             }
         }
     }
@@ -39423,6 +39427,23 @@ fn approval_event_descriptor(
                 parse_remote_approval_registry_history_checkpoint_witness_receipt(&source)
                     .map_err(anyhow::Error::msg)?;
             remote_approval_receipt_event(&artifact)
+        }
+        ApprovalArtifactKindArg::RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt => {
+            let artifact =
+                parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt(
+                    source.as_bytes(),
+                )
+                .map_err(anyhow::Error::msg)?;
+            Ok(ApprovalEventDescriptor {
+                artifact_kind:
+                    ApprovalArtifactKind::RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: artifact.checkpoint_sha256,
+                request_sha256: Some(artifact.request_sha256),
+                session_sha256: Some(artifact.response_sha256),
+                signer_id: None,
+                outcome: format!("verified-witness:{}", artifact.witness_id),
+            })
         }
     }
 }

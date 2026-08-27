@@ -1039,6 +1039,11 @@
     {
       "id": "factory-release-transparency-external-gossip-registry-history-remote-witnesses",
       "release": "v1.501.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-release-transparency-external-gossip-registry-history-witness-receipt-transparency",
+      "release": "v1.502.0",
       "status": "current"
     }
   ]

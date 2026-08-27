@@ -908,11 +908,19 @@ and key, and optional trust-state digest/generation. Witness and receipt outputs
 are retained as one alias-free no-clobber set only after complete-history
 verification and exact input revalidation.
 
-All seven retained artifacts require canonical pretty JSON plus LF and reject duplicate
-or unknown keys. Rotation apply publishes the next trust state and exported
-public key as one alias-free no-clobber set after exact input revalidation.
-Quorum verification accepts direct identity/key pairs or trust-state files,
-never both. A valid below-threshold report is retained before
+The v1.502 receipt-transparency append accepts that canonical 64 KiB receipt as
+one new approval-event kind. It reuses the approval log's 100,000-entry bound
+and the generic 128 MiB file ceiling, validates the receipt before producing a
+new no-clobber snapshot, and binds its compact digest plus checkpoint, request,
+response, and witness identities. Append is structural admission: it does not
+reload the complete registry history, checkpoint trust state, response bytes,
+or witness trust evidence.
+
+All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
+and reject duplicate or unknown keys. Rotation apply publishes the next trust
+state and exported public key as one alias-free no-clobber set after exact
+input revalidation. Quorum verification accepts direct identity/key pairs or
+trust-state files, never both. A valid below-threshold report is retained before
 `--require-quorum` returns nonzero.
 
 ## Subprocess limits

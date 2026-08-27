@@ -3328,6 +3328,100 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         hex::encode(Sha256::digest(fs::read(&witness_a_rotated_trust).unwrap()))
     );
 
+    let receipt_log_empty = root.join("registry-witness-receipts.log.0.json");
+    let receipt_log = root.join("registry-witness-receipts.log.1.json");
+    let receipt_log_checkpoint = root.join("registry-witness-receipts.checkpoint.json");
+    let receipt_log_verification = root.join("registry-witness-receipts.verification.json");
+    successful(&[
+        "init-approval-log",
+        "--log-id",
+        "factory-release-registry-witness-receipts",
+        "--output",
+        path(&receipt_log_empty),
+    ]);
+    successful(&[
+        "append-approval-log",
+        path(&receipt_log_empty),
+        "--artifact",
+        path(&remote_rotated_witness_a_receipt),
+        "--kind",
+        "remote-factory-release-registry-history-checkpoint-witness-receipt",
+        "--recorded-at-unix",
+        "5401",
+        "--output",
+        path(&receipt_log),
+    ]);
+    let receipt_log_value: Value =
+        serde_json::from_slice(&fs::read(&receipt_log).unwrap()).unwrap();
+    let receipt_event = &receipt_log_value["entries"][0]["event"];
+    assert_eq!(
+        receipt_event["artifact_kind"],
+        "remote_factory_release_registry_history_checkpoint_witness_receipt"
+    );
+    assert_eq!(
+        receipt_event["artifact_sha256"],
+        hex::encode(Sha256::digest(compact_json_source(
+            &fs::read(&remote_rotated_witness_a_receipt).unwrap()
+        )))
+    );
+    assert_eq!(
+        receipt_event["subject_id"],
+        remote_rotated_receipt_value["checkpoint_sha256"]
+    );
+    assert_eq!(
+        receipt_event["request_sha256"],
+        remote_rotated_receipt_value["request_sha256"]
+    );
+    assert_eq!(
+        receipt_event["session_sha256"],
+        remote_rotated_receipt_value["response_sha256"]
+    );
+    assert_eq!(receipt_event["outcome"], "verified-witness:witness-a");
+    successful(&[
+        "sign-approval-log",
+        path(&receipt_log),
+        "--private-key",
+        path(&witness_a_next_secret),
+        "--signer-id",
+        "factory-release-registry-receipt-log",
+        "--output",
+        path(&receipt_log_checkpoint),
+    ]);
+    successful(&[
+        "verify-approval-log",
+        path(&receipt_log),
+        "--checkpoint",
+        path(&receipt_log_checkpoint),
+        "--public-key",
+        path(&witness_a_next_public),
+        "--output",
+        path(&receipt_log_verification),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&receipt_log_verification).unwrap()).unwrap()["verified"],
+        true
+    );
+
+    let mut rejected_receipt_value = remote_rotated_receipt_value.clone();
+    rejected_receipt_value["verified"] = false.into();
+    let rejected_receipt = root.join("registry-witness-receipt.rejected.json");
+    let rejected_receipt_log = root.join("registry-witness-receipts.rejected-log.json");
+    write_canonical_json(&rejected_receipt, &rejected_receipt_value);
+    let rejected = run(&[
+        "append-approval-log",
+        path(&receipt_log),
+        "--artifact",
+        path(&rejected_receipt),
+        "--kind",
+        "remote-factory-release-registry-history-checkpoint-witness-receipt",
+        "--recorded-at-unix",
+        "5402",
+        "--output",
+        path(&rejected_receipt_log),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!rejected_receipt_log.exists());
+
     let mixed_direct_quorum = root.join("registry-history.checkpoint.mixed-remote-quorum.json");
     successful(&[
         "verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses",

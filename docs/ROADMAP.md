@@ -214,6 +214,7 @@ auditable release.
 | v1.499.0 | Witnessed factory-release external-gossip registry history checkpoints | Replay one portable five-event history, bind its exact audit and computed head under the final retained root, advance an immutable local trust state without rollback, equivocation, truncation, or time reversal, and require a fresh threshold of distinct role-disjoint checkpoint witnesses without claiming protected baseline storage, global non-equivocation, trusted time, real organizational independence, legal identity, ordering, payment, or exactly-once execution |
 | v1.500.0 | Factory-release registry-history witness key rotation | Preserve every v1.493–v1.499 wire artifact, bind each checkpoint-witness identity to a generation-zero key, advance it only through old/new dual-signed one-generation digest-chained transitions, and let the unchanged quorum consume current trust states while rejecting stale keys without claiming protected trust storage, global non-equivocation, trusted time, independent key custody, legal identity, ordering, payment, or exactly-once execution |
 | v1.501.0 | Remote factory-release registry-history checkpoint witnesses | Preserve every v1.493–v1.500 artifact and quorum interface, acquire one canonical checkpoint witness through bounded no-redirect HTTPS using either a directly pinned key or current witness trust state, immediately replay the exact complete local history before atomic witness/receipt retention, and hash-bind the history, checkpoint trust state, request, response, witness, key mode, endpoint, and time without claiming protected local state, trusted time, endpoint legal identity, operational independence, global non-equivocation, receipt publication, ordering, payment, or exactly-once execution |
+| v1.502.0 | Factory-release registry witness receipt transparency | Preserve every v1.493–v1.501 artifact and request/quorum path, structurally validate one canonical verified transport receipt, normalize its exact receipt, checkpoint, request, response, and witness identities into the existing signed hash-chain log, and reuse its anchor, consistency, gossip, witness rotation, and quorum controls without claiming verifier-bound admission, protected log state, trusted time, external receipt authenticity or publication, global non-equivocation, operational independence, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2129,13 +2130,12 @@ non-equivocation, trusted time, independent people or organizations, secure key
 custody, legal identity, capacity, ordering, payment, and exactly-once
 execution remain unproved.
 
-The current v1.501.0 milestone preserves every v1.493–v1.500 wire artifact and
-the unchanged witness-quorum command. One explicit request sends only the
-accepted checkpoint trust state to a no-redirect HTTPS endpoint under a shared
-1–600 second deadline and 1 MiB response ceiling. Authentication may pin one
-direct Ed25519 key or one current generation-chained witness trust state, never
-both, while optional Bearer credentials come only from a named environment
-variable.
+The v1.501.0 milestone preserves every v1.493–v1.500 wire artifact and the
+unchanged witness-quorum command. One explicit request sends only the accepted
+checkpoint trust state to a no-redirect HTTPS endpoint under a shared 1–600
+second deadline and 1 MiB response ceiling. Authentication may pin one direct
+Ed25519 key or one current generation-chained witness trust state, never both,
+while optional Bearer credentials come only from a named environment variable.
 
 Before network I/O, the client replays the canonical complete history and
 reconstructs the supplied checkpoint trust state. It accepts only the exact
@@ -2145,12 +2145,22 @@ and disjointness from every historical root and embedded governance authority.
 The witness and a 64 KiB receipt are published together only after exact input
 revalidation.
 
-The receipt hashes the exact history, checkpoint trust state, HTTP request and
-response, and normalized witness while recording the endpoint, response size,
-evaluation time, witness identity/key, and optional trust-state digest and
-generation. It remains local evidence: protected storage, trusted time,
-endpoint legal identity, independent operators, global non-equivocation,
-external receipt signatures/publication, capacity, ordering, payment, and
+The current v1.502.0 milestone admits that closed canonical receipt as a new
+event kind in the existing approval transparency log. Append rejects unknown
+fields, non-canonical bytes, false verification decisions, invalid bounds, weak
+witness keys, malformed trust-generation bindings, and invalid endpoint or
+digest fields before creating a new log snapshot. The normalized event binds
+the compact receipt digest, exact checkpoint digest, request digest, response
+digest, and witness identity.
+
+The existing log then supplies monotonic sequence and time, predecessor and
+self-digests, signed checkpoints, public anchors, consistency proofs, gossip,
+remote observers, witness rotation, and witness quorum without another
+transparency format. This is structural admission by the log operator: it does
+not replay the retained complete history, checkpoint trust state, exact
+response bytes, or witness signature at append time. Protected log storage,
+trusted time, endpoint or receipt authenticity, independent operators, global
+non-equivocation, external publication, capacity, ordering, payment, and
 exactly-once execution remain unproved.
 
-The planned follow-up is receipt transparency in v1.502.0.
+The planned follow-up is verifier-bound receipt admission in v1.503.0.
