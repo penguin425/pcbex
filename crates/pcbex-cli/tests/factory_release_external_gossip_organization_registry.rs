@@ -1,14 +1,18 @@
 #![cfg(unix)]
 
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 fn binary() -> PathBuf {
@@ -35,6 +39,70 @@ fn path(value: &Path) -> &str {
 
 fn public(secret: [u8; 32]) -> String {
     hex::encode(SigningKey::from_bytes(&secret).verifying_key().to_bytes())
+}
+
+fn serve_json_once(
+    response_body: Vec<u8>,
+    expected_bearer: Option<&str>,
+) -> (String, JoinHandle<Value>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let expected_bearer = expected_bearer.map(str::to_string);
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let (header_end, content_length) = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert_ne!(read, 0, "remote witness request ended before its body");
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(offset) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let header_end = offset + 4;
+                let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                if request.len() >= header_end + content_length {
+                    break (header_end, content_length);
+                }
+            }
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        assert!(headers.starts_with("POST /v1/factory-registry-history-checkpoint HTTP/1.1\r\n"));
+        assert!(
+            headers
+                .lines()
+                .any(|line| { line.eq_ignore_ascii_case("content-type: application/json") })
+        );
+        if let Some(token) = expected_bearer {
+            assert!(headers.lines().any(|line| {
+                line.eq_ignore_ascii_case(&format!("authorization: Bearer {token}"))
+            }));
+        }
+        let request_body = &request[header_end..header_end + content_length];
+        let request_value: Value = serde_json::from_slice(request_body).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response_body.len()
+        )
+        .unwrap();
+        stream.write_all(&response_body).unwrap();
+        stream.flush().unwrap();
+        request_value
+    });
+    (
+        format!("http://{address}/v1/factory-registry-history-checkpoint"),
+        handle,
+    )
 }
 
 #[derive(Serialize)]
@@ -3128,6 +3196,339 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         fs::read(&witness_a).unwrap()
     );
 
+    let remote_witness_b = root.join("registry-history.checkpoint.witness-b.remote.json");
+    let remote_witness_b_receipt =
+        root.join("registry-history.checkpoint.witness-b.remote.receipt.json");
+    let (endpoint, server) = serve_json_once(fs::read(&witness_b).unwrap(), Some("bounded-token"));
+    let remote = Command::new(binary())
+        .args([
+            "request-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+            "--history",
+            path(&history),
+            "--checkpoint-trust-state",
+            path(&checkpoint_trust),
+            "--endpoint",
+            &endpoint,
+            "--public-key",
+            path(&witness_b_public),
+            "--bearer-token-env",
+            "PCBEX_FACTORY_REGISTRY_WITNESS_TOKEN",
+            "--timeout-seconds",
+            "10",
+            "--evaluated-at-unix",
+            "5400",
+            "--output",
+            path(&remote_witness_b),
+            "--receipt-output",
+            path(&remote_witness_b_receipt),
+            "--allow-http-loopback",
+        ])
+        .env("PCBEX_FACTORY_REGISTRY_WITNESS_TOKEN", "bounded-token")
+        .output()
+        .unwrap();
+    assert!(
+        remote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remote.stderr)
+    );
+    let request = server.join().unwrap();
+    assert_eq!(request["schema_version"], 1);
+    assert_eq!(
+        request["protocol"],
+        "pcbex-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-v1"
+    );
+    assert_eq!(request["checkpoint_trust_state"], checkpoint_trust_value);
+    assert_eq!(
+        fs::read(&remote_witness_b).unwrap(),
+        fs::read(&witness_b).unwrap()
+    );
+    let remote_witness_b_receipt_value: Value =
+        serde_json::from_slice(&fs::read(&remote_witness_b_receipt).unwrap()).unwrap();
+    assert!(
+        !fs::read_to_string(&remote_witness_b_receipt)
+            .unwrap()
+            .contains("bounded-token")
+    );
+    assert_eq!(remote_witness_b_receipt_value["verified"], true);
+    assert_eq!(remote_witness_b_receipt_value["witness_id"], "witness-b");
+    assert_eq!(remote_witness_b_receipt_value["generation"], 5);
+    assert_eq!(
+        remote_witness_b_receipt_value["history_sha256"],
+        hex::encode(Sha256::digest(fs::read(&history).unwrap()))
+    );
+    assert_eq!(
+        remote_witness_b_receipt_value["checkpoint_trust_state_sha256"],
+        hex::encode(Sha256::digest(fs::read(&checkpoint_trust).unwrap()))
+    );
+    assert_eq!(
+        remote_witness_b_receipt_value["response_sha256"],
+        hex::encode(Sha256::digest(fs::read(&witness_b).unwrap()))
+    );
+    assert_eq!(
+        remote_witness_b_receipt_value["witness_key_trust_state_sha256"],
+        Value::Null
+    );
+    assert_eq!(
+        remote_witness_b_receipt_value["witness_key_generation"],
+        Value::Null
+    );
+    let normalized_remote_receipt = root.join("remote-witness.receipt.normalized.json");
+    successful(&[
+        "validate-remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-receipt",
+        path(&remote_witness_b_receipt),
+        "--output",
+        path(&normalized_remote_receipt),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_remote_receipt).unwrap(),
+        fs::read(&remote_witness_b_receipt).unwrap()
+    );
+
+    let remote_rotated_witness_a =
+        root.join("registry-history.checkpoint.witness-a.rotated.remote.json");
+    let remote_rotated_witness_a_receipt =
+        root.join("registry-history.checkpoint.witness-a.rotated.remote.receipt.json");
+    let (endpoint, server) = serve_json_once(fs::read(&rotated_witness_a).unwrap(), None);
+    let remote = run(&[
+        "request-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--endpoint",
+        &endpoint,
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--timeout-seconds",
+        "10",
+        "--evaluated-at-unix",
+        "5400",
+        "--output",
+        path(&remote_rotated_witness_a),
+        "--receipt-output",
+        path(&remote_rotated_witness_a_receipt),
+        "--allow-http-loopback",
+    ]);
+    assert!(
+        remote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remote.stderr)
+    );
+    server.join().unwrap();
+    assert_eq!(
+        fs::read(&remote_rotated_witness_a).unwrap(),
+        fs::read(&rotated_witness_a).unwrap()
+    );
+    let remote_rotated_receipt_value: Value =
+        serde_json::from_slice(&fs::read(&remote_rotated_witness_a_receipt).unwrap()).unwrap();
+    assert_eq!(remote_rotated_receipt_value["witness_id"], "witness-a");
+    assert_eq!(remote_rotated_receipt_value["witness_key_generation"], 1);
+    assert_eq!(
+        remote_rotated_receipt_value["witness_key_trust_state_sha256"],
+        hex::encode(Sha256::digest(fs::read(&witness_a_rotated_trust).unwrap()))
+    );
+
+    let mixed_direct_quorum = root.join("registry-history.checkpoint.mixed-remote-quorum.json");
+    successful(&[
+        "verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--witness",
+        path(&witness_a),
+        "--witness",
+        path(&remote_witness_b),
+        "--trusted-witness-id",
+        "witness-a",
+        "--trusted-witness-id",
+        "witness-b",
+        "--trusted-witness-public-key",
+        path(&witness_a_public),
+        "--trusted-witness-public-key",
+        path(&witness_b_public),
+        "--minimum-witnesses",
+        "2",
+        "--evaluated-at-unix",
+        "5400",
+        "--require-quorum",
+        "--output",
+        path(&mixed_direct_quorum),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&mixed_direct_quorum).unwrap()).unwrap()["quorum_met"],
+        true
+    );
+    let mixed_trust_quorum =
+        root.join("registry-history.checkpoint.mixed-remote-trust-quorum.json");
+    successful(&[
+        "verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses",
+        "--history",
+        path(&history),
+        "--checkpoint",
+        path(&checkpoint),
+        "--witness",
+        path(&witness_b),
+        "--witness",
+        path(&remote_rotated_witness_a),
+        "--witness-trust-state",
+        path(&witness_b_trust),
+        "--witness-trust-state",
+        path(&witness_a_rotated_trust),
+        "--minimum-witnesses",
+        "2",
+        "--evaluated-at-unix",
+        "5400",
+        "--require-quorum",
+        "--output",
+        path(&mixed_trust_quorum),
+    ]);
+
+    let compact_response = compact_json_source(&fs::read(&witness_b).unwrap());
+    let (endpoint, server) = serve_json_once(compact_response, None);
+    let noncanonical_witness = root.join("registry-history.checkpoint.noncanonical.remote.json");
+    let noncanonical_receipt =
+        root.join("registry-history.checkpoint.noncanonical.remote.receipt.json");
+    let noncanonical = run(&[
+        "request-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--endpoint",
+        &endpoint,
+        "--public-key",
+        path(&witness_b_public),
+        "--evaluated-at-unix",
+        "5400",
+        "--output",
+        path(&noncanonical_witness),
+        "--receipt-output",
+        path(&noncanonical_receipt),
+        "--allow-http-loopback",
+    ]);
+    assert!(!noncanonical.status.success());
+    assert!(String::from_utf8_lossy(&noncanonical.stderr).contains("not canonical pretty JSON"));
+    server.join().unwrap();
+    assert!(!noncanonical_witness.exists());
+    assert!(!noncanonical_receipt.exists());
+
+    let (endpoint, server) = serve_json_once(fs::read(&witness_b).unwrap(), None);
+    let substituted_witness = root.join("registry-history.checkpoint.substituted.remote.json");
+    let substituted_receipt =
+        root.join("registry-history.checkpoint.substituted.remote.receipt.json");
+    let substituted = run(&[
+        "request-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--endpoint",
+        &endpoint,
+        "--witness-key-trust-state",
+        path(&witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5400",
+        "--output",
+        path(&substituted_witness),
+        "--receipt-output",
+        path(&substituted_receipt),
+        "--allow-http-loopback",
+    ]);
+    assert!(!substituted.status.success());
+    assert!(String::from_utf8_lossy(&substituted.stderr).contains("identity does not match"));
+    server.join().unwrap();
+    assert!(!substituted_witness.exists());
+    assert!(!substituted_receipt.exists());
+
+    #[derive(Serialize)]
+    struct MaliciousWitnessPayload<'a> {
+        domain: &'static str,
+        registry_id: &'a str,
+        generation: u64,
+        checkpoint_sha256: &'a str,
+        witness_id: &'a str,
+        witnessed_at_unix: u64,
+    }
+    #[derive(Serialize)]
+    struct MaliciousWitness<'a> {
+        schema_version: u32,
+        registry_id: &'a str,
+        generation: u64,
+        checkpoint_sha256: &'a str,
+        witness_id: &'a str,
+        witnessed_at_unix: u64,
+        algorithm: &'static str,
+        public_key: String,
+        signature: String,
+    }
+    let checkpoint_sha256 = hex::encode(Sha256::digest(compact_json_source(
+        &fs::read(&checkpoint).unwrap(),
+    )));
+    let malicious_payload = MaliciousWitnessPayload {
+        domain: "pcbex-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-v1",
+        registry_id: "portable-history",
+        generation: 5,
+        checkpoint_sha256: &checkpoint_sha256,
+        witness_id: "governance-reuse",
+        witnessed_at_unix: 5_303,
+    };
+    let governance_signing_key = SigningKey::from_bytes(&[45; 32]);
+    let malicious_witness = MaliciousWitness {
+        schema_version: 1,
+        registry_id: "portable-history",
+        generation: 5,
+        checkpoint_sha256: &checkpoint_sha256,
+        witness_id: "governance-reuse",
+        witnessed_at_unix: 5_303,
+        algorithm: "ed25519",
+        public_key: hex::encode(governance_signing_key.verifying_key().to_bytes()),
+        signature: hex::encode(
+            governance_signing_key
+                .sign(&serde_json::to_vec(&malicious_payload).unwrap())
+                .to_bytes(),
+        ),
+    };
+    let malicious_witness_path = root.join("registry-history.checkpoint.malicious-witness.json");
+    fs::write(
+        &malicious_witness_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&malicious_witness).unwrap()
+        ),
+    )
+    .unwrap();
+    let (endpoint, server) = serve_json_once(fs::read(&malicious_witness_path).unwrap(), None);
+    let reused_role_witness = root.join("registry-history.checkpoint.reused-role.remote.json");
+    let reused_role_receipt =
+        root.join("registry-history.checkpoint.reused-role.remote.receipt.json");
+    let reused_role = run(&[
+        "request-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness",
+        "--history",
+        path(&history),
+        "--checkpoint-trust-state",
+        path(&checkpoint_trust),
+        "--endpoint",
+        &endpoint,
+        "--public-key",
+        path(&governance_keys[4].1),
+        "--evaluated-at-unix",
+        "5400",
+        "--output",
+        path(&reused_role_witness),
+        "--receipt-output",
+        path(&reused_role_receipt),
+        "--allow-http-loopback",
+    ]);
+    assert!(!reused_role.status.success());
+    assert!(
+        String::from_utf8_lossy(&reused_role.stderr)
+            .contains("reuses a registry root or governance key")
+    );
+    server.join().unwrap();
+    assert!(!reused_role_witness.exists());
+    assert!(!reused_role_receipt.exists());
+
     let witness_quorum = root.join("registry-history.checkpoint.witness-quorum.json");
     successful(&[
         "verify-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witnesses",
@@ -3452,6 +3853,10 @@ fn publishes_closed_bounded_registry_schemas() {
         (
             "signed-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-schema",
             "history-checkpoint-witness.schema.json",
+        ),
+        (
+            "remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-receipt-schema",
+            "remote-history-checkpoint-witness-receipt.schema.json",
         ),
         (
             "factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-schema",

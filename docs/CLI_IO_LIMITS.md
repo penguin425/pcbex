@@ -893,7 +893,22 @@ The v1.500 witness trust state and dual-signed rotation are each capped at
 exactly one, binds the previous rotation digest, uses a distinct non-weak key,
 and carries a nondecreasing time no greater than `999999999999999`.
 
-All six artifacts require canonical pretty JSON plus LF and reject duplicate
+The v1.501 remote witness adapter keeps the complete canonical history local,
+posts only the accepted checkpoint trust state, and caps the HTTP response at
+1 MiB under one 1–600 second deadline. Redirects are disabled. Production URLs
+must use HTTPS and cannot contain userinfo or a query; an optional Bearer token
+is read from a validated environment-variable name and never enters either
+output. The returned document must also satisfy the unchanged 32 KiB canonical
+signed-witness limit.
+
+The hash-bound remote transport receipt is capped at 64 KiB. It records the
+exact history, checkpoint trust state, request, response, and normalized witness
+SHA-256 values plus response bytes, endpoint, evaluation time, witness identity
+and key, and optional trust-state digest/generation. Witness and receipt outputs
+are retained as one alias-free no-clobber set only after complete-history
+verification and exact input revalidation.
+
+All seven retained artifacts require canonical pretty JSON plus LF and reject duplicate
 or unknown keys. Rotation apply publishes the next trust state and exported
 public key as one alias-free no-clobber set after exact input revalidation.
 Quorum verification accepts direct identity/key pairs or trust-state files,

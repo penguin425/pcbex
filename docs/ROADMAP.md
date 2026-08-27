@@ -213,6 +213,7 @@ auditable release.
 | v1.498.0 | Portable factory-release external-gossip registry history audit | Export exact canonical genesis and all five typed selected-ledger event kinds into one bounded history, independently replay the production verifiers on any platform, and atomically emit a per-generation audit plus computed final registry without trusting a copied snapshot or claiming latest-head proof, host-ledger rollback resistance, trusted time, global non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.499.0 | Witnessed factory-release external-gossip registry history checkpoints | Replay one portable five-event history, bind its exact audit and computed head under the final retained root, advance an immutable local trust state without rollback, equivocation, truncation, or time reversal, and require a fresh threshold of distinct role-disjoint checkpoint witnesses without claiming protected baseline storage, global non-equivocation, trusted time, real organizational independence, legal identity, ordering, payment, or exactly-once execution |
 | v1.500.0 | Factory-release registry-history witness key rotation | Preserve every v1.493–v1.499 wire artifact, bind each checkpoint-witness identity to a generation-zero key, advance it only through old/new dual-signed one-generation digest-chained transitions, and let the unchanged quorum consume current trust states while rejecting stale keys without claiming protected trust storage, global non-equivocation, trusted time, independent key custody, legal identity, ordering, payment, or exactly-once execution |
+| v1.501.0 | Remote factory-release registry-history checkpoint witnesses | Preserve every v1.493–v1.500 artifact and quorum interface, acquire one canonical checkpoint witness through bounded no-redirect HTTPS using either a directly pinned key or current witness trust state, immediately replay the exact complete local history before atomic witness/receipt retention, and hash-bind the history, checkpoint trust state, request, response, witness, key mode, endpoint, and time without claiming protected local state, trusted time, endpoint legal identity, operational independence, global non-equivocation, receipt publication, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2128,27 +2129,28 @@ non-equivocation, trusted time, independent people or organizations, secure key
 custody, legal identity, capacity, ordering, payment, and exactly-once
 execution remain unproved.
 
-The current v1.500.0 milestone preserves every v1.493–v1.499 wire artifact and
-adds identity-bound checkpoint-witness trust. A generation-zero state pins one
-stable witness identity and non-weak Ed25519 public key.
+The current v1.501.0 milestone preserves every v1.493–v1.500 wire artifact and
+the unchanged witness-quorum command. One explicit request sends only the
+accepted checkpoint trust state to a no-redirect HTTPS endpoint under a shared
+1–600 second deadline and 1 MiB response ceiling. Authentication may pin one
+direct Ed25519 key or one current generation-chained witness trust state, never
+both, while optional Bearer credentials come only from a named environment
+variable.
 
-Each rotation advances exactly one of 4,096 generations. The old and successor
-keys sign one domain-separated payload that binds both generations, the prior
-rotation digest, both keys, and a nondecreasing explicit time. Applying it
-authenticates both signatures before atomically publishing the successor trust
-state and current public key; exact replay, gaps, forks, same-key transitions,
-signature substitution, and time reversal fail closed.
+Before network I/O, the client replays the canonical complete history and
+reconstructs the supplied checkpoint trust state. It accepts only the exact
+canonical signed-witness bytes, then reuses the complete-history verifier to
+check checkpoint binding, freshness, signature, selected identity/key trust,
+and disjointness from every historical root and embedded governance authority.
+The witness and a 64 KiB receipt are published together only after exact input
+revalidation.
 
-Quorum verification accepts either the unchanged v1.499 identity/key pairs or
-the new trust-state files, never both. It resolves each current key from the
-retained state and then reuses the complete-history verifier, so a stale state
-causes key-substitution failure and every current witness key remains disjoint
-from all historical registry roots and embedded governance authorities.
-
-The trust chain protects only consumers that retain the correct prior state.
-Protected baseline storage, global non-equivocation, trusted time, independent
-people or key custody, legal identity, capacity, ordering, payment, and
+The receipt hashes the exact history, checkpoint trust state, HTTP request and
+response, and normalized witness while recording the endpoint, response size,
+evaluation time, witness identity/key, and optional trust-state digest and
+generation. It remains local evidence: protected storage, trusted time,
+endpoint legal identity, independent operators, global non-equivocation,
+external receipt signatures/publication, capacity, ordering, payment, and
 exactly-once execution remain unproved.
 
-The planned follow-up sequence is bounded remote witnesses in v1.501.0 and
-receipt transparency in v1.502.0.
+The planned follow-up is receipt transparency in v1.502.0.
