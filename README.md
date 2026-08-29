@@ -69,7 +69,8 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 
 - **Witness and admit portable registry heads:** Replay complete governance
   history, rotate witness trust, acquire hash-bound remote endorsements, and
-  require a distinct verifier-bound receipt quorum before signed-log admission.
+  require a distinct verifier-bound receipt quorum before issuing a
+  domain-separated checkpoint.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.
@@ -268,6 +269,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Verifier-bound registry receipt admission v1 | Replay complete history, retained checkpoint trust, exact response bytes, current witness trust, freshness, and signature before append | [Receipt admission guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_ADMISSION.md) |
 | Registry receipt admission quorum v1 | Require 2–100 distinct independently reverified receipts and bind the exact resulting log to a canonical report | [Receipt quorum guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_ADMISSION.md) |
 | Quorum-bound factory receipt-log signing v1 | Sign only the exact log and factory-receipt suffix bound by a successful quorum report | [Quorum signing guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md) |
+| Dedicated factory receipt-quorum checkpoint v1 | Sign the exact quorum report, registry checkpoint, threshold, and log state under a factory-specific domain | [Dedicated checkpoint guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -325,6 +327,7 @@ the security model for each adapter.
 | [Verifier-bound Registry Receipt Admission](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_ADMISSION.md) | Re-verify complete retained evidence and witness trust before immutable append |
 | [Registry Receipt Quorum Admission](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_ADMISSION.md) | Require a distinct threshold and bind the canonical member set to the resulting log |
 | [Factory Receipt-quorum Log Signing](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md) | Issue a checkpoint only for the exact quorum-bound log and suffix |
+| [Dedicated Factory Receipt-quorum Checkpoint](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) | Prevent cross-protocol signature reuse while binding the exact quorum evidence |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the

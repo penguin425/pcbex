@@ -945,6 +945,15 @@ byte count and SHA-256 before one alias-free no-clobber generic checkpoint is
 published. The existing checkpoint schema and verification limits do not
 change.
 
+The v1.506 dedicated checkpoint keeps the same 128 MiB log, 128 KiB quorum
+report, 100-member, and 1 KiB key-file bounds. Its canonical checkpoint and
+verification documents are each capped at 64 KiB, require closed
+duplicate-key-free pretty JSON plus LF, and bind the normalized report digest,
+registry checkpoint, threshold/result, complete log state, and signer beneath
+the factory receipt-quorum signature domain. Signing validates public evidence
+before key access; signing and verification re-read every input before one
+alias-free no-clobber output is published.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

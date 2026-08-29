@@ -156,6 +156,10 @@ boundary document for the artifact you plan to produce or trust.
   — issue a generic approval-log checkpoint only when the complete log and its
   factory-receipt suffix exactly match one successful quorum report.
 
+- [Domain-separated Factory Receipt-quorum Checkpoints](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
+  — bind the exact quorum report, registry checkpoint, threshold, and log state
+  under a factory-specific signature domain.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

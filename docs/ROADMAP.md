@@ -218,6 +218,7 @@ auditable release.
 | v1.503.0 | Verifier-bound factory-release registry receipt admission | Preserve every v1.493–v1.502 artifact while adding one dedicated immutable-admission path that reloads and audits the exact complete registry history, reconstructs retained checkpoint trust and the exact request, matches the retained response bytes and receipt/witness digests, requires direct or current generation-bound witness trust, and re-verifies freshness, role disjointness, and the Ed25519 signature before one alias-free no-clobber append without claiming multi-witness admission quorum, protected local state, trusted time, endpoint or receipt authenticity, global publication/non-equivocation, independent operation, legal identity, ordering, payment, or exactly-once execution |
 | v1.504.0 | Verifier-bound factory-release registry receipt admission quorum | Preserve every v1.493–v1.503 wire artifact and single-receipt path while replaying one exact complete history and checkpoint context for 1–100 canonical receipt/response pairs, independently re-verifying every direct-key or generation-bound trust-state member, requiring a configurable 2–100 threshold with distinct witness identities, keys, receipt, response, and witness digests, canonicalizing append order by witness ID, and publishing an exact-log-bound quorum report with the no-clobber log snapshot only after all inputs pass final byte/SHA-256 revalidation, without claiming protected local state, trusted time, atomic same-principal snapshots, endpoint or legal identity, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.505.0 | Quorum-bound factory receipt-log signing | Preserve the v1.504 report and generic approval checkpoint wire formats while adding a dedicated signing gate that requires a met canonical receipt quorum, matches the exact approval-log identity, count, head, and complete digest, verifies every canonically ordered factory-receipt suffix event against its report member, rejects partial, extended, substituted, unbound, or unrelated logs before reading private signing material, and writes one alias-free no-clobber generic checkpoint without claiming protected local state, raw receipt/history replay at signing time, a receipt-quorum-specific signature domain, trusted time, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
+| v1.506.0 | Domain-separated signed factory receipt-quorum checkpoints | Preserve every v1.501–v1.505 wire artifact and generic checkpoint path while adding closed canonical dedicated checkpoint and verification contracts that sign the normalized quorum-report digest, registry identity/generation/checkpoint, exact approval-log identity/count/head/digest, enforced threshold/result, and signer under a factory receipt-quorum-specific Ed25519 domain, reject generic or approval-registry domain substitution, validate public evidence before key access, and re-read every input before alias-free no-clobber publication without claiming raw receipt/history replay at checkpoint time, protected files or keys, trusted time, independent witnesses or operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2201,7 +2202,7 @@ snapshot. It does not protect retained state or the clock, prove independent
 organizations or global publication/non-equivocation, authenticate an endpoint
 or legal identity, or establish ordering, payment, or exactly-once execution.
 
-The current v1.505.0 milestone adds a dedicated gate before generic approval-log
+The released v1.505.0 milestone adds a dedicated gate before generic approval-log
 checkpoint signing. It accepts only one canonical, successful v1.504 report and
 the exact log identified by that report. The gate validates the complete log
 chain, ID, entry count, head, full digest, and every suffix event's factory
@@ -2215,5 +2216,21 @@ protect retained files or keys, or establish trusted time, independent
 operation, global publication/non-equivocation, ordering, payment, or
 exactly-once execution.
 
-The planned follow-up is a domain-separated signed factory receipt-quorum
-checkpoint in v1.506.0.
+The current v1.506.0 milestone adds a closed dedicated checkpoint and
+verification contract. It hashes the normalized complete v1.504 report, then
+signs that digest together with the registry identity, generation, checkpoint,
+exact approval-log state, threshold/result, and signer beneath a
+factory-specific Ed25519 domain.
+
+Signing repeats the strict v1.505 public-evidence gate before reading the key.
+Signing and verification re-read every input before publishing one canonical,
+alias-free, no-clobber artifact. Generic approval checkpoints and the parallel
+approval-registry receipt-quorum domain cannot substitute.
+
+The checkpoint does not replay raw v1.504 admission evidence, protect local
+files or keys, establish trusted time, prove independent operation or global
+publication/non-equivocation, or establish ordering, payment, or exactly-once
+execution.
+
+The planned follow-up is an independent witness quorum over the dedicated
+factory receipt-quorum checkpoint in v1.507.0.

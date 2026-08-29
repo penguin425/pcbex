@@ -97,5 +97,6 @@ signing; v1.504 admission owns those checks.
 
 It also does not protect local files or keys, add a receipt-quorum-specific
 signature domain, establish trusted time, prove independent operators, or
-provide global publication and non-equivocation. Domain-separated factory
-receipt-quorum checkpoints are the next boundary.
+provide global publication and non-equivocation. Use the v1.506
+[domain-separated checkpoint](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
+when the signature itself must carry the factory receipt-quorum purpose.

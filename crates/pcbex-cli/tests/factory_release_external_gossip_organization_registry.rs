@@ -3509,9 +3509,135 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         true
     );
 
+    let dedicated_quorum_checkpoint =
+        root.join("registry-witness-receipts.direct-quorum.dedicated-checkpoint.json");
+    successful(&[
+        "sign-remote-factory-release-registry-history-receipt-quorum-log-checkpoint",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--private-key",
+        path(&witness_a_next_secret),
+        "--signer-id",
+        "factory-release-registry-receipt-quorum",
+        "--output",
+        path(&dedicated_quorum_checkpoint),
+    ]);
+    let dedicated_checkpoint_value: Value =
+        serde_json::from_slice(&fs::read(&dedicated_quorum_checkpoint).unwrap()).unwrap();
+    assert_eq!(dedicated_checkpoint_value["approval_log_entry_count"], 2);
+    assert_eq!(dedicated_checkpoint_value["minimum_witnesses"], 2);
+    assert_eq!(dedicated_checkpoint_value["valid_witnesses"], 2);
+    assert_eq!(
+        dedicated_checkpoint_value["approval_log_sha256"],
+        direct_quorum_value["approval_log_sha256"]
+    );
+
+    let dedicated_quorum_verification =
+        root.join("registry-witness-receipts.direct-quorum.dedicated-verification.json");
+    successful(&[
+        "verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoint",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--public-key",
+        path(&witness_a_next_public),
+        "--output",
+        path(&dedicated_quorum_verification),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&dedicated_quorum_verification).unwrap())
+            .unwrap()["verified"],
+        true
+    );
+
+    let dedicated_checkpoint_schema =
+        root.join("registry-witness-receipts.dedicated-checkpoint.schema.json");
+    successful(&[
+        "signed-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-schema",
+        "--output",
+        path(&dedicated_checkpoint_schema),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&dedicated_checkpoint_schema).unwrap()).unwrap()
+            ["additionalProperties"],
+        false
+    );
+    let dedicated_verification_schema =
+        root.join("registry-witness-receipts.dedicated-verification.schema.json");
+    successful(&[
+        "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-verification-schema",
+        "--output",
+        path(&dedicated_verification_schema),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&dedicated_verification_schema).unwrap())
+            .unwrap()["additionalProperties"],
+        false
+    );
+    let normalized_dedicated_checkpoint =
+        root.join("registry-witness-receipts.dedicated-checkpoint.normalized.json");
+    successful(&[
+        "validate-signed-remote-factory-release-registry-history-receipt-quorum-log-checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--output",
+        path(&normalized_dedicated_checkpoint),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_dedicated_checkpoint).unwrap(),
+        fs::read(&dedicated_quorum_checkpoint).unwrap()
+    );
+
+    let tampered_dedicated_checkpoint =
+        root.join("registry-witness-receipts.dedicated-checkpoint.tampered.json");
+    let mut tampered_checkpoint_value = dedicated_checkpoint_value;
+    tampered_checkpoint_value["valid_witnesses"] = Value::from(3);
+    let mut tampered_checkpoint_source =
+        serde_json::to_vec_pretty(&tampered_checkpoint_value).unwrap();
+    tampered_checkpoint_source.push(b'\n');
+    fs::write(&tampered_dedicated_checkpoint, tampered_checkpoint_source).unwrap();
+    let tampered_dedicated_verification =
+        root.join("registry-witness-receipts.dedicated-checkpoint.tampered-verification.json");
+    let tampered = run(&[
+        "verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoint",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&tampered_dedicated_checkpoint),
+        "--public-key",
+        path(&witness_a_next_public),
+        "--output",
+        path(&tampered_dedicated_verification),
+    ]);
+    assert!(!tampered.status.success());
+    assert!(!tampered_dedicated_verification.exists());
+
     let mismatched_quorum_checkpoint =
         root.join("registry-witness-receipts.direct-quorum.mismatched-checkpoint.json");
     let private_key_must_not_be_read = root.join("factory-quorum-forbidden-missing.key");
+    let mismatched_dedicated_checkpoint =
+        root.join("registry-witness-receipts.direct-quorum.mismatched-dedicated-checkpoint.json");
+    let mismatched_dedicated = run(&[
+        "sign-remote-factory-release-registry-history-receipt-quorum-log-checkpoint",
+        path(&receipt_log_empty),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--private-key",
+        path(&private_key_must_not_be_read),
+        "--signer-id",
+        "factory-release-registry-receipt-quorum",
+        "--output",
+        path(&mismatched_dedicated_checkpoint),
+    ]);
+    assert!(!mismatched_dedicated.status.success());
+    assert!(
+        String::from_utf8_lossy(&mismatched_dedicated.stderr)
+            .contains("does not match the remote factory release receipt quorum log binding")
+    );
+    assert!(!mismatched_dedicated_checkpoint.exists());
     let mismatched = run(&[
         "sign-approval-log-with-remote-factory-release-registry-history-checkpoint-witness-receipt-quorum",
         path(&receipt_log_empty),
@@ -4369,6 +4495,14 @@ fn publishes_closed_bounded_registry_schemas() {
         (
             "remote-factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-receipt-quorum-report-schema",
             "remote-history-checkpoint-witness-receipt-quorum-report.schema.json",
+        ),
+        (
+            "signed-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-schema",
+            "remote-history-receipt-quorum-log-checkpoint.schema.json",
+        ),
+        (
+            "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-verification-schema",
+            "remote-history-receipt-quorum-log-checkpoint-verification.schema.json",
         ),
         (
             "factory-release-state-transparency-external-gossip-organization-registry-history-checkpoint-witness-trust-state-schema",
