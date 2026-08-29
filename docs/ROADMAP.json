@@ -1064,6 +1064,11 @@
     {
       "id": "domain-separated-signed-factory-release-registry-witness-receipt-quorum-checkpoints",
       "release": "v1.506.0",
+      "status": "released"
+    },
+    {
+      "id": "independent-factory-release-registry-receipt-quorum-checkpoint-witnesses",
+      "release": "v1.507.0",
       "status": "current"
     }
   ]

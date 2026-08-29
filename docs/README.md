@@ -160,6 +160,10 @@ boundary document for the artifact you plan to produce or trust.
   — bind the exact quorum report, registry checkpoint, threshold, and log state
   under a factory-specific signature domain.
 
+- [Independent Factory Receipt-quorum Checkpoint Witnesses](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
+  — re-verify the dedicated checkpoint and require a fresh quorum of distinct,
+  role-separated witness keys.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
