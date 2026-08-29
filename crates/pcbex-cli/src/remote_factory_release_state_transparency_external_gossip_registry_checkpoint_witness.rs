@@ -3006,7 +3006,7 @@ mod tests {
                 &log,
                 &checkpoint,
                 &checkpoint_key.verifying_key().to_bytes(),
-                &[witness_a.clone()],
+                std::slice::from_ref(&witness_a),
                 &[[0; 32]],
                 2,
                 1_200,
