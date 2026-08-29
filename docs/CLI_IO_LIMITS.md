@@ -954,6 +954,15 @@ the factory receipt-quorum signature domain. Signing validates public evidence
 before key access; signing and verification re-read every input before one
 alias-free no-clobber output is published.
 
+The v1.507 checkpoint-witness command keeps the 128 MiB log, 128 KiB receipt
+quorum report, 64 KiB dedicated checkpoint, and 1 KiB key-file limits. Each
+canonical signed witness is capped at 64 KiB. Quorum verification accepts 1–100
+paired witness/key inputs, requires a 2–100 threshold, and caps its canonical
+report at 128 KiB. Witnessing re-verifies public evidence before private-key
+access; both operational commands re-read every input before alias-free,
+no-clobber publication. A valid below-threshold report is retained before the
+verification command returns nonzero.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

@@ -131,4 +131,6 @@ checks. It also does not protect local files or keys, establish trusted time,
 prove independent operation, publish evidence globally, establish
 non-equivocation, or place an order or payment.
 
-Independent witnesses over this dedicated checkpoint are the next boundary.
+The v1.507
+[independent checkpoint-witness boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
+re-verifies this exact evidence and requires fresh, distinct witness keys.
