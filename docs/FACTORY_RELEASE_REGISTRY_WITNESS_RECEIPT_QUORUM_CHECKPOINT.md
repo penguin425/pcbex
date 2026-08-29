@@ -134,3 +134,6 @@ non-equivocation, or place an order or payment.
 The v1.507
 [independent checkpoint-witness boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
 re-verifies this exact evidence and requires fresh, distinct witness keys.
+The v1.508
+[checkpoint-witness rotation boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
+then advances those identity-bound keys through retained dual-signed trust.

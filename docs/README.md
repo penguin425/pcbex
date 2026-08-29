@@ -164,6 +164,10 @@ boundary document for the artifact you plan to produce or trust.
   — re-verify the dedicated checkpoint and require a fresh quorum of distinct,
   role-separated witness keys.
 
+- [Factory Checkpoint-witness Key Rotation](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
+  — advance identity-bound dedicated witness trust through dual-signed,
+  generation- and digest-chained key transitions.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
