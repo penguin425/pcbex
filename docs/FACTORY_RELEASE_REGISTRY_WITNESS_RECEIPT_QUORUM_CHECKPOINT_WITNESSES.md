@@ -145,6 +145,8 @@ also does not protect local files or keys, establish trusted time or legal
 identity, publish evidence globally, guarantee non-equivocation, or place an
 order or payment.
 
-Generation-chained witness trust and key rotation are intentionally deferred to
-the next boundary. Until that contract exists, pin the direct witness public
-keys through deployment-owned configuration.
+The v1.508
+[key-rotation boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
+adds generation-chained trust without changing either v1.507 wire contract.
+Use direct public-key pins for static deployments or pair each witness with its
+current retained trust state when keys rotate.

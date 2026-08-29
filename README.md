@@ -271,6 +271,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Quorum-bound factory receipt-log signing v1 | Sign only the exact log and factory-receipt suffix bound by a successful quorum report | [Quorum signing guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md) |
 | Dedicated factory receipt-quorum checkpoint v1 | Sign the exact quorum report, registry checkpoint, threshold, and log state under a factory-specific domain | [Dedicated checkpoint guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) |
 | Independent factory checkpoint witnesses v1 | Re-verify the exact dedicated checkpoint and require fresh, distinct witness keys with signer-role separation | [Checkpoint witness guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) |
+| Factory checkpoint-witness rotation v1 | Advance retained identity-bound witness trust through dual-signed, generation- and digest-chained key transitions | [Checkpoint-witness rotation guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -330,6 +331,7 @@ the security model for each adapter.
 | [Factory Receipt-quorum Log Signing](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md) | Issue a checkpoint only for the exact quorum-bound log and suffix |
 | [Dedicated Factory Receipt-quorum Checkpoint](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) | Prevent cross-protocol signature reuse while binding the exact quorum evidence |
 | [Independent Factory Checkpoint Witnesses](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) | Require fresh, distinct endorsements of the exact dedicated checkpoint |
+| [Factory Checkpoint-witness Key Rotation](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) | Rotate trusted witness keys without changing the v1.507 witness or quorum-report formats |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the
