@@ -971,6 +971,14 @@ rotation SHA-256, and caps timestamps at `999999999999999`. Quorum verification
 accepts either 1–100 paired direct public keys or 1–100 paired trust states,
 never both. Every input is re-read before alias-free no-clobber publication.
 
+The v1.509 remote dedicated-checkpoint witness request keeps the 128 MiB log,
+128 KiB receipt-quorum report, 64 KiB checkpoint, 65-byte key, and 32 KiB trust
+state limits. The compact request is capped at 129 MiB. Transport accepts at
+most 1 MiB, then canonical witness parsing tightens a successful response to 64
+KiB. The canonical receipt is capped at 64 KiB; the timeout is 1–600 seconds
+with a 30-second default. Both outputs are alias-free and no-clobber, and every
+local input is re-read before publication.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

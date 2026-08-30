@@ -143,3 +143,8 @@ It does not protect private keys or retained files, establish trusted time or
 legal identity, prove that witness operators are independent, prevent global
 equivocation, publish evidence, place an order, approve payment, or guarantee
 exactly-once execution.
+
+The v1.509
+[remote acquisition boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+uses either a direct pin or the current trust state when it verifies a remotely
+returned, unchanged v1.507 witness.

@@ -45,9 +45,23 @@ fn serve_json_once(
     response_body: Vec<u8>,
     expected_bearer: Option<&str>,
 ) -> (String, JoinHandle<Value>) {
+    serve_json_once_at(
+        response_body,
+        expected_bearer,
+        "/v1/factory-registry-history-checkpoint",
+    )
+}
+
+fn serve_json_once_at(
+    response_body: Vec<u8>,
+    expected_bearer: Option<&str>,
+    request_path: &str,
+) -> (String, JoinHandle<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let expected_bearer = expected_bearer.map(str::to_string);
+    let request_path = request_path.to_string();
+    let endpoint_path = request_path.clone();
     let handle = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
         stream
@@ -76,7 +90,7 @@ fn serve_json_once(
             }
         };
         let headers = std::str::from_utf8(&request[..header_end]).unwrap();
-        assert!(headers.starts_with("POST /v1/factory-registry-history-checkpoint HTTP/1.1\r\n"));
+        assert!(headers.starts_with(&format!("POST {request_path} HTTP/1.1\r\n")));
         assert!(
             headers
                 .lines()
@@ -99,10 +113,7 @@ fn serve_json_once(
         stream.flush().unwrap();
         request_value
     });
-    (
-        format!("http://{address}/v1/factory-registry-history-checkpoint"),
-        handle,
-    )
+    (format!("http://{address}{endpoint_path}"), handle)
 }
 
 #[derive(Serialize)]
@@ -4041,6 +4052,375 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         path(&dedicated_checkpoint_witness_a_rotated),
     ]);
 
+    let remote_dedicated_checkpoint_witness_b =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness-b.remote.json");
+    let remote_dedicated_checkpoint_witness_b_receipt =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness-b.remote.receipt.json");
+    let (endpoint, server) = serve_json_once_at(
+        fs::read(&dedicated_checkpoint_witness_b).unwrap(),
+        Some("dedicated-bounded-token"),
+        "/v1/factory-receipt-quorum-checkpoint",
+    );
+    let remote = Command::new(binary())
+        .args([
+            "request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness",
+            path(&direct_receipt_quorum_log),
+            "--quorum-report",
+            path(&direct_receipt_quorum_report),
+            "--checkpoint",
+            path(&dedicated_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&receipt_quorum_checkpoint_public),
+            "--endpoint",
+            &endpoint,
+            "--witness-public-key",
+            path(&receipt_quorum_checkpoint_witness_b_public),
+            "--bearer-token-env",
+            "PCBEX_FACTORY_RECEIPT_QUORUM_WITNESS_TOKEN",
+            "--timeout-seconds",
+            "10",
+            "--evaluated-at-unix",
+            "5600",
+            "--output",
+            path(&remote_dedicated_checkpoint_witness_b),
+            "--receipt-output",
+            path(&remote_dedicated_checkpoint_witness_b_receipt),
+            "--allow-http-loopback",
+        ])
+        .env(
+            "PCBEX_FACTORY_RECEIPT_QUORUM_WITNESS_TOKEN",
+            "dedicated-bounded-token",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        remote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remote.stderr)
+    );
+    let request = server.join().unwrap();
+    assert_eq!(request["schema_version"], 1);
+    assert_eq!(
+        request["protocol"],
+        "pcbex-remote-factory-release-registry-receipt-quorum-log-checkpoint-witness-v1"
+    );
+    assert_eq!(request["quorum_report"], direct_quorum_value);
+    assert_eq!(request["approval_log"], direct_quorum_log_value);
+    assert_eq!(request["checkpoint"], dedicated_checkpoint_value);
+    assert_eq!(
+        fs::read(&remote_dedicated_checkpoint_witness_b).unwrap(),
+        fs::read(&dedicated_checkpoint_witness_b).unwrap()
+    );
+    let remote_dedicated_checkpoint_witness_b_receipt_source =
+        fs::read(&remote_dedicated_checkpoint_witness_b_receipt).unwrap();
+    let remote_dedicated_checkpoint_witness_b_receipt_value: Value =
+        serde_json::from_slice(&remote_dedicated_checkpoint_witness_b_receipt_source).unwrap();
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["adapter"],
+        "remote-factory-release-registry-receipt-quorum-log-checkpoint-witness-https-v1"
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["endpoint"],
+        endpoint
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["quorum_report_sha256"],
+        dedicated_checkpoint_value["quorum_report_sha256"]
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["quorum_report_source_sha256"],
+        hex::encode(Sha256::digest(
+            fs::read(&direct_receipt_quorum_report).unwrap()
+        ))
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["approval_log_source_sha256"],
+        hex::encode(Sha256::digest(
+            fs::read(&direct_receipt_quorum_log).unwrap()
+        ))
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["checkpoint_source_sha256"],
+        hex::encode(Sha256::digest(
+            fs::read(&dedicated_quorum_checkpoint).unwrap()
+        ))
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["response_sha256"],
+        hex::encode(Sha256::digest(
+            fs::read(&dedicated_checkpoint_witness_b).unwrap()
+        ))
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["witness_sha256"],
+        hex::encode(Sha256::digest(compact_json_source(
+            &fs::read(&dedicated_checkpoint_witness_b).unwrap()
+        )))
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["witness_key_trust_state_sha256"],
+        Value::Null
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["witness_key_generation"],
+        Value::Null
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_b_receipt_value["verified"],
+        true
+    );
+    assert!(
+        !String::from_utf8_lossy(&remote_dedicated_checkpoint_witness_b_receipt_source)
+            .contains("dedicated-bounded-token")
+    );
+
+    let remote_dedicated_checkpoint_witness_a =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness-a.remote.json");
+    let remote_dedicated_checkpoint_witness_a_receipt =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness-a.remote.receipt.json");
+    let (endpoint, server) = serve_json_once_at(
+        fs::read(&dedicated_checkpoint_witness_a_rotated).unwrap(),
+        None,
+        "/v1/factory-receipt-quorum-checkpoint",
+    );
+    successful(&[
+        "request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--endpoint",
+        &endpoint,
+        "--witness-trust-state",
+        path(&dedicated_checkpoint_witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&remote_dedicated_checkpoint_witness_a),
+        "--receipt-output",
+        path(&remote_dedicated_checkpoint_witness_a_receipt),
+        "--allow-http-loopback",
+    ]);
+    server.join().unwrap();
+    assert_eq!(
+        fs::read(&remote_dedicated_checkpoint_witness_a).unwrap(),
+        fs::read(&dedicated_checkpoint_witness_a_rotated).unwrap()
+    );
+    let remote_dedicated_checkpoint_witness_a_receipt_value: Value =
+        serde_json::from_slice(&fs::read(&remote_dedicated_checkpoint_witness_a_receipt).unwrap())
+            .unwrap();
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_a_receipt_value["witness_key_generation"],
+        1
+    );
+    assert_eq!(
+        remote_dedicated_checkpoint_witness_a_receipt_value["witness_key_trust_state_sha256"],
+        hex::encode(Sha256::digest(
+            fs::read(&dedicated_checkpoint_witness_a_rotated_trust).unwrap()
+        ))
+    );
+
+    let dedicated_checkpoint_witness_receipt_schema =
+        root.join("registry-witness-receipts.dedicated-checkpoint-witness.receipt.schema.json");
+    successful(&[
+        "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-schema",
+        "--output",
+        path(&dedicated_checkpoint_witness_receipt_schema),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(&dedicated_checkpoint_witness_receipt_schema).unwrap()
+        )
+        .unwrap()["additionalProperties"],
+        false
+    );
+    let normalized_dedicated_checkpoint_witness_receipt =
+        root.join("registry-witness-receipts.dedicated-checkpoint-witness.receipt.normalized.json");
+    successful(&[
+        "validate-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_dedicated_checkpoint_witness_a_receipt),
+        "--output",
+        path(&normalized_dedicated_checkpoint_witness_receipt),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_dedicated_checkpoint_witness_receipt).unwrap(),
+        fs::read(&remote_dedicated_checkpoint_witness_a_receipt).unwrap()
+    );
+
+    let remote_dedicated_checkpoint_witness_quorum =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness-quorum.remote.json");
+    successful(&[
+        "verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witnesses",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--witnesses",
+        path(&remote_dedicated_checkpoint_witness_b),
+        "--witnesses",
+        path(&remote_dedicated_checkpoint_witness_a),
+        "--witness-trust-states",
+        path(&dedicated_checkpoint_witness_b_trust),
+        "--witness-trust-states",
+        path(&dedicated_checkpoint_witness_a_rotated_trust),
+        "--minimum-witnesses",
+        "2",
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&remote_dedicated_checkpoint_witness_quorum),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(&remote_dedicated_checkpoint_witness_quorum).unwrap()
+        )
+        .unwrap()["quorum_met"],
+        true
+    );
+
+    let compact_remote_dedicated_checkpoint_witness =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness.compact.remote.json");
+    let compact_remote_dedicated_checkpoint_witness_receipt = root
+        .join("registry-witness-receipts.dedicated-checkpoint.witness.compact.remote.receipt.json");
+    let dedicated_checkpoint_witness_b_value: Value =
+        serde_json::from_slice(&fs::read(&dedicated_checkpoint_witness_b).unwrap()).unwrap();
+    let (endpoint, server) = serve_json_once_at(
+        serde_json::to_vec(&dedicated_checkpoint_witness_b_value).unwrap(),
+        None,
+        "/v1/factory-receipt-quorum-checkpoint",
+    );
+    let compact_response = run(&[
+        "request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--endpoint",
+        &endpoint,
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&compact_remote_dedicated_checkpoint_witness),
+        "--receipt-output",
+        path(&compact_remote_dedicated_checkpoint_witness_receipt),
+        "--allow-http-loopback",
+    ]);
+    server.join().unwrap();
+    assert!(!compact_response.status.success());
+    assert!(
+        String::from_utf8_lossy(&compact_response.stderr).contains("not canonical pretty JSON")
+    );
+    assert!(!compact_remote_dedicated_checkpoint_witness.exists());
+    assert!(!compact_remote_dedicated_checkpoint_witness_receipt.exists());
+
+    let stale_trust_remote_dedicated_checkpoint_witness =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness.stale-trust.remote.json");
+    let stale_trust_remote_dedicated_checkpoint_witness_receipt = root.join(
+        "registry-witness-receipts.dedicated-checkpoint.witness.stale-trust.remote.receipt.json",
+    );
+    let (endpoint, server) = serve_json_once_at(
+        fs::read(&dedicated_checkpoint_witness_a).unwrap(),
+        None,
+        "/v1/factory-receipt-quorum-checkpoint",
+    );
+    let stale_trust = run(&[
+        "request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--endpoint",
+        &endpoint,
+        "--witness-trust-state",
+        path(&dedicated_checkpoint_witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&stale_trust_remote_dedicated_checkpoint_witness),
+        "--receipt-output",
+        path(&stale_trust_remote_dedicated_checkpoint_witness_receipt),
+        "--allow-http-loopback",
+    ]);
+    server.join().unwrap();
+    assert!(!stale_trust.status.success());
+    assert!(!stale_trust_remote_dedicated_checkpoint_witness.exists());
+    assert!(!stale_trust_remote_dedicated_checkpoint_witness_receipt.exists());
+
+    let unsafe_endpoint_witness =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness.unsafe.json");
+    let unsafe_endpoint_receipt =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness.unsafe.receipt.json");
+    let unsafe_endpoint = run(&[
+        "request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--endpoint",
+        "https://witness.example/v1/factory-receipt-quorum-checkpoint?token=secret",
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&unsafe_endpoint_witness),
+        "--receipt-output",
+        path(&unsafe_endpoint_receipt),
+    ]);
+    assert!(!unsafe_endpoint.status.success());
+    assert!(String::from_utf8_lossy(&unsafe_endpoint.stderr).contains("query"));
+    assert!(!unsafe_endpoint_witness.exists());
+    assert!(!unsafe_endpoint_receipt.exists());
+
+    let existing_remote_dedicated_checkpoint_witness =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness.existing.json");
+    let existing_remote_dedicated_checkpoint_witness_receipt =
+        root.join("registry-witness-receipts.dedicated-checkpoint.witness.existing.receipt.json");
+    fs::write(&existing_remote_dedicated_checkpoint_witness, b"preserve\n").unwrap();
+    let no_clobber = run(&[
+        "request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness",
+        path(&direct_receipt_quorum_log),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--endpoint",
+        "https://witness.example/v1/factory-receipt-quorum-checkpoint",
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&existing_remote_dedicated_checkpoint_witness),
+        "--receipt-output",
+        path(&existing_remote_dedicated_checkpoint_witness_receipt),
+    ]);
+    assert!(!no_clobber.status.success());
+    assert_eq!(
+        fs::read(&existing_remote_dedicated_checkpoint_witness).unwrap(),
+        b"preserve\n"
+    );
+    assert!(!existing_remote_dedicated_checkpoint_witness_receipt.exists());
+
     let trusted_dedicated_checkpoint_witness_quorum =
         root.join("registry-witness-receipts.dedicated-checkpoint.witness-quorum.trusted.json");
     successful(&[
@@ -5256,6 +5636,10 @@ fn publishes_closed_bounded_registry_schemas() {
         (
             "signed-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-schema",
             "remote-history-receipt-quorum-log-checkpoint-witness.schema.json",
+        ),
+        (
+            "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-schema",
+            "remote-history-receipt-quorum-log-checkpoint-witness-receipt.schema.json",
         ),
         (
             "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-quorum-report-schema",

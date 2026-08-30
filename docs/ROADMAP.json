@@ -1074,6 +1074,11 @@
     {
       "id": "factory-release-registry-receipt-quorum-checkpoint-witness-key-rotation",
       "release": "v1.508.0",
+      "status": "released"
+    },
+    {
+      "id": "remote-factory-release-registry-receipt-quorum-checkpoint-witnesses",
+      "release": "v1.509.0",
       "status": "current"
     }
   ]
