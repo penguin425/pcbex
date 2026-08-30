@@ -217,3 +217,7 @@ This boundary does not prove protected local state or keys, trusted time,
 atomic same-principal snapshots, endpoint availability or legal identity,
 operator independence, global publication or non-equivocation, ordering,
 payment, or exactly-once execution.
+
+Use the v1.513
+[quorum-bound signing gate](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md)
+to issue a generic checkpoint only for this exact report-bound log snapshot.

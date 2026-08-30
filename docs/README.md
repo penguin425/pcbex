@@ -184,6 +184,10 @@ boundary document for the artifact you plan to produce or trust.
   — re-verify one shared checkpoint context and a distinct receipt threshold,
   then bind the sorted unchanged event suffix to the resulting log.
 
+- [Factory Checkpoint-witness Receipt-quorum Log Signing](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md)
+  — issue the existing generic checkpoint only when the complete admission log
+  and sorted checkpoint-witness receipt suffix match one successful report.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

@@ -5393,6 +5393,19 @@ enum Command {
         #[arg(short, long)]
         output: CompactPath,
     },
+    /// Sign an approval log only when its exact suffix is the admitted factory checkpoint-witness receipt quorum.
+    SignApprovalLogWithRemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorum
+    {
+        log: CompactPath,
+        #[arg(long)]
+        quorum_report: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
     /// Sign exact factory receipt-quorum evidence under its dedicated domain.
     SignRemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpoint {
         log: CompactPath,
@@ -30472,6 +30485,89 @@ fn run_cli() -> Result<()> {
             write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
             eprintln!(
                 "signed quorum-bound factory release receipt log {} at {} entries",
+                checkpoint.log_id, checkpoint.entry_count
+            );
+        }
+        Command::SignApprovalLogWithRemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorum {
+            log,
+            quorum_report,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &[
+                    log.0.as_ref(),
+                    quorum_report.0.as_ref(),
+                    private_key.0.as_ref(),
+                ],
+                "quorum-bound factory checkpoint-witness receipt-log checkpoint output",
+            )?;
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(quorum_report.0.as_ref()),
+                    Some(private_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "quorum-bound factory checkpoint-witness receipt-log checkpoint",
+            )?;
+            let (log_source, log_identity) = read_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                "approval transparency log",
+            )?;
+            let log_value: ApprovalTransparencyLog = serde_json::from_slice(&log_source)
+                .with_context(|| format!("parsing approval transparency log {}", log.0.display()))?;
+            let (report_source, report_identity) = read_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                "factory checkpoint-witness receipt quorum report",
+            )?;
+            let report = parse_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            validate_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_for_log(
+                &report,
+                &log_value,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let (private_key_source, private_key_identity) = read_exact_artifact(
+                private_key.0.as_ref(),
+                1024,
+                "approval checkpoint private key",
+            )?;
+            let private_key_text = std::str::from_utf8(&private_key_source)
+                .context("decoding approval checkpoint private key")?;
+            let secret = decode_hex_key(
+                private_key_text.trim(),
+                "approval checkpoint private key",
+            )?;
+            let checkpoint = sign_approval_log_checkpoint(&log_value, &signer_id, &secret)
+                .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                &log_identity,
+                "approval transparency log",
+            )?;
+            require_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                &report_identity,
+                "factory checkpoint-witness receipt quorum report",
+            )?;
+            require_exact_artifact(
+                private_key.0.as_ref(),
+                1024,
+                &private_key_identity,
+                "approval checkpoint private key",
+            )?;
+            write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
+            eprintln!(
+                "signed quorum-bound factory checkpoint-witness receipt log {} at {} entries",
                 checkpoint.log_id, checkpoint.entry_count
             );
         }

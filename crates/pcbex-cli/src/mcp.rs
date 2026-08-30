@@ -3851,6 +3851,25 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log",
+            "Sign quorum-bound factory checkpoint-witness receipt log",
+            "Create an Ed25519 checkpoint only when the exact log and its factory checkpoint-witness receipt suffix match a successful verifier-bound receipt quorum report.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["log", "quorum_report", "private_key", "signer_id", "output"],
+                "properties": {
+                    "log": {"type": "string"},
+                    "quorum_report": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint",
             "Sign dedicated factory receipt-quorum checkpoint",
             "Domain-separate and sign the exact verifier-bound factory receipt-quorum report digest and approval-log state.",
@@ -5666,6 +5685,12 @@ fn call_tool(
         }
         "sign_quorum_bound_factory_release_receipt_transparency_log" => {
             sign_quorum_bound_factory_release_receipt_transparency_log(arguments, cancellation)?
+        }
+        "sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log" => {
+            sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log(
+                arguments,
+                cancellation,
+            )?
         }
         "sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint" => {
             sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint(
@@ -12091,6 +12116,36 @@ fn sign_quorum_bound_factory_release_receipt_transparency_log(
     ))
 }
 
+fn sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["log", "quorum_report", "private_key", "signer_id", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-with-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum"
+            .into(),
+        required_string(&arguments, "log")?,
+        "--quorum-report".into(),
+        required_string(&arguments, "quorum_report")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let checkpoint = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "checkpoint": checkpoint}),
+    ))
+}
+
 fn sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -16775,7 +16830,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 166);
+        assert_eq!(tools.len(), 167);
         let named = |name: &str| {
             tools
                 .iter()
@@ -17764,6 +17819,21 @@ mod tests {
         );
         assert_eq!(
             named("sign_quorum_bound_factory_release_receipt_transparency_log")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log")["inputSchema"]
+                ["required"],
+            json!(["log", "quorum_report", "private_key", "signer_id", "output"])
+        );
+        assert_eq!(
+            named("sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log")["execution"]
+                ["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("sign_quorum_bound_factory_checkpoint_witness_receipt_transparency_log")["annotations"]
+                ["destructiveHint"],
             true
         );
         assert_eq!(

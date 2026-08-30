@@ -1006,6 +1006,12 @@ be distinct, both outputs are no-clobber, and every input is re-read before
 publication; this still does not create an atomic same-principal snapshot or a
 globally atomic two-file commit.
 
+The v1.513 signing gate accepts the exact 128 MiB admission log and canonical
+128 KiB v1.512 quorum report plus one 1 KiB private-key file. It validates the
+complete log and sorted final suffix before key access, then re-reads all three
+inputs before one alias-free no-clobber generic approval checkpoint is
+published. It adds no wire format or larger I/O boundary.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

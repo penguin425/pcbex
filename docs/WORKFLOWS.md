@@ -44,6 +44,7 @@ evidence your next consumer actually needs.
 | Canonical remote checkpoint-witness receipt | Signed checkpoint-witness receipt transparency | validate the closed v1.509 receipt → normalize exact receipt/checkpoint/request/response/witness bindings → append a new log snapshot → sign and verify the exact head |
 | Retained remote checkpoint-witness evidence | Verifier-bound checkpoint-witness receipt admission | replay exact report/log/checkpoint → reconstruct request → match response and current trust → re-verify freshness/signature → append the unchanged event |
 | Retained remote checkpoint-witness quorum evidence | Verifier-bound checkpoint-witness receipt quorum admission | verify shared report/log/checkpoint once → bind every exact receipt/response/trust source → enforce distinct witness quorum → sort members → append and bind the exact event suffix |
+| Quorum-bound checkpoint-witness receipt log and report | Restricted checkpoint signing | validate canonical met quorum → verify complete admission-log chain and exact ID/count/head/digest → match every ordered checkpoint-witness receipt suffix event → read private key → emit the existing generic checkpoint |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
