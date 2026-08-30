@@ -278,6 +278,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Checkpoint-witness receipt admission quorum v1 | Re-verify shared evidence once, require distinct receipt/response/witness evidence, and bind the sorted event suffix to one canonical report | [Receipt quorum guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md) |
 | Quorum-bound checkpoint-witness receipt-log signing v1 | Sign only the exact admission log and sorted checkpoint-witness receipt suffix bound by a successful quorum report | [Quorum signing guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md) |
 | Dedicated checkpoint-witness receipt-quorum checkpoint v1 | Sign the normalized admission report, prior factory checkpoint, threshold, and exact log state under a new domain | [Dedicated checkpoint guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) |
+| Independent checkpoint-witness receipt-quorum checkpoint witnesses v1 | Re-verify the exact dedicated checkpoint and require fresh, distinct witness keys with signer-role separation | [Checkpoint witness guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -340,6 +341,7 @@ the security model for each adapter.
 | [Factory Checkpoint-witness Key Rotation](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) | Rotate trusted witness keys without changing the v1.507 witness or quorum-report formats |
 | [Verifier-bound Checkpoint-witness Receipt Admission](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md) | Replay retained v1.509 evidence and current trust before immutable append |
 | [Checkpoint-witness Receipt Quorum Admission](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md) | Require a distinct verifier-bound threshold and bind its exact sorted suffix to the resulting log |
+| [Independent Checkpoint-witness Receipt-quorum Checkpoint Witnesses](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) | Require fresh, distinct endorsements of the exact v1.514 dedicated checkpoint |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the

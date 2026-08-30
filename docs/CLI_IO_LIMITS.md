@@ -1018,6 +1018,15 @@ checkpoint and verification documents are each capped at 64 KiB. Signing
 validates all public evidence before key access, then re-reads every input
 before one alias-free no-clobber publication.
 
+The v1.515 witness boundary keeps those public-evidence limits, accepts 1–100
+paired 64 KiB witness documents and 1 KiB direct public-key files, and requires
+a 2–100 threshold. Each closed canonical witness is capped at 64 KiB; the
+quorum report is capped at 128 KiB. Witness signing validates the v1.512 report,
+complete admission log, v1.514 checkpoint, and checkpoint key before private-key
+access. Both commands re-read every input before one alias-free no-clobber
+publication, while a valid below-threshold report is retained before nonzero
+exit.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
