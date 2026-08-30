@@ -172,6 +172,10 @@ boundary document for the artifact you plan to produce or trust.
   — acquire unchanged dedicated witnesses over bounded HTTPS, verify them
   against direct or rotated trust, and retain hash-bound transport receipts.
 
+- [Factory Receipt-quorum Checkpoint Witness Receipt Transparency](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
+  — normalize canonical verified remote checkpoint-witness receipts into the
+  existing signed, anchored, consistency-proved, gossiped, and witnessed log.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

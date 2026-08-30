@@ -273,6 +273,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Independent factory checkpoint witnesses v1 | Re-verify the exact dedicated checkpoint and require fresh, distinct witness keys with signer-role separation | [Checkpoint witness guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) |
 | Factory checkpoint-witness rotation v1 | Advance retained identity-bound witness trust through dual-signed, generation- and digest-chained key transitions | [Checkpoint-witness rotation guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) |
 | Remote factory checkpoint witnesses v1 | Acquire unchanged dedicated witnesses over bounded HTTPS and retain locally verified, hash-bound transport receipts | [Remote checkpoint-witness guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md) |
+| Remote checkpoint-witness receipt transparency v1 | Normalize one canonical verified transport receipt into the existing signed, anchored, witnessed approval-log chain | [Receipt transparency guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
