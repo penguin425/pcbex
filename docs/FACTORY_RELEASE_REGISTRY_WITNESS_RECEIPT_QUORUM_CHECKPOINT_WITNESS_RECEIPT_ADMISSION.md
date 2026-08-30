@@ -177,5 +177,6 @@ This contract does not prove:
 - that the local transport receipt was remotely signed or globally published;
 - global non-equivocation, ordering, payment, or exactly-once execution.
 
-Version 1.512 is the planned next boundary: atomic verifier-bound admission of
-a distinct checkpoint-witness receipt quorum.
+Version 1.512 adds the distinct
+[checkpoint-witness receipt quorum admission](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+boundary while preserving this single-receipt path.

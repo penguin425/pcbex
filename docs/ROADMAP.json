@@ -1089,6 +1089,11 @@
     {
       "id": "verifier-bound-factory-release-registry-receipt-quorum-checkpoint-witness-receipt-admission",
       "release": "v1.511.0",
+      "status": "released"
+    },
+    {
+      "id": "verifier-bound-factory-release-registry-receipt-quorum-checkpoint-witness-receipt-admission-quorum",
+      "release": "v1.512.0",
       "status": "current"
     }
   ]
