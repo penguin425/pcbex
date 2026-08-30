@@ -192,6 +192,10 @@ boundary document for the artifact you plan to produce or trust.
   — sign the normalized admission report, prior factory checkpoint, threshold,
   and exact admission-log state beneath a dedicated Ed25519 domain.
 
+- [Independent Factory Checkpoint-witness Receipt-quorum Checkpoint Witnesses](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
+  — re-verify the dedicated checkpoint and require a fresh quorum of distinct,
+  role-separated witness keys.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

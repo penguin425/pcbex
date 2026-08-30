@@ -142,3 +142,8 @@ during checkpoint signing; v1.512 owns those checks. It also does not protect
 files or keys, establish trusted time, prove independent operation, publish
 evidence globally, prevent equivocation, establish legal identity, or prove
 ordering, payment, or exactly-once execution.
+
+The v1.515
+[independent witness boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
+re-verifies this exact checkpoint and requires a fresh quorum of directly
+pinned, role-separated witness keys.
