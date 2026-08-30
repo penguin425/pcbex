@@ -153,7 +153,9 @@ This contract does not prove that:
 - the system provides global non-equivocation, ordering, payment, or
   exactly-once execution.
 
-Version 1.511 is the next planned boundary. It will add verifier-bound
-admission for this receipt family when append must replay the retained public
-evidence and current witness trust instead of relying on the original v1.509
-acquisition boundary.
+Version 1.511 adds a separate
+[verifier-bound admission path](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md).
+Use it when append must replay the retained public evidence and current witness
+trust instead of relying on the original v1.509 acquisition boundary. This
+structural command remains available when an already trusted operator only
+needs to publish the canonical receipt.

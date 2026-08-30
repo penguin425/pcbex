@@ -153,6 +153,11 @@ evidence during append; use the
 [checkpoint-witness receipt transparency guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
 for the exact event mapping and trust boundary.
 
+Version 1.511 adds a dedicated
+[verifier-bound admission command](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+that replays these exact retained inputs and current witness trust before
+emitting the same event.
+
 ## Verification Flow
 
 1. Validate endpoint syntax, timeout, evaluation time, and key-role separation.

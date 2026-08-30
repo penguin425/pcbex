@@ -274,6 +274,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Factory checkpoint-witness rotation v1 | Advance retained identity-bound witness trust through dual-signed, generation- and digest-chained key transitions | [Checkpoint-witness rotation guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) |
 | Remote factory checkpoint witnesses v1 | Acquire unchanged dedicated witnesses over bounded HTTPS and retain locally verified, hash-bound transport receipts | [Remote checkpoint-witness guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md) |
 | Remote checkpoint-witness receipt transparency v1 | Normalize one canonical verified transport receipt into the existing signed, anchored, witnessed approval-log chain | [Receipt transparency guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md) |
+| Verifier-bound checkpoint-witness receipt admission v1 | Replay the exact quorum report, complete log, dedicated checkpoint, response, freshness, and current witness trust before append | [Receipt admission guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -334,6 +335,7 @@ the security model for each adapter.
 | [Dedicated Factory Receipt-quorum Checkpoint](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) | Prevent cross-protocol signature reuse while binding the exact quorum evidence |
 | [Independent Factory Checkpoint Witnesses](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) | Require fresh, distinct endorsements of the exact dedicated checkpoint |
 | [Factory Checkpoint-witness Key Rotation](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) | Rotate trusted witness keys without changing the v1.507 witness or quorum-report formats |
+| [Verifier-bound Checkpoint-witness Receipt Admission](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md) | Replay retained v1.509 evidence and current trust before immutable append |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the
