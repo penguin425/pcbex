@@ -150,3 +150,8 @@ The v1.508
 adds generation-chained trust without changing either v1.507 wire contract.
 Use direct public-key pins for static deployments or pair each witness with its
 current retained trust state when keys rotate.
+
+The v1.509
+[remote acquisition boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+fetches this unchanged witness over bounded HTTPS, verifies it locally, and
+retains a hash-bound transport receipt.

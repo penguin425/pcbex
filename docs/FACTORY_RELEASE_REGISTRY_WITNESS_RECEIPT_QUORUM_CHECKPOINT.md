@@ -137,3 +137,7 @@ re-verifies this exact evidence and requires fresh, distinct witness keys.
 The v1.508
 [checkpoint-witness rotation boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
 then advances those identity-bound keys through retained dual-signed trust.
+The v1.509
+[remote acquisition boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+retrieves those unchanged witnesses over bounded HTTPS and records the verified
+exchange.
