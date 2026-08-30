@@ -113,3 +113,7 @@ The gate also does not protect files, state, or keys; add a dedicated signature
 domain; establish trusted time or operator independence; publish evidence
 globally; prevent equivocation; or prove ordering, payment, or exactly-once
 execution.
+
+The v1.514
+[dedicated checkpoint boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
+signs this exact report/log state beneath a separate Ed25519 domain.
