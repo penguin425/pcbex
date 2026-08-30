@@ -188,6 +188,10 @@ boundary document for the artifact you plan to produce or trust.
   — issue the existing generic checkpoint only when the complete admission log
   and sorted checkpoint-witness receipt suffix match one successful report.
 
+- [Domain-separated Factory Checkpoint-witness Receipt-quorum Checkpoints](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
+  — sign the normalized admission report, prior factory checkpoint, threshold,
+  and exact admission-log state beneath a dedicated Ed25519 domain.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

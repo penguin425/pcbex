@@ -1099,6 +1099,11 @@
     {
       "id": "quorum-bound-factory-release-registry-receipt-quorum-checkpoint-witness-receipt-log-signing",
       "release": "v1.513.0",
+      "status": "released"
+    },
+    {
+      "id": "domain-separated-signed-factory-release-registry-receipt-quorum-checkpoint-witness-receipt-quorum-checkpoints",
+      "release": "v1.514.0",
       "status": "current"
     }
   ]

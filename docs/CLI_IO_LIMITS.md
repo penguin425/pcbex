@@ -1012,6 +1012,12 @@ complete log and sorted final suffix before key access, then re-reads all three
 inputs before one alias-free no-clobber generic approval checkpoint is
 published. It adds no wire format or larger I/O boundary.
 
+The v1.514 dedicated checkpoint keeps the same 128 MiB admission-log, 128 KiB
+quorum-report, 100-member, and 1 KiB key-file bounds. Its closed canonical
+checkpoint and verification documents are each capped at 64 KiB. Signing
+validates all public evidence before key access, then re-reads every input
+before one alias-free no-clobber publication.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
