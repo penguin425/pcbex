@@ -180,6 +180,10 @@ boundary document for the artifact you plan to produce or trust.
   — replay the exact quorum report, complete approval log, dedicated
   checkpoint, response bytes, and current witness trust before append.
 
+- [Factory Checkpoint-witness Receipt Quorum Admission](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+  — re-verify one shared checkpoint context and a distinct receipt threshold,
+  then bind the sorted unchanged event suffix to the resulting log.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

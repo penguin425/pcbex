@@ -996,6 +996,16 @@ before one alias-free no-clobber snapshot is published. Final reread detects
 sequential changes; it does not create an atomic filesystem snapshot across
 same-principal inputs.
 
+The v1.512 quorum append accepts 1–100 canonical 64 KiB v1.509 receipts and
+paired 64 KiB exact responses, plus the same shared 128 KiB report, 128 MiB
+complete log, 64 KiB checkpoint, and 65-byte checkpoint key. Witness trust is
+either 1–100 paired 65-byte direct key files or 1–100 canonical 32 KiB trust
+states for the entire invocation; the threshold is 2–100 and the canonical
+bound report is capped at 128 KiB. Both output paths and every input path must
+be distinct, both outputs are no-clobber, and every input is re-read before
+publication; this still does not create an atomic same-principal snapshot or a
+globally atomic two-file commit.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

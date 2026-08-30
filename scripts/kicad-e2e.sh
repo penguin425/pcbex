@@ -2797,6 +2797,8 @@ factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a_receipt="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness-a.remote.receipt.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness-b.remote.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_receipt="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness-b.remote.receipt.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness-b.remote-trusted.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted_receipt="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness-b.remote-trusted.receipt.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness.remote.receipt.normalized.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.dedicated-witness.remote.receipt.schema.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log_empty="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-log.0.json"
@@ -2804,6 +2806,16 @@ factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_verified_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-log.verified.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_mismatched_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-log.mismatched.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_mismatched_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-log.mismatched.stderr"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.log.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_report="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.report.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_schema="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.schema.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_normalized="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.normalized.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.below.log.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_report="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.below.report.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.below.stderr"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_log="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.mismatch.log.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_report="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.mismatch.report.json"
+factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_error="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-quorum.mismatch.stderr"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log_checkpoint="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-log.checkpoint.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log_verification="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt-log.verification.json"
 factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_rejected_receipt="$output_directory/factory-release-transparency-external-gossip-organization-registry.history-checkpoint.receipt-quorum.remote-dedicated-witness-receipt.rejected.json"
@@ -4009,7 +4021,11 @@ expected_request = {
     "approval_log": json.loads(log_path.read_bytes()),
     "checkpoint": json.loads(checkpoint_path.read_bytes()),
 }
-responses = [witness_b_path.read_bytes(), rotated_witness_a_path.read_bytes()]
+responses = [
+    witness_b_path.read_bytes(),
+    rotated_witness_a_path.read_bytes(),
+    witness_b_path.read_bytes(),
+]
 
 class Server(http.server.HTTPServer):
     allow_reuse_address = True
@@ -4038,7 +4054,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 server = Server(("127.0.0.1", 0), Handler)
 port_path.write_text(str(server.server_port) + "\n", encoding="ascii")
-for _ in range(2):
+for _ in range(3):
     server.handle_request()
 server.server_close()
 assert not responses
@@ -4088,6 +4104,22 @@ cmp "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_q
   --allow-http-loopback
 cmp "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_a_rotated" \
   "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a"
+
+"$pcbex_binary" request-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log" \
+  --quorum-report "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_public" \
+  --endpoint "$factory_receipt_quorum_checkpoint_remote_witness_endpoint" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_b_trust" \
+  --bearer-token-env PCBEX_E2E_FACTORY_RECEIPT_QUORUM_WITNESS_TOKEN \
+  --timeout-seconds 5 \
+  --evaluated-at-unix "$factory_receipt_quorum_checkpoint_witness_quorum_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted" \
+  --receipt-output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted_receipt" \
+  --allow-http-loopback
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_b" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted"
 wait "$factory_registry_checkpoint_witness_server_pid"
 factory_registry_checkpoint_witness_server_pid=""
 unset PCBEX_E2E_FACTORY_RECEIPT_QUORUM_WITNESS_TOKEN
@@ -4156,6 +4188,142 @@ fi
 test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_mismatched_log"
 grep -Fq 'does not match the remote factory release receipt quorum log binding' \
   "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_mismatched_error"
+
+# v1.512 verifies the shared v1.504-v1.506 context once, independently binds
+# each v1.509 receipt/response/current-trust tuple, then applies the production
+# v1.507 distinct-witness quorum before publishing one sorted v1.510 suffix and
+# its exact-log-bound canonical report.
+"$pcbex_binary" append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log_empty" \
+  --receipt "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted_receipt" \
+  --receipt "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a_receipt" \
+  --quorum-report "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  --approval-log "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_public" \
+  --response "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted" \
+  --response "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_b_trust" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_a_rotated_trust" \
+  --minimum-witnesses 2 \
+  --evaluated-at-unix "$factory_receipt_quorum_checkpoint_witness_quorum_at" \
+  --recorded-at-unix "$((factory_receipt_quorum_checkpoint_witness_quorum_at + 2))" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_log" \
+  --report-output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_report"
+
+"$pcbex_binary" remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-report-schema \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_schema"
+test "$(jq -r '.additionalProperties' "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_schema")" = false
+"$pcbex_binary" validate-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-report \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_report" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_normalized"
+cmp "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_report" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_normalized"
+
+python3 - \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_log" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_report" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log" \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_checkpoint" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+log_path, admission_path, source_report_path, source_log_path, checkpoint_path = \
+    map(Path, sys.argv[1:])
+log = json.loads(log_path.read_bytes())
+admission = json.loads(admission_path.read_bytes())
+source_report = json.loads(source_report_path.read_bytes())
+source_log = json.loads(source_log_path.read_bytes())
+checkpoint = json.loads(checkpoint_path.read_bytes())
+
+compact = lambda value: json.dumps(value, separators=(",", ":")).encode("ascii")
+assert admission["quorum_met"] is True
+assert admission["minimum_witnesses"] == 2
+assert admission["valid_witnesses"] == 2
+assert [member["witness_id"] for member in admission["members"]] == [
+    "independent-factory-witness-a",
+    "independent-factory-witness-b",
+]
+assert all(
+    member["witness_key_trust_state_sha256"] is not None
+    for member in admission["members"]
+)
+assert admission["quorum_report_source_sha256"] == \
+    hashlib.sha256(source_report_path.read_bytes()).hexdigest()
+assert admission["approval_log_source_sha256"] == \
+    hashlib.sha256(source_log_path.read_bytes()).hexdigest()
+assert admission["checkpoint_source_sha256"] == \
+    hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
+assert admission["quorum_report_sha256"] == checkpoint["quorum_report_sha256"]
+assert admission["approval_log_id"] == source_log["log_id"]
+assert admission["admission_log_id"] == log["log_id"]
+assert admission["admission_log_entry_count"] == len(log["entries"]) == 2
+assert admission["admission_log_head_sha256"] == log["head_sha256"]
+assert admission["admission_log_sha256"] == hashlib.sha256(compact(log)).hexdigest()
+
+for entry, member in zip(log["entries"], admission["members"]):
+    event = entry["event"]
+    assert event["artifact_kind"] == \
+        "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt"
+    assert event["artifact_sha256"] == member["receipt_sha256"]
+    assert event["subject_id"] == admission["checkpoint_sha256"]
+    assert event["request_sha256"] == member["request_sha256"]
+    assert event["session_sha256"] == member["response_sha256"]
+    assert event["signer_id"] is None
+    assert event["outcome"] == f'verified-witness:{member["witness_id"]}'
+PY
+
+if "$pcbex_binary" append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log_empty" \
+  --receipt "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted_receipt" \
+  --receipt "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a_receipt" \
+  --quorum-report "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  --approval-log "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_log" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_public" \
+  --response "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted" \
+  --response "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_b_trust" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_a_rotated_trust" \
+  --minimum-witnesses 3 \
+  --evaluated-at-unix "$factory_receipt_quorum_checkpoint_witness_quorum_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_log" \
+  --report-output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_report" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_error"; then
+  echo "expected factory checkpoint-witness receipt admission quorum threshold failure" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_log"
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_report"
+grep -Fq 'admission quorum was not met: 2/3' \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_below_error"
+
+if "$pcbex_binary" append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum \
+  "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log_empty" \
+  --receipt "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted_receipt" \
+  --receipt "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a_receipt" \
+  --quorum-report "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_report" \
+  --approval-log "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_log_empty" \
+  --checkpoint "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_public" \
+  --response "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_b_trusted" \
+  --response "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_a" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_b_trust" \
+  --witness-trust-state "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_a_rotated_trust" \
+  --minimum-witnesses 2 \
+  --evaluated-at-unix "$factory_receipt_quorum_checkpoint_witness_quorum_at" \
+  --output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_log" \
+  --report-output "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_report" \
+  2>"$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_error"; then
+  echo "expected substituted factory checkpoint-witness receipt quorum evidence to fail" >&2
+  exit 1
+fi
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_log"
+test ! -e "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_mismatch_report"
+
 "$pcbex_binary" sign-approval-log \
   "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_log" \
   --private-key "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_dedicated_witness_b_private" \
