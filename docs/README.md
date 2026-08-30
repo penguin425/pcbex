@@ -176,6 +176,10 @@ boundary document for the artifact you plan to produce or trust.
   — normalize canonical verified remote checkpoint-witness receipts into the
   existing signed, anchored, consistency-proved, gossiped, and witnessed log.
 
+- [Verifier-bound Factory Checkpoint-witness Receipt Admission](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+  — replay the exact quorum report, complete approval log, dedicated
+  checkpoint, response bytes, and current witness trust before append.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

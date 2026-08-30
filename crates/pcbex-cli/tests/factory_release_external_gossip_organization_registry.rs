@@ -4201,6 +4201,126 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         "--output",
         path(&remote_checkpoint_witness_receipt_log),
     ]);
+    let verified_remote_checkpoint_witness_receipt_log =
+        root.join("registry-witness-receipts.remote-checkpoint-receipts.log.verified-direct.json");
+    successful(&[
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_checkpoint_witness_receipt_log_empty),
+        "--receipt",
+        path(&remote_dedicated_checkpoint_witness_b_receipt),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--approval-log",
+        path(&direct_receipt_quorum_log),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--response",
+        path(&remote_dedicated_checkpoint_witness_b),
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5600",
+        "--recorded-at-unix",
+        "5601",
+        "--output",
+        path(&verified_remote_checkpoint_witness_receipt_log),
+    ]);
+    assert_eq!(
+        fs::read(&verified_remote_checkpoint_witness_receipt_log).unwrap(),
+        fs::read(&remote_checkpoint_witness_receipt_log).unwrap()
+    );
+
+    let mismatched_remote_checkpoint_witness_receipt_log = root
+        .join("registry-witness-receipts.remote-checkpoint-receipts.log.mismatched-evidence.json");
+    let mismatched_admission = run(&[
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_checkpoint_witness_receipt_log_empty),
+        "--receipt",
+        path(&remote_dedicated_checkpoint_witness_b_receipt),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--approval-log",
+        path(&receipt_log_empty),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--response",
+        path(&remote_dedicated_checkpoint_witness_b),
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5600",
+        "--recorded-at-unix",
+        "5601",
+        "--output",
+        path(&mismatched_remote_checkpoint_witness_receipt_log),
+    ]);
+    assert!(!mismatched_admission.status.success());
+    assert!(!mismatched_remote_checkpoint_witness_receipt_log.exists());
+
+    let future_dated_remote_checkpoint_witness_receipt_log =
+        root.join("registry-witness-receipts.remote-checkpoint-receipts.log.future-dated.json");
+    let future_dated_admission = run(&[
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_checkpoint_witness_receipt_log_empty),
+        "--receipt",
+        path(&remote_dedicated_checkpoint_witness_b_receipt),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--approval-log",
+        path(&direct_receipt_quorum_log),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--response",
+        path(&remote_dedicated_checkpoint_witness_b),
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5599",
+        "--output",
+        path(&future_dated_remote_checkpoint_witness_receipt_log),
+    ]);
+    assert!(!future_dated_admission.status.success());
+    assert!(
+        String::from_utf8_lossy(&future_dated_admission.stderr)
+            .contains("future-dated at admission")
+    );
+    assert!(!future_dated_remote_checkpoint_witness_receipt_log.exists());
+
+    let receipt_before_alias_rejection =
+        fs::read(&remote_dedicated_checkpoint_witness_b_receipt).unwrap();
+    let aliased_admission = run(&[
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_checkpoint_witness_receipt_log_empty),
+        "--receipt",
+        path(&remote_dedicated_checkpoint_witness_b_receipt),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--approval-log",
+        path(&direct_receipt_quorum_log),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--response",
+        path(&remote_dedicated_checkpoint_witness_b),
+        "--witness-public-key",
+        path(&receipt_quorum_checkpoint_witness_b_public),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&remote_dedicated_checkpoint_witness_b_receipt),
+    ]);
+    assert!(!aliased_admission.status.success());
+    assert_eq!(
+        fs::read(&remote_dedicated_checkpoint_witness_b_receipt).unwrap(),
+        receipt_before_alias_rejection
+    );
     let remote_checkpoint_witness_receipt_log_value: Value =
         serde_json::from_slice(&fs::read(&remote_checkpoint_witness_receipt_log).unwrap()).unwrap();
     let remote_checkpoint_witness_receipt_event =
@@ -4337,6 +4457,71 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
             fs::read(&dedicated_checkpoint_witness_a_rotated_trust).unwrap()
         ))
     );
+
+    let trusted_remote_checkpoint_witness_receipt_log =
+        root.join("registry-witness-receipts.remote-checkpoint-receipts.log.verified-trust.json");
+    successful(&[
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_checkpoint_witness_receipt_log_empty),
+        "--receipt",
+        path(&remote_dedicated_checkpoint_witness_a_receipt),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--approval-log",
+        path(&direct_receipt_quorum_log),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--response",
+        path(&remote_dedicated_checkpoint_witness_a),
+        "--witness-trust-state",
+        path(&dedicated_checkpoint_witness_a_rotated_trust),
+        "--evaluated-at-unix",
+        "5600",
+        "--recorded-at-unix",
+        "5602",
+        "--output",
+        path(&trusted_remote_checkpoint_witness_receipt_log),
+    ]);
+    let trusted_remote_checkpoint_witness_receipt_log_value: Value =
+        serde_json::from_slice(&fs::read(&trusted_remote_checkpoint_witness_receipt_log).unwrap())
+            .unwrap();
+    assert_eq!(
+        trusted_remote_checkpoint_witness_receipt_log_value["entries"][0]["event"]["outcome"],
+        "verified-witness:independent-factory-witness-a"
+    );
+
+    let mismatched_trust_remote_checkpoint_witness_receipt_log =
+        root.join("registry-witness-receipts.remote-checkpoint-receipts.log.mismatched-trust.json");
+    let mismatched_trust_admission = run(&[
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
+        path(&remote_checkpoint_witness_receipt_log_empty),
+        "--receipt",
+        path(&remote_dedicated_checkpoint_witness_b_receipt),
+        "--quorum-report",
+        path(&direct_receipt_quorum_report),
+        "--approval-log",
+        path(&direct_receipt_quorum_log),
+        "--checkpoint",
+        path(&dedicated_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&receipt_quorum_checkpoint_public),
+        "--response",
+        path(&remote_dedicated_checkpoint_witness_b),
+        "--witness-trust-state",
+        path(&dedicated_checkpoint_witness_b_trust),
+        "--evaluated-at-unix",
+        "5600",
+        "--output",
+        path(&mismatched_trust_remote_checkpoint_witness_receipt_log),
+    ]);
+    assert!(!mismatched_trust_admission.status.success());
+    assert!(
+        String::from_utf8_lossy(&mismatched_trust_admission.stderr)
+            .contains("trust binding is invalid")
+    );
+    assert!(!mismatched_trust_remote_checkpoint_witness_receipt_log.exists());
 
     let dedicated_checkpoint_witness_receipt_schema =
         root.join("registry-witness-receipts.dedicated-checkpoint-witness.receipt.schema.json");

@@ -223,6 +223,7 @@ auditable release.
 | v1.508.0 | Factory receipt-quorum checkpoint witness key rotation | Preserve the v1.507 witness and quorum-report wire contracts while binding each witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing monotonic bounded generations and rotation times, and letting the unchanged quorum consume either direct key pins or paired current trust states while rejecting stale keys, mixed trust modes, and checkpoint-signer role collision without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.509.0 | Remote factory receipt-quorum checkpoint witnesses | Preserve every v1.504–v1.508 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one bounded no-redirect HTTPS acquisition path that validates endpoint/key configuration and re-runs the exact public v1.506 verification before credential access or network I/O, sends only the complete public report/log/checkpoint, accepts one canonical v1.507 witness, verifies it with either a direct key pin or current v1.508 trust plus freshness and checkpoint-signer role separation, and atomically publishes the unchanged witness with a closed 64 KiB receipt binding semantic/raw input digests, request, response, endpoint, keys, trust generation, and evaluation time without retaining the Bearer token or claiming protected files or keys, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.510.0 | Factory receipt-quorum checkpoint-witness receipt transparency | Preserve every v1.504–v1.509 wire artifact and remote request/quorum path while structurally validating one canonical verified v1.509 transport receipt, normalizing its exact receipt, dedicated checkpoint, request, response, and witness identities into the existing signed approval hash chain, and reusing unchanged anchor, consistency, gossip, witness-rotation, and witness-quorum controls without claiming verifier-bound replay of the report/log/checkpoint/response/signature/trust evidence, protected log state, trusted time, endpoint or receipt authenticity, global publication/non-equivocation, operational independence, legal identity, ordering, payment, or exactly-once execution |
+| v1.511.0 | Verifier-bound factory checkpoint-witness receipt admission | Preserve every v1.504–v1.510 wire artifact and structural append path while adding one dedicated immutable-admission command that replays the canonical receipt-quorum report, complete approval log, factory-domain checkpoint, independently pinned checkpoint key, exact witness response, and either direct or current generation-bound witness trust; reconstructs the compact request; matches every semantic and raw receipt binding; re-verifies freshness, role separation, and the Ed25519 signature; and re-reads every input before one alias-free no-clobber append without claiming multi-receipt admission quorum, protected state, trusted time, atomic same-principal snapshots, endpoint or legal identity, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2289,7 +2290,7 @@ files, trust states, and keys; trusted time; endpoint legal identity or
 availability; independent operation; global publication/non-equivocation;
 ordering, payment, and exactly-once execution remain false.
 
-The current v1.510.0 milestone publishes that transport evidence without
+The released v1.510.0 milestone publishes that transport evidence without
 changing any v1.504–v1.509 wire artifact. The generic approval-log append path
 now accepts one dedicated artifact kind, applies the strict closed v1.509
 receipt parser, and maps the normalized receipt digest plus its checkpoint,
@@ -2301,7 +2302,18 @@ structural boundary: it does not replay the receipt-quorum report, complete
 approval log, dedicated checkpoint, exact response, witness signature,
 freshness, or current trust evidence.
 
-The planned v1.511.0 milestone will add that verifier-bound admission path.
-Protected state and keys, trusted time, endpoint or legal identity, independent
-operation, global publication/non-equivocation, ordering, payment, and
-exactly-once execution remain false.
+The current v1.511.0 milestone adds a dedicated verifier-bound admission path.
+It captures the canonical receipt, quorum report, complete factory receipt log,
+dedicated checkpoint, independently pinned checkpoint key, exact response, and
+one direct key or current witness trust state. It replays the production
+checkpoint verifier, reconstructs the compact request, matches every raw and
+semantic receipt binding, and re-verifies witness identity, freshness, role
+separation, and signature before appending the unchanged v1.510 event.
+
+Every input is re-read by identity, byte count, and SHA-256 before publication.
+That detects sequential mutation but does not create an atomic snapshot across
+same-principal files. The planned v1.512.0 milestone will add distinct
+multi-receipt admission quorum. Protected state and keys, trusted time,
+endpoint or legal identity, independent operation, global
+publication/non-equivocation, ordering, payment, and exactly-once execution
+remain false.
