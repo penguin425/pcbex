@@ -145,6 +145,14 @@ pcbex validate-remote-factory-release-registry-history-receipt-quorum-log-checkp
   factory-receipt-quorum.witness-a.receipt.json
 ```
 
+## Publish the Receipt
+
+Version 1.510 can normalize this canonical verified receipt into the existing
+signed approval transparency chain. It does not replay the acquisition
+evidence during append; use the
+[checkpoint-witness receipt transparency guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
+for the exact event mapping and trust boundary.
+
 ## Verification Flow
 
 1. Validate endpoint syntax, timeout, evaluation time, and key-role separation.

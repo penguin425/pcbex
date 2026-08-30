@@ -979,6 +979,13 @@ KiB. The canonical receipt is capped at 64 KiB; the timeout is 1–600 seconds
 with a 30-second default. Both outputs are alias-free and no-clobber, and every
 local input is re-read before publication.
 
+The v1.510 transparency append keeps the generic 128 MiB input-log and artifact
+read boundary, then tightens the selected v1.509 receipt to its canonical 64
+KiB contract before mutation. The existing log permits at most 100,000 entries
+and 256-byte event text fields. Append validates the complete input chain and
+receipt before publishing one new no-clobber snapshot; signing, anchoring,
+consistency, gossip, and witness limits remain unchanged.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
