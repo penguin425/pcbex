@@ -200,6 +200,10 @@ boundary document for the artifact you plan to produce or trust.
   — advance identity-bound final witness trust through dual-signed,
   generation- and digest-chained key transitions.
 
+- [Remote Final Factory Checkpoint Witnesses](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+  — acquire unchanged final witnesses over bounded HTTPS, verify direct or
+  rotated trust, and retain receipts that replay every exact input offline.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
