@@ -233,3 +233,7 @@ defines the optional current trust state.
 The v1.518
 [parallel quorum boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
 combines these unchanged single exchanges into one bounded retained result.
+The v1.520
+[verifier-bound admission boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+replays this exact retained exchange before appending the unchanged v1.519
+transparency event.

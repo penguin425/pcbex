@@ -1068,6 +1068,14 @@ most 100,000 entries and 256-byte event text fields. Append validates the
 complete input chain and receipt before publishing one new no-clobber snapshot;
 signing, anchoring, consistency, gossip, and witness limits remain unchanged.
 
+The v1.520 verifier-bound append accepts one 128 MiB destination log, one 64
+KiB v1.517 receipt, one 128 KiB v1.512 report, one 128 MiB admission log, one
+64 KiB v1.514 checkpoint, one 64 KiB v1.515 response, and 65-byte checkpoint
+and direct witness keys or one 32 KiB current v1.516 trust state. It reserves a
+distinct no-clobber destination, replays the complete production verification
+path, and re-reads all eight inputs by identity, byte count, and SHA-256 before
+publishing the unchanged v1.519 event.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

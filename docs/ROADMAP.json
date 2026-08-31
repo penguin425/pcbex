@@ -1129,6 +1129,11 @@
     {
       "id": "factory-release-final-checkpoint-witness-receipt-transparency",
       "release": "v1.519.0",
+      "status": "released"
+    },
+    {
+      "id": "verifier-bound-factory-release-final-checkpoint-witness-receipt-admission",
+      "release": "v1.520.0",
       "status": "current"
     }
   ]

@@ -57,6 +57,11 @@
 //! checkpoint only after local checkpoint verification, then verifies the
 //! canonical response against either a direct key or the current v1.516 trust
 //! state before retaining the witness and a hash-bound transport receipt.
+//!
+//! The v1.519 boundary maps that closed receipt into the existing approval-log
+//! event. The v1.520 boundary replays every retained public input, response,
+//! signature, freshness decision, and direct/current trust binding before it
+//! emits the unchanged event.
 
 use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
 use crate::factory_release_state_transparency_external_gossip_registry::{
