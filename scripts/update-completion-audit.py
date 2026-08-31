@@ -98,9 +98,9 @@ def generated_block() -> str:
         f"{START}\n"
         f"Version {version} exposes {rust_test_count()} Rust tests and "
         f"{python_test_count()} Python tests. The release workflow\n"
-        "also verifies formatting, Clippy, release builds, KiCad DRC fixtures, "
-        "SBOMs,\n"
-        "and build-provenance attestations.\n"
+        "also verifies formatting, Clippy, release builds under a 60-minute job "
+        "ceiling,\n"
+        "KiCad DRC fixtures, SBOMs, and build-provenance attestations.\n"
         f"{END}"
     )
 

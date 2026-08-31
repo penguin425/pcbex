@@ -59,7 +59,7 @@ EXPECTED_TIMEOUTS = {
     "release.yml": {
         "verify": 45,
         "prepare": 10,
-        "build": 45,
+        "build": 60,
         "audit": 15,
         "publish": 10,
     },
