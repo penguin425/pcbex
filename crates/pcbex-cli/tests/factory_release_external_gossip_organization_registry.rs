@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use ed25519_dalek::{Signer, SigningKey};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -11,6 +11,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::{Arc, Barrier},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -56,6 +57,29 @@ fn serve_json_once_at(
     response_body: Vec<u8>,
     expected_bearer: Option<&str>,
     request_path: &str,
+) -> (String, JoinHandle<Value>) {
+    serve_json_once_at_with_barrier(response_body, expected_bearer, request_path, None)
+}
+
+fn serve_json_once_at_barrier(
+    response_body: Vec<u8>,
+    expected_bearer: Option<&str>,
+    request_path: &str,
+    response_barrier: Arc<Barrier>,
+) -> (String, JoinHandle<Value>) {
+    serve_json_once_at_with_barrier(
+        response_body,
+        expected_bearer,
+        request_path,
+        Some(response_barrier),
+    )
+}
+
+fn serve_json_once_at_with_barrier(
+    response_body: Vec<u8>,
+    expected_bearer: Option<&str>,
+    request_path: &str,
+    response_barrier: Option<Arc<Barrier>>,
 ) -> (String, JoinHandle<Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -103,6 +127,9 @@ fn serve_json_once_at(
         }
         let request_body = &request[header_end..header_end + content_length];
         let request_value: Value = serde_json::from_slice(request_body).unwrap();
+        if let Some(barrier) = response_barrier {
+            barrier.wait();
+        }
         write!(
             stream,
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -132,6 +159,34 @@ struct Policy<'a> {
     minimum_organizations: u32,
     maximum_receipt_age_seconds: u64,
     trusted_observers: Vec<Observer<'a>>,
+}
+
+#[derive(Serialize)]
+struct FinalCheckpointWitnessQuorumManifest<'a> {
+    schema_version: u32,
+    minimum_witnesses: u32,
+    maximum_parallelism: u32,
+    members: Vec<FinalCheckpointWitnessQuorumManifestMember<'a>>,
+}
+
+#[derive(Serialize)]
+struct FinalCheckpointWitnessQuorumManifestMember<'a> {
+    endpoint: &'a str,
+    witness_id: &'static str,
+    witness_public_key: Option<String>,
+    witness_trust_state: Option<FinalCheckpointWitnessTrustState>,
+    bearer_token_env: Option<&'static str>,
+    timeout_seconds: u64,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct FinalCheckpointWitnessTrustState {
+    schema_version: u32,
+    witness_id: String,
+    generation: u64,
+    current_public_key: String,
+    last_rotation_sha256: Option<String>,
+    last_rotated_at_unix: Option<u64>,
 }
 
 fn write_policy(path: &Path) -> String {
@@ -290,6 +345,17 @@ fn write_canonical_json(path: &Path, value: &Value) {
     fs::write(
         path,
         format!("{}\n", serde_json::to_string_pretty(value).unwrap()),
+    )
+    .unwrap();
+}
+
+fn write_final_checkpoint_witness_quorum_manifest(
+    path: &Path,
+    manifest: &FinalCheckpointWitnessQuorumManifest<'_>,
+) {
+    fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(manifest).unwrap()),
     )
     .unwrap();
 }
@@ -5662,6 +5728,383 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         remote_final_checkpoint_witness_a_rotated_receipt_source
     );
 
+    let rotated_final_checkpoint_witness_trust: FinalCheckpointWitnessTrustState =
+        serde_json::from_slice(&fs::read(&final_checkpoint_witness_a_rotated_trust).unwrap())
+            .unwrap();
+    let final_checkpoint_witness_b_public_text =
+        fs::read_to_string(&final_checkpoint_witness_b_public)
+            .unwrap()
+            .trim()
+            .to_string();
+    let parallel_barrier = Arc::new(Barrier::new(2));
+    let (parallel_endpoint_a, parallel_server_a) = serve_json_once_at_barrier(
+        fs::read(&final_checkpoint_witness_a_rotated).unwrap(),
+        None,
+        "/v1/factory-receipt-quorum-checkpoint-witness",
+        Arc::clone(&parallel_barrier),
+    );
+    let (parallel_endpoint_b, parallel_server_b) = serve_json_once_at_barrier(
+        fs::read(&final_checkpoint_witness_b).unwrap(),
+        Some("parallel-final-checkpoint-token"),
+        "/v1/factory-receipt-quorum-checkpoint-witness",
+        Arc::clone(&parallel_barrier),
+    );
+    let unavailable_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let unavailable_endpoint = format!(
+        "http://{}/v1/factory-receipt-quorum-checkpoint-witness",
+        unavailable_listener.local_addr().unwrap()
+    );
+    drop(unavailable_listener);
+
+    let final_checkpoint_witness_quorum_manifest = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-manifest.json",
+    );
+    write_final_checkpoint_witness_quorum_manifest(
+        &final_checkpoint_witness_quorum_manifest,
+        &FinalCheckpointWitnessQuorumManifest {
+            schema_version: 1,
+            minimum_witnesses: 2,
+            maximum_parallelism: 3,
+            members: vec![
+                FinalCheckpointWitnessQuorumManifestMember {
+                    endpoint: &parallel_endpoint_a,
+                    witness_id: "checkpoint-receipt-quorum-witness-a",
+                    witness_public_key: None,
+                    witness_trust_state: Some(rotated_final_checkpoint_witness_trust.clone()),
+                    bearer_token_env: None,
+                    timeout_seconds: 10,
+                },
+                FinalCheckpointWitnessQuorumManifestMember {
+                    endpoint: &parallel_endpoint_b,
+                    witness_id: "checkpoint-receipt-quorum-witness-b",
+                    witness_public_key: Some(final_checkpoint_witness_b_public_text.clone()),
+                    witness_trust_state: None,
+                    bearer_token_env: Some("PCBEX_FACTORY_FINAL_CHECKPOINT_QUORUM_TOKEN"),
+                    timeout_seconds: 10,
+                },
+                FinalCheckpointWitnessQuorumManifestMember {
+                    endpoint: &unavailable_endpoint,
+                    witness_id: "checkpoint-receipt-quorum-witness-c",
+                    witness_public_key: Some(public([101; 32])),
+                    witness_trust_state: None,
+                    bearer_token_env: None,
+                    timeout_seconds: 2,
+                },
+            ],
+        },
+    );
+
+    let final_checkpoint_witness_quorum_manifest_schema = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-manifest.schema.json",
+    );
+    successful(&[
+        "remote-factory-release-final-checkpoint-witness-quorum-manifest-schema",
+        "--output",
+        path(&final_checkpoint_witness_quorum_manifest_schema),
+    ]);
+    assert_closed_and_bounded(
+        &serde_json::from_slice::<Value>(
+            &fs::read(&final_checkpoint_witness_quorum_manifest_schema).unwrap(),
+        )
+        .unwrap(),
+    );
+    let normalized_final_checkpoint_witness_quorum_manifest = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-manifest.normalized.json",
+    );
+    successful(&[
+        "validate-remote-factory-release-final-checkpoint-witness-quorum-manifest",
+        path(&final_checkpoint_witness_quorum_manifest),
+        "--output",
+        path(&normalized_final_checkpoint_witness_quorum_manifest),
+    ]);
+    assert_eq!(
+        fs::read(&normalized_final_checkpoint_witness_quorum_manifest).unwrap(),
+        fs::read(&final_checkpoint_witness_quorum_manifest).unwrap()
+    );
+    let final_checkpoint_witness_quorum_manifest_before =
+        fs::read(&final_checkpoint_witness_quorum_manifest).unwrap();
+    let alias_rejected = run(&[
+        "validate-remote-factory-release-final-checkpoint-witness-quorum-manifest",
+        path(&final_checkpoint_witness_quorum_manifest),
+        "--output",
+        path(&final_checkpoint_witness_quorum_manifest),
+    ]);
+    assert!(!alias_rejected.status.success());
+    assert_eq!(
+        fs::read(&final_checkpoint_witness_quorum_manifest).unwrap(),
+        final_checkpoint_witness_quorum_manifest_before
+    );
+
+    let final_checkpoint_witness_acquisition = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-acquisition.json",
+    );
+    let parallel_final_checkpoint_witness_quorum = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-quorum.json",
+    );
+    let parallel_acquisition = Command::new(binary())
+        .args([
+            "request-remote-factory-release-final-checkpoint-witness-quorum",
+            path(&checkpoint_witness_receipt_quorum_log),
+            "--quorum-report",
+            path(&checkpoint_witness_receipt_quorum_report),
+            "--checkpoint",
+            path(&dedicated_checkpoint_witness_receipt_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&witness_a_next_public),
+            "--manifest",
+            path(&final_checkpoint_witness_quorum_manifest),
+            "--evaluated-at-unix",
+            "5800",
+            "--output",
+            path(&final_checkpoint_witness_acquisition),
+            "--quorum-output",
+            path(&parallel_final_checkpoint_witness_quorum),
+            "--allow-http-loopback",
+        ])
+        .env(
+            "PCBEX_FACTORY_FINAL_CHECKPOINT_QUORUM_TOKEN",
+            "parallel-final-checkpoint-token",
+        )
+        .output()
+        .unwrap();
+    assert!(
+        parallel_acquisition.status.success(),
+        "{}",
+        String::from_utf8_lossy(&parallel_acquisition.stderr)
+    );
+    let parallel_request_a = parallel_server_a.join().unwrap();
+    let parallel_request_b = parallel_server_b.join().unwrap();
+    assert_eq!(parallel_request_a, parallel_request_b);
+    assert_eq!(
+        parallel_request_a["protocol"],
+        "pcbex-remote-factory-release-registry-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-v1"
+    );
+
+    let final_checkpoint_witness_acquisition_source =
+        fs::read(&final_checkpoint_witness_acquisition).unwrap();
+    let final_checkpoint_witness_acquisition_value: Value =
+        serde_json::from_slice(&final_checkpoint_witness_acquisition_source).unwrap();
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["requested_witnesses"],
+        3
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["verified_witnesses"],
+        2
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["failed_witnesses"],
+        1
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["quorum_met"],
+        true
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["members"][0]["status"],
+        "verified"
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["members"][0]["witness_key_generation"],
+        1
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["members"][1]["status"],
+        "verified"
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["members"][1]["witness_key_generation"],
+        Value::Null
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["members"][2]["status"],
+        "failed"
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["members"][2]["failure_code"],
+        "transport"
+    );
+    assert_eq!(
+        final_checkpoint_witness_acquisition_value["quorum"],
+        serde_json::from_slice::<Value>(
+            &fs::read(&final_checkpoint_witness_rotated_quorum).unwrap()
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        fs::read(&parallel_final_checkpoint_witness_quorum).unwrap(),
+        fs::read(&final_checkpoint_witness_rotated_quorum).unwrap()
+    );
+    let acquisition_text = String::from_utf8_lossy(&final_checkpoint_witness_acquisition_source);
+    assert!(!acquisition_text.contains("parallel-final-checkpoint-token"));
+    assert!(!acquisition_text.contains("PCBEX_FACTORY_FINAL_CHECKPOINT_QUORUM_TOKEN"));
+
+    let final_checkpoint_witness_acquisition_schema = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-acquisition.schema.json",
+    );
+    successful(&[
+        "remote-factory-release-final-checkpoint-witness-quorum-acquisition-report-schema",
+        "--output",
+        path(&final_checkpoint_witness_acquisition_schema),
+    ]);
+    assert_closed_and_bounded(
+        &serde_json::from_slice::<Value>(
+            &fs::read(&final_checkpoint_witness_acquisition_schema).unwrap(),
+        )
+        .unwrap(),
+    );
+    let replayed_final_checkpoint_witness_acquisition = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-acquisition.replayed.json",
+    );
+    let replayed_parallel_final_checkpoint_witness_quorum = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-quorum.replayed.json",
+    );
+    successful(&[
+        "validate-remote-factory-release-final-checkpoint-witness-quorum-acquisition-report",
+        path(&final_checkpoint_witness_acquisition),
+        "--manifest",
+        path(&final_checkpoint_witness_quorum_manifest),
+        "--log",
+        path(&checkpoint_witness_receipt_quorum_log),
+        "--quorum-report",
+        path(&checkpoint_witness_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_checkpoint_witness_receipt_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&witness_a_next_public),
+        "--output",
+        path(&replayed_final_checkpoint_witness_acquisition),
+        "--quorum-output",
+        path(&replayed_parallel_final_checkpoint_witness_quorum),
+    ]);
+    assert_eq!(
+        fs::read(&replayed_final_checkpoint_witness_acquisition).unwrap(),
+        final_checkpoint_witness_acquisition_source
+    );
+    assert_eq!(
+        fs::read(&replayed_parallel_final_checkpoint_witness_quorum).unwrap(),
+        fs::read(&parallel_final_checkpoint_witness_quorum).unwrap()
+    );
+
+    let parallel_acquisition_before = fs::read(&final_checkpoint_witness_acquisition).unwrap();
+    let no_clobber = run(&[
+        "request-remote-factory-release-final-checkpoint-witness-quorum",
+        path(&checkpoint_witness_receipt_quorum_log),
+        "--quorum-report",
+        path(&checkpoint_witness_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_checkpoint_witness_receipt_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&witness_a_next_public),
+        "--manifest",
+        path(&final_checkpoint_witness_quorum_manifest),
+        "--evaluated-at-unix",
+        "5800",
+        "--output",
+        path(&final_checkpoint_witness_acquisition),
+        "--quorum-output",
+        path(&parallel_final_checkpoint_witness_quorum),
+        "--allow-http-loopback",
+    ]);
+    assert!(!no_clobber.status.success());
+    assert_eq!(
+        fs::read(&final_checkpoint_witness_acquisition).unwrap(),
+        parallel_acquisition_before
+    );
+
+    let below_threshold_barrier = Arc::new(Barrier::new(2));
+    let (below_threshold_endpoint_a, below_threshold_server_a) = serve_json_once_at_barrier(
+        fs::read(&final_checkpoint_witness_a_rotated).unwrap(),
+        None,
+        "/v1/factory-receipt-quorum-checkpoint-witness",
+        Arc::clone(&below_threshold_barrier),
+    );
+    let (below_threshold_endpoint_b, below_threshold_server_b) = serve_json_once_at_barrier(
+        fs::read(&final_checkpoint_witness_b).unwrap(),
+        None,
+        "/v1/factory-receipt-quorum-checkpoint-witness",
+        Arc::clone(&below_threshold_barrier),
+    );
+    let below_threshold_unavailable_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let below_threshold_unavailable_endpoint = format!(
+        "http://{}/v1/factory-receipt-quorum-checkpoint-witness",
+        below_threshold_unavailable_listener.local_addr().unwrap()
+    );
+    drop(below_threshold_unavailable_listener);
+    let below_threshold_manifest = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-manifest.below-threshold.json",
+    );
+    write_final_checkpoint_witness_quorum_manifest(
+        &below_threshold_manifest,
+        &FinalCheckpointWitnessQuorumManifest {
+            schema_version: 1,
+            minimum_witnesses: 3,
+            maximum_parallelism: 3,
+            members: vec![
+                FinalCheckpointWitnessQuorumManifestMember {
+                    endpoint: &below_threshold_endpoint_a,
+                    witness_id: "checkpoint-receipt-quorum-witness-a",
+                    witness_public_key: None,
+                    witness_trust_state: Some(rotated_final_checkpoint_witness_trust),
+                    bearer_token_env: None,
+                    timeout_seconds: 10,
+                },
+                FinalCheckpointWitnessQuorumManifestMember {
+                    endpoint: &below_threshold_endpoint_b,
+                    witness_id: "checkpoint-receipt-quorum-witness-b",
+                    witness_public_key: Some(final_checkpoint_witness_b_public_text),
+                    witness_trust_state: None,
+                    bearer_token_env: None,
+                    timeout_seconds: 10,
+                },
+                FinalCheckpointWitnessQuorumManifestMember {
+                    endpoint: &below_threshold_unavailable_endpoint,
+                    witness_id: "checkpoint-receipt-quorum-witness-c",
+                    witness_public_key: Some(public([101; 32])),
+                    witness_trust_state: None,
+                    bearer_token_env: None,
+                    timeout_seconds: 2,
+                },
+            ],
+        },
+    );
+    let below_threshold_acquisition = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-acquisition.below-threshold.json",
+    );
+    let below_threshold_quorum = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.parallel-witness-quorum.below-threshold.json",
+    );
+    let below_threshold = run(&[
+        "request-remote-factory-release-final-checkpoint-witness-quorum",
+        path(&checkpoint_witness_receipt_quorum_log),
+        "--quorum-report",
+        path(&checkpoint_witness_receipt_quorum_report),
+        "--checkpoint",
+        path(&dedicated_checkpoint_witness_receipt_quorum_checkpoint),
+        "--checkpoint-public-key",
+        path(&witness_a_next_public),
+        "--manifest",
+        path(&below_threshold_manifest),
+        "--evaluated-at-unix",
+        "5800",
+        "--output",
+        path(&below_threshold_acquisition),
+        "--quorum-output",
+        path(&below_threshold_quorum),
+        "--allow-http-loopback",
+    ]);
+    assert!(!below_threshold.status.success());
+    below_threshold_server_a.join().unwrap();
+    below_threshold_server_b.join().unwrap();
+    let below_threshold_acquisition_value: Value =
+        serde_json::from_slice(&fs::read(&below_threshold_acquisition).unwrap()).unwrap();
+    let below_threshold_quorum_value: Value =
+        serde_json::from_slice(&fs::read(&below_threshold_quorum).unwrap()).unwrap();
+    assert_eq!(below_threshold_acquisition_value["verified_witnesses"], 2);
+    assert_eq!(below_threshold_acquisition_value["failed_witnesses"], 1);
+    assert_eq!(below_threshold_acquisition_value["quorum_met"], false);
+    assert_eq!(below_threshold_quorum_value["quorum_met"], false);
+
     let mut invalid_remote_final_report_value =
         checkpoint_witness_receipt_quorum_report_value.clone();
     invalid_remote_final_report_value["valid_witnesses"] = Value::from(3);
@@ -5714,6 +6157,45 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
     );
     assert!(!invalid_remote_final_witness.exists());
     assert!(!invalid_remote_final_receipt.exists());
+
+    let invalid_parallel_final_acquisition = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.invalid-parallel-final-acquisition.json",
+    );
+    let invalid_parallel_final_quorum = root.join(
+        "registry-witness-receipts.remote-checkpoint-receipts.quorum.invalid-parallel-final-quorum.json",
+    );
+    let rejected = Command::new(binary())
+        .args([
+            "request-remote-factory-release-final-checkpoint-witness-quorum",
+            path(&checkpoint_witness_receipt_quorum_log),
+            "--quorum-report",
+            path(&invalid_remote_final_report),
+            "--checkpoint",
+            path(&dedicated_checkpoint_witness_receipt_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&witness_a_next_public),
+            "--manifest",
+            path(&final_checkpoint_witness_quorum_manifest),
+            "--evaluated-at-unix",
+            "5800",
+            "--output",
+            path(&invalid_parallel_final_acquisition),
+            "--quorum-output",
+            path(&invalid_parallel_final_quorum),
+            "--allow-http-loopback",
+        ])
+        .env_remove("PCBEX_FACTORY_FINAL_CHECKPOINT_QUORUM_TOKEN")
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let rejected_stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        !rejected_stderr.contains("bearer-token environment")
+            && !rejected_stderr.contains("HTTPS request failed"),
+        "{rejected_stderr}"
+    );
+    assert!(!invalid_parallel_final_acquisition.exists());
+    assert!(!invalid_parallel_final_quorum.exists());
 
     let substituted_remote_final_receipt = root.join(
         "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.witness-b.remote.receipt.substituted.json",

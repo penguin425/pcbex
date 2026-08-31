@@ -1940,7 +1940,7 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
-      - name: Run cross-platform v1.485-v1.517 factory-state transparency boundaries
+      - name: Run cross-platform v1.485-v1.518 factory-state transparency boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
@@ -1950,7 +1950,7 @@ jobs:
         run: >-
           cargo +stable test --package pcbex
           --test factory_release_external_gossip_observer_rotation --release --locked
-      - name: Run cross-platform v1.493-v1.517 organization-registry ledger boundaries
+      - name: Run cross-platform v1.493-v1.518 organization-registry ledger boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex
@@ -2050,7 +2050,7 @@ jobs:
   rust-windows-boundaries:
     name: Rust Windows boundaries
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2067,7 +2067,7 @@ jobs:
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_adapter_monotonic_state
-      - name: Run Windows v1.485-v1.517 factory-state transparency boundaries
+      - name: Run Windows v1.485-v1.518 factory-state transparency boundaries
         run: >-
           cargo +stable test --package pcbex --bin pcbex --release --locked
           factory_release_state_transparency

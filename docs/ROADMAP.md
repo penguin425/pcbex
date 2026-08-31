@@ -230,6 +230,7 @@ auditable release.
 | v1.515.0 | Independent factory checkpoint-witness receipt-quorum checkpoint witnesses | Preserve every v1.504–v1.514 wire artifact while adding closed canonical witness and quorum-report contracts that re-verify the exact successful v1.512 checkpoint-witness receipt quorum, complete admission log and suffix, v1.514 dedicated checkpoint signature, and independently pinned checkpoint key before witness-key access; sign the exact checkpoint/log state under a separate Ed25519 witness domain; require a fresh 2–100 quorum with distinct non-weak identities and keys disjoint from the checkpoint signer; retain valid below-threshold evidence before returning nonzero; and re-read every input before alias-free no-clobber publication without claiming protected files or keys, trusted time, real operational independence, generation-chained witness trust, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.516.1 | Final factory checkpoint-witness receipt-quorum checkpoint witness key rotation | Preserve the v1.515 signed witness and quorum-report wire contracts while binding each final witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing bounded monotonic generations and rotation times, and letting the unchanged quorum consume either paired direct keys or paired current trust states while rejecting stale keys, mixed trust modes, identity mismatch, and checkpoint-signer role collision without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.517.0 | Remote final factory checkpoint witnesses | Preserve every v1.512–v1.516 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one bounded no-redirect HTTPS acquisition path that validates endpoint and role-separated key configuration, production-verifies the exact v1.512 report/log/suffix and v1.514 checkpoint before credential or network access, accepts one unchanged canonical v1.515 witness under either a direct key or current v1.516 trust state, and publishes the witness with a closed 64 KiB credential-free receipt binding raw and semantic public evidence, request, response, endpoint, keys, trust generation, freshness time, and decision; add full offline receipt replay without claiming protected files or keys, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
+| v1.518.0 | Parallel remote final checkpoint witness quorum acquisition | Preserve every v1.512–v1.517 wire contract while accepting one closed 1 MiB manifest of 2–100 sorted, distinct endpoints and either direct keys or current trust states; validate all configuration and production-verify the shared report/log/checkpoint before any credential or network access; acquire witnesses through 2–16 bounded parallel v1.517 workers; retain unchanged successful witness/receipt pairs and credential-free coarse failure categories; invoke the production v1.515 verifier over the verified subset; publish one closed 16 MiB acquisition report with the unchanged final quorum even when the threshold fails; and fully replay successful receipts, signatures, trust bindings, and quorum offline without claiming that historical network failures can be independently reproduced, or claiming protected state, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2426,3 +2427,20 @@ checkpoint and that those bytes crossed one bounded exchange. It does not
 protect files or keys, establish trusted time, endpoint legal identity or
 availability, independent operation, global publication/non-equivocation,
 ordering, payment, or exactly-once execution.
+
+The current v1.518.0 milestone composes those unchanged single exchanges into
+one bounded quorum acquisition. A closed manifest sorts 2–100 distinct witness
+identities, effective keys, and endpoints, permits direct and current-trust
+members in one run, and caps actual worker parallelism at 16.
+
+pcbex validates the complete manifest and re-runs the shared production
+v1.512/v1.514 preflight before any worker can read a credential or connect.
+Successful workers retain their unchanged v1.515 witnesses and v1.517 receipts;
+failed workers retain only one coarse credential-free category. The verified
+subset then enters the unchanged production v1.515 quorum verifier.
+
+The command publishes the closed acquisition report and unchanged final quorum
+even when the threshold is not met, then returns nonzero. Offline validation
+fully replays each retained success and recomputes the quorum. It verifies only
+the structure and configured binding of failures because past credential,
+transport, HTTP, or availability conditions cannot be independently recreated.

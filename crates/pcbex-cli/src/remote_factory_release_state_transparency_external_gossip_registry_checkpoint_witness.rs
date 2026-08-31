@@ -113,7 +113,7 @@ const MAX_APPROVAL_LOG_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_REQUEST_BYTES: u64 = 129 * 1024 * 1024;
 const MAX_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_REQUEST_BYTES: u64 =
     129 * 1024 * 1024;
-const MAX_TIMESTAMP: u64 = 999_999_999_999_999;
+pub(crate) const MAX_TIMESTAMP: u64 = 999_999_999_999_999;
 pub(crate) const MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_BYTES: u64 =
     64 * 1024;
 pub(crate) const MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES: u64 =
@@ -2436,7 +2436,7 @@ fn request_remote_receipt_quorum_log_checkpoint_witness(
     Ok((witness, receipt))
 }
 
-fn parse_remote_receipt_quorum_approval_log(
+pub(crate) fn parse_remote_receipt_quorum_approval_log(
     source: &[u8],
 ) -> Result<ApprovalTransparencyLog, String> {
     if source.is_empty() || source.len() as u64 > MAX_APPROVAL_LOG_SOURCE_BYTES {
@@ -2919,6 +2919,34 @@ fn prepare_remote_checkpoint_witness_receipt_quorum_log_checkpoint_witness_verif
             checkpoint,
         },
     )
+}
+
+pub(crate) fn preflight_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_request(
+    quorum_report_source: &[u8],
+    approval_log_source: &[u8],
+    checkpoint_source: &[u8],
+    trusted_checkpoint_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<(), String> {
+    if evaluated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "remote factory checkpoint-witness receipt quorum checkpoint witness evaluation time is outside its bound"
+                .into(),
+        );
+    }
+    let context = prepare_remote_checkpoint_witness_receipt_quorum_log_checkpoint_witness_verification_context(
+        quorum_report_source,
+        approval_log_source,
+        checkpoint_source,
+        trusted_checkpoint_public_key,
+    )?;
+    if evaluated_at_unix < context.report.evaluated_at_unix {
+        return Err(
+            "remote factory checkpoint-witness receipt quorum checkpoint witness evaluation predates its quorum report"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7166,7 +7194,11 @@ fn validate_remote_factory_release_registry_history_receipt_quorum_log_checkpoin
     Ok(())
 }
 
-fn render_bounded(value: &impl Serialize, maximum: u64, label: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn render_bounded(
+    value: &impl Serialize,
+    maximum: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     let mut source =
         serde_json::to_vec_pretty(value).map_err(|error| format!("rendering {label}: {error}"))?;
     source.push(b'\n');
@@ -7176,7 +7208,7 @@ fn render_bounded(value: &impl Serialize, maximum: u64, label: &str) -> Result<V
     Ok(source)
 }
 
-fn parse_canonical<T: for<'de> Deserialize<'de> + Serialize>(
+pub(crate) fn parse_canonical<T: for<'de> Deserialize<'de> + Serialize>(
     source: &[u8],
     maximum: u64,
     label: &str,
@@ -7194,7 +7226,7 @@ fn parse_canonical<T: for<'de> Deserialize<'de> + Serialize>(
     Ok(value)
 }
 
-fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), String> {
+pub(crate) fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), String> {
     let uri: ureq::http::Uri = endpoint.parse().map_err(|error| {
         format!(
             "invalid remote factory release registry history checkpoint witness endpoint: {error}"
@@ -7245,7 +7277,7 @@ fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), St
     }
 }
 
-fn validate_env_name(value: &str) -> Result<(), String> {
+pub(crate) fn validate_env_name(value: &str) -> Result<(), String> {
     let mut bytes = value.bytes();
     let first = bytes.next();
     if !matches!(first, Some(b'A'..=b'Z' | b'a'..=b'z' | b'_'))
@@ -7256,7 +7288,7 @@ fn validate_env_name(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_slug(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_slug(value: &str, label: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > 128
         || !value.bytes().enumerate().all(|(index, byte)| match byte {
@@ -7270,11 +7302,11 @@ fn validate_slug(value: &str, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_digest(value: &str, label: &str) -> Result<(), String> {
+pub(crate) fn validate_digest(value: &str, label: &str) -> Result<(), String> {
     decode_hex::<32>(value, label).map(|_| ())
 }
 
-fn validate_nonweak_public_key(value: &[u8; 32], label: &str) -> Result<(), String> {
+pub(crate) fn validate_nonweak_public_key(value: &[u8; 32], label: &str) -> Result<(), String> {
     let key =
         VerifyingKey::from_bytes(value).map_err(|error| format!("invalid {label}: {error}"))?;
     if key.is_weak() {
@@ -7283,7 +7315,7 @@ fn validate_nonweak_public_key(value: &[u8; 32], label: &str) -> Result<(), Stri
     Ok(())
 }
 
-fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
+pub(crate) fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
     if value.len() != N * 2
         || !value
             .bytes()
@@ -7302,15 +7334,15 @@ fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], Strin
     Ok(bytes)
 }
 
-fn sha256(source: &[u8]) -> String {
+pub(crate) fn sha256(source: &[u8]) -> String {
     hex::encode(Sha256::digest(source))
 }
 
-fn digest_schema() -> Value {
+pub(crate) fn digest_schema() -> Value {
     json!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
 }
 
-fn slug_schema() -> Value {
+pub(crate) fn slug_schema() -> Value {
     json!({
         "type": "string", "minLength": 1, "maxLength": 128,
         "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"

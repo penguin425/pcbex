@@ -82,6 +82,11 @@ pcbex request-remote-factory-release-registry-history-receipt-quorum-log-checkpo
 Acquire each witness independently, then pass the unchanged response files to
 the v1.515 verifier. Choose direct keys or trust states for the entire quorum.
 
+> [!TIP]
+> The v1.518 [parallel acquisition boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
+> automates this fan-out, permits mixed direct and trust-state members, retains
+> coarse partial failures, and calls the same production quorum verifier.
+
 ```bash
 pcbex verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witnesses \
   checkpoint-witness-receipts.log.json \
@@ -214,3 +219,7 @@ The unchanged v1.515
 defines the response and quorum contracts. The v1.516
 [key-rotation boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
 defines the optional current trust state.
+
+The v1.518
+[parallel quorum boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
+combines these unchanged single exchanges into one bounded retained result.
