@@ -204,6 +204,10 @@ boundary document for the artifact you plan to produce or trust.
   — acquire unchanged final witnesses over bounded HTTPS, verify direct or
   rotated trust, and retain receipts that replay every exact input offline.
 
+- [Parallel Final Checkpoint Witness Acquisition](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
+  — acquire mixed direct/trust-state witnesses concurrently, retain coarse
+  partial failures, and reproduce the unchanged final quorum offline.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

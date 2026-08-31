@@ -1047,6 +1047,20 @@ unchanged witness and receipt as one alias-free no-clobber set. Offline receipt
 validation repeats the full evidence, signature, freshness, and trust replay
 and emits at most one 64 KiB normalized receipt.
 
+The v1.518 parallel final-witness acquisition accepts one canonical 1 MiB
+manifest containing 2–100 sorted members. Each member carries one endpoint no
+longer than 2,048 bytes, one direct key or embedded 32 KiB trust state, an
+optional environment-variable name no longer than 128 bytes, and a 1–600
+second deadline. Parallelism is bounded from 2 through 16 and cannot exceed the
+member count. The existing v1.517 request/response and v1.512–v1.516 evidence
+limits apply independently to every worker. One closed credential-free
+acquisition report is capped at 16 MiB; the unchanged final quorum remains 128
+KiB. Both output paths and every input path must be distinct and no-clobber.
+Below-threshold runs retain both reports before nonzero exit. Offline replay
+revalidates every successful receipt and recomputes the quorum, but failure
+codes receive structural replay only because historical network conditions are
+not independently reproducible.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

@@ -169,6 +169,11 @@ The v1.517
 returns this unchanged witness format and adds a fully replayable transport
 receipt. The existing quorum verifier remains final authority.
 
+The v1.518
+[parallel acquisition boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
+retains multiple unchanged v1.517 exchanges, reduces partial failures to coarse
+categories, and invokes this same quorum verifier automatically.
+
 The v1.514
 [dedicated checkpoint boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
 defines the exact checkpoint reverified by every witness.

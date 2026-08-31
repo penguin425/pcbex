@@ -1119,6 +1119,11 @@
     {
       "id": "remote-final-factory-release-registry-receipt-quorum-checkpoint-witness-receipt-quorum-checkpoint-witnesses",
       "release": "v1.517.0",
+      "status": "released"
+    },
+    {
+      "id": "parallel-remote-final-checkpoint-witness-quorum-acquisition",
+      "release": "v1.518.0",
       "status": "current"
     }
   ]
