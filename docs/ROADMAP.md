@@ -228,6 +228,7 @@ auditable release.
 | v1.513.0 | Quorum-bound factory checkpoint-witness receipt-log signing | Preserve every v1.504–v1.512 artifact and the generic approval checkpoint format while adding one dedicated signing gate that requires a met canonical v1.512 report, matches the exact admission-log identity, count, head, and complete digest, verifies every sorted checkpoint-witness receipt suffix event against its report member, rejects partial, extended, substituted, unbound, or unrelated logs before reading private signing material, and re-reads the log, report, and key before writing one alias-free no-clobber generic checkpoint without claiming protected state or keys, raw receipt/response/report/checkpoint/signature/trust replay at signing time, a dedicated signature domain, trusted time, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.514.0 | Domain-separated signed factory checkpoint-witness receipt-quorum checkpoints | Preserve every v1.504–v1.513 wire artifact and the generic checkpoint path while adding closed canonical dedicated checkpoint and verification contracts that sign the normalized v1.512 report digest, registry identity/generation/checkpoint, exact v1.506 factory receipt-quorum checkpoint digest, admission-log identity/count/head/digest, enforced threshold/result, and signer under a checkpoint-witness receipt-quorum-specific Ed25519 domain; reject generic and v1.506 signature substitution; validate public evidence before key access; and re-read every input before alias-free no-clobber publication without claiming raw receipt/response/witness/trust replay at checkpoint time, protected files or keys, trusted time, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.515.0 | Independent factory checkpoint-witness receipt-quorum checkpoint witnesses | Preserve every v1.504–v1.514 wire artifact while adding closed canonical witness and quorum-report contracts that re-verify the exact successful v1.512 checkpoint-witness receipt quorum, complete admission log and suffix, v1.514 dedicated checkpoint signature, and independently pinned checkpoint key before witness-key access; sign the exact checkpoint/log state under a separate Ed25519 witness domain; require a fresh 2–100 quorum with distinct non-weak identities and keys disjoint from the checkpoint signer; retain valid below-threshold evidence before returning nonzero; and re-read every input before alias-free no-clobber publication without claiming protected files or keys, trusted time, real operational independence, generation-chained witness trust, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.516.0 | Final factory checkpoint-witness receipt-quorum checkpoint witness key rotation | Preserve the v1.515 signed witness and quorum-report wire contracts while binding each final witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing bounded monotonic generations and rotation times, and letting the unchanged quorum consume either paired direct keys or paired current trust states while rejecting stale keys, mixed trust modes, identity mismatch, and checkpoint-signer role collision without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2366,7 +2367,7 @@ trusted time, prove independent operation or global publication/non-equivocation
 establish legal identity, or prove ordering, payment, or exactly-once
 execution.
 
-The current v1.515.0 milestone adds closed witness and quorum-report contracts
+The released v1.515.0 milestone adds closed witness and quorum-report contracts
 for that exact v1.514 checkpoint. Every witness first re-runs the complete
 v1.512 report, admission-log, suffix, checkpoint-signature, and trusted-key
 verification before its private key is read.
@@ -2379,5 +2380,22 @@ key reuse, and retains a valid below-threshold report before returning nonzero.
 Both commands re-read every input before alias-free no-clobber publication.
 They do not protect files or keys, establish trusted time, prove real operator
 independence or generation-chained trust, provide global
+publication/non-equivocation, establish legal identity, or prove ordering,
+payment, or exactly-once execution.
+
+The current v1.516.0 milestone preserves those witness and quorum-report bytes
+while binding each final witness identity to a generation-zero trust state.
+Each successor transition advances exactly one generation and commits to its
+predecessor digest; both the retained and successor Ed25519 keys sign one
+dedicated-domain payload before the new key becomes current.
+
+The unchanged v1.515 verifier now accepts one uniform trust mode: paired direct
+keys or paired current trust states. It rejects stale and successor-key
+mismatches, mixed modes, identity mismatch, repeated keys, weak keys, and
+checkpoint-signer role reuse. Every CLI input is re-read before alias-free
+no-clobber publication.
+
+This boundary does not protect retained files or keys, establish trusted time,
+prove independent key custody or operators, provide global
 publication/non-equivocation, establish legal identity, or prove ordering,
 payment, or exactly-once execution.

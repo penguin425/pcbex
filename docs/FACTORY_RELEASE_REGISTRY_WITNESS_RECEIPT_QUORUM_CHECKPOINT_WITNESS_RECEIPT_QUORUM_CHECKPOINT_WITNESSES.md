@@ -116,7 +116,7 @@ pcbex validate-remote-factory-release-registry-history-receipt-quorum-log-checkp
    checkpoint.
 2. Re-run the strict report/log/suffix binding and dedicated checkpoint
    signature verification.
-3. Match every witness to its paired directly pinned public key.
+3. Match every witness to its paired direct key or current v1.516 trust state.
 4. Require exact checkpoint and log bindings, a strict Ed25519 signature, and
    the 24-hour freshness window.
 5. Reject weak keys, checkpoint-key reuse, and repeated witness identities or
@@ -137,10 +137,15 @@ the verifier writes a canonical report with `quorum_met: false` and
 
 ## MCP
 
-Two task-forbidden destructive tools mirror the CLI:
+Six tools mirror the CLI. The export tool is read-only; the others are
+task-forbidden destructive operations:
 
 - `witness_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint`
 - `verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses`
+- `init_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust`
+- `sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation`
+- `apply_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation`
+- `export_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_public_key`
 
 ## Trust Boundary
 
@@ -153,9 +158,11 @@ systems. It also does not protect local files or keys, establish trusted time
 or legal identity, publish evidence globally, prevent equivocation, establish
 ordering, place an order, authorize payment, or prove exactly-once execution.
 
-This version accepts direct public-key pins only. A later rotation boundary can
-add generation-chained witness trust without changing either v1.515 wire
-contract.
+The v1.516
+[key-rotation boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
+adds generation-chained trust without changing either v1.515 wire contract.
+Use direct pins for static deployments or pair every witness with its current
+trust state when keys rotate; one invocation cannot mix the two modes.
 
 The v1.514
 [dedicated checkpoint boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
