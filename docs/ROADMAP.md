@@ -231,6 +231,7 @@ auditable release.
 | v1.516.1 | Final factory checkpoint-witness receipt-quorum checkpoint witness key rotation | Preserve the v1.515 signed witness and quorum-report wire contracts while binding each final witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing bounded monotonic generations and rotation times, and letting the unchanged quorum consume either paired direct keys or paired current trust states while rejecting stale keys, mixed trust modes, identity mismatch, and checkpoint-signer role collision without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.517.0 | Remote final factory checkpoint witnesses | Preserve every v1.512–v1.516 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one bounded no-redirect HTTPS acquisition path that validates endpoint and role-separated key configuration, production-verifies the exact v1.512 report/log/suffix and v1.514 checkpoint before credential or network access, accepts one unchanged canonical v1.515 witness under either a direct key or current v1.516 trust state, and publishes the witness with a closed 64 KiB credential-free receipt binding raw and semantic public evidence, request, response, endpoint, keys, trust generation, freshness time, and decision; add full offline receipt replay without claiming protected files or keys, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.518.0 | Parallel remote final checkpoint witness quorum acquisition | Preserve every v1.512–v1.517 wire contract while accepting one closed 1 MiB manifest of 2–100 sorted, distinct endpoints and either direct keys or current trust states; validate all configuration and production-verify the shared report/log/checkpoint before any credential or network access; acquire witnesses through 2–16 bounded parallel v1.517 workers; retain unchanged successful witness/receipt pairs and credential-free coarse failure categories; invoke the production v1.515 verifier over the verified subset; publish one closed 16 MiB acquisition report with the unchanged final quorum even when the threshold fails; and fully replay successful receipts, signatures, trust bindings, and quorum offline without claiming that historical network failures can be independently reproduced, or claiming protected state, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
+| v1.519.0 | Final checkpoint-witness receipt transparency | Preserve every v1.512–v1.518 wire artifact and acquisition path while structurally validating one canonical verified v1.517 final-witness receipt, normalizing its exact compact receipt, final checkpoint, request, raw response, and witness identities into one additive approval-log artifact kind, and reusing the unchanged signed hash chain, anchor, consistency, gossip, witness-rotation, and witness-quorum controls without claiming verifier-bound replay of the report/log/checkpoint/response/signature/trust evidence, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2407,7 +2408,7 @@ The v1.516.1 patch also raises the bounded release-build job ceiling from 45 to
 Verification, draft preparation, audit, and publication retain their existing
 independent time ceilings.
 
-The current v1.517.0 milestone closes the final-witness transport gap without
+The released v1.517.0 milestone closes the final-witness transport gap without
 changing the v1.515 witness or quorum-report wire contracts. It validates the
 endpoint and role-separated keys, parses the complete v1.512 report and
 admission log, and re-runs the production v1.514 checkpoint verifier before it
@@ -2428,7 +2429,7 @@ protect files or keys, establish trusted time, endpoint legal identity or
 availability, independent operation, global publication/non-equivocation,
 ordering, payment, or exactly-once execution.
 
-The current v1.518.0 milestone composes those unchanged single exchanges into
+The released v1.518.0 milestone composes those unchanged single exchanges into
 one bounded quorum acquisition. A closed manifest sorts 2–100 distinct witness
 identities, effective keys, and endpoints, permits direct and current-trust
 members in one run, and caps actual worker parallelism at 16.
@@ -2444,3 +2445,19 @@ even when the threshold is not met, then returns nonzero. Offline validation
 fully replays each retained success and recomputes the quorum. It verifies only
 the structure and configured binding of failures because past credential,
 transport, HTTP, or availability conditions cannot be independently recreated.
+
+The current v1.519.0 milestone publishes one unchanged successful transport
+receipt through the existing approval transparency chain. The additive
+artifact kind accepts only the strict closed canonical v1.517 receipt and maps
+its compact digest, final checkpoint, request, raw response, and witness
+identity into one immutable successor event.
+
+Existing approval-log signing, anchoring, consistency, gossip, witness
+rotation, and witness-quorum controls apply unchanged. Append remains a
+structural boundary: it does not replay the v1.512 report, complete admission
+log, v1.514 checkpoint, exact v1.515 response, witness signature, freshness, or
+current v1.516 trust state.
+
+Protected files, states, and keys; trusted time; endpoint or legal identity;
+independent operation; global publication/non-equivocation; ordering; payment;
+and exactly-once execution remain false.
