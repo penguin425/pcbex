@@ -21,6 +21,7 @@ pub enum ApprovalArtifactKind {
     RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
     RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt,
     RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceipt,
+    RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -855,7 +856,8 @@ pub fn approval_transparency_log_json_schema() -> Value {
                                     "remote_registry_history_checkpoint_witness_receipt",
                                     "remote_approval_registry_history_checkpoint_witness_receipt",
                                     "remote_factory_release_registry_history_checkpoint_witness_receipt",
-                                    "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt"
+                                    "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt",
+                                    "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
                                 ]},
                                 "artifact_sha256": digest,
                                 "subject_id": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_BYTES},
@@ -1104,6 +1106,15 @@ mod tests {
                 .unwrap()
                 .contains(&json!(
                     "remote_factory_release_registry_history_checkpoint_witness_receipt"
+                ))
+        );
+        assert!(
+            log["properties"]["entries"]["items"]["properties"]["event"]["properties"]
+                ["artifact_kind"]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(
+                    "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
                 ))
         );
         assert!(

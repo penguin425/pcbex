@@ -5649,6 +5649,122 @@ fn exports_and_independently_audits_complete_five_kind_registry_history() {
         remote_final_checkpoint_witness_b_receipt_source
     );
 
+    let remote_final_checkpoint_witness_receipt_log_empty =
+        root.join("final-checkpoint-witness-receipts.log.0.json");
+    let remote_final_checkpoint_witness_receipt_log =
+        root.join("final-checkpoint-witness-receipts.log.1.json");
+    let remote_final_checkpoint_witness_receipt_log_checkpoint =
+        root.join("final-checkpoint-witness-receipts.checkpoint.json");
+    let remote_final_checkpoint_witness_receipt_log_verification =
+        root.join("final-checkpoint-witness-receipts.verification.json");
+    successful(&[
+        "init-approval-log",
+        "--log-id",
+        "final-checkpoint-witness-receipts",
+        "--output",
+        path(&remote_final_checkpoint_witness_receipt_log_empty),
+    ]);
+    successful(&[
+        "append-approval-log",
+        path(&remote_final_checkpoint_witness_receipt_log_empty),
+        "--artifact",
+        path(&remote_final_checkpoint_witness_b_receipt),
+        "--kind",
+        "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
+        "--recorded-at-unix",
+        "5801",
+        "--output",
+        path(&remote_final_checkpoint_witness_receipt_log),
+    ]);
+    let remote_final_checkpoint_witness_receipt_log_value: Value =
+        serde_json::from_slice(&fs::read(&remote_final_checkpoint_witness_receipt_log).unwrap())
+            .unwrap();
+    let remote_final_checkpoint_witness_receipt_event =
+        &remote_final_checkpoint_witness_receipt_log_value["entries"][0]["event"];
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["artifact_kind"],
+        "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
+    );
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["artifact_sha256"],
+        hex::encode(Sha256::digest(compact_json_source(
+            &remote_final_checkpoint_witness_b_receipt_source
+        )))
+    );
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["subject_id"],
+        remote_final_checkpoint_witness_b_receipt_value["checkpoint_sha256"]
+    );
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["request_sha256"],
+        remote_final_checkpoint_witness_b_receipt_value["request_sha256"]
+    );
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["session_sha256"],
+        remote_final_checkpoint_witness_b_receipt_value["response_sha256"]
+    );
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["signer_id"],
+        Value::Null
+    );
+    assert_eq!(
+        remote_final_checkpoint_witness_receipt_event["outcome"],
+        "verified-witness:checkpoint-receipt-quorum-witness-b"
+    );
+    successful(&[
+        "sign-approval-log",
+        path(&remote_final_checkpoint_witness_receipt_log),
+        "--private-key",
+        path(&final_checkpoint_witness_b_secret),
+        "--signer-id",
+        "final-checkpoint-witness-receipt-log",
+        "--output",
+        path(&remote_final_checkpoint_witness_receipt_log_checkpoint),
+    ]);
+    successful(&[
+        "verify-approval-log",
+        path(&remote_final_checkpoint_witness_receipt_log),
+        "--checkpoint",
+        path(&remote_final_checkpoint_witness_receipt_log_checkpoint),
+        "--public-key",
+        path(&final_checkpoint_witness_b_public),
+        "--output",
+        path(&remote_final_checkpoint_witness_receipt_log_verification),
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(&remote_final_checkpoint_witness_receipt_log_verification).unwrap()
+        )
+        .unwrap()["verified"],
+        true
+    );
+
+    let mut rejected_remote_final_checkpoint_witness_receipt_value =
+        remote_final_checkpoint_witness_b_receipt_value.clone();
+    rejected_remote_final_checkpoint_witness_receipt_value["verified"] = false.into();
+    let rejected_remote_final_checkpoint_witness_receipt =
+        root.join("final-checkpoint-witness-receipt.rejected.json");
+    let rejected_remote_final_checkpoint_witness_receipt_log =
+        root.join("final-checkpoint-witness-receipts.rejected-log.json");
+    write_canonical_json(
+        &rejected_remote_final_checkpoint_witness_receipt,
+        &rejected_remote_final_checkpoint_witness_receipt_value,
+    );
+    let rejected = run(&[
+        "append-approval-log",
+        path(&remote_final_checkpoint_witness_receipt_log),
+        "--artifact",
+        path(&rejected_remote_final_checkpoint_witness_receipt),
+        "--kind",
+        "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
+        "--recorded-at-unix",
+        "5802",
+        "--output",
+        path(&rejected_remote_final_checkpoint_witness_receipt_log),
+    ]);
+    assert!(!rejected.status.success());
+    assert!(!rejected_remote_final_checkpoint_witness_receipt_log.exists());
+
     let remote_final_checkpoint_witness_a_rotated = root.join(
         "registry-witness-receipts.remote-checkpoint-receipts.quorum.dedicated-checkpoint.witness-a.rotated.remote.json",
     );

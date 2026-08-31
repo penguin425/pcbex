@@ -1061,6 +1061,13 @@ revalidates every successful receipt and recomputes the quorum, but failure
 codes receive structural replay only because historical network conditions are
 not independently reproducible.
 
+The v1.519 transparency append keeps the generic 128 MiB input-log and artifact
+read boundary, then tightens the selected final-witness receipt to the closed
+canonical 64 KiB v1.517 contract before mutation. The existing log permits at
+most 100,000 entries and 256-byte event text fields. Append validates the
+complete input chain and receipt before publishing one new no-clobber snapshot;
+signing, anchoring, consistency, gossip, and witness limits remain unchanged.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

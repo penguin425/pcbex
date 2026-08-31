@@ -246,3 +246,7 @@ ordering; place an order; approve payment; or guarantee exactly-once execution.
 The [single-witness transport guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
 defines each retained v1.517 receipt. The [final witness guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
 remains authoritative for the unchanged v1.515 signature and quorum contracts.
+
+Version 1.519 adds a [structural transparency boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
+for any retained canonical success receipt. It does not change this acquisition
+report or independently reproduce historical failure conditions.

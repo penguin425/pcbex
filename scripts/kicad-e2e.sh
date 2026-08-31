@@ -2862,6 +2862,13 @@ factory_final_checkpoint_remote_witness_receipt_schema="$output_directory/factor
 factory_final_checkpoint_remote_witness_b_receipt_normalized="$output_directory/factory-final-checkpoint.witness-b.remote.receipt.normalized.json"
 factory_final_checkpoint_remote_witness_a_rotated_receipt_normalized="$output_directory/factory-final-checkpoint.witness-a.rotated.remote.receipt.normalized.json"
 factory_final_checkpoint_remote_witness_quorum="$output_directory/factory-final-checkpoint.remote-witness-quorum.json"
+factory_final_checkpoint_remote_witness_receipt_log_empty="$output_directory/factory-final-checkpoint.remote-witness-receipts.log.0.json"
+factory_final_checkpoint_remote_witness_receipt_log="$output_directory/factory-final-checkpoint.remote-witness-receipts.log.1.json"
+factory_final_checkpoint_remote_witness_receipt_log_checkpoint="$output_directory/factory-final-checkpoint.remote-witness-receipts.checkpoint.json"
+factory_final_checkpoint_remote_witness_receipt_log_verification="$output_directory/factory-final-checkpoint.remote-witness-receipts.verification.json"
+factory_final_checkpoint_remote_witness_rejected_receipt="$output_directory/factory-final-checkpoint.remote-witness-receipt.rejected.json"
+factory_final_checkpoint_remote_witness_rejected_receipt_log="$output_directory/factory-final-checkpoint.remote-witness-receipts.rejected-log.json"
+factory_final_checkpoint_remote_witness_rejected_receipt_error="$output_directory/factory-final-checkpoint.remote-witness-receipts.rejected.stderr"
 factory_final_checkpoint_parallel_witness_port="$output_directory/factory-final-checkpoint.parallel-witness.port"
 factory_final_checkpoint_parallel_witness_manifest="$output_directory/factory-final-checkpoint.parallel-witness.manifest.json"
 factory_final_checkpoint_parallel_witness_manifest_schema="$output_directory/factory-final-checkpoint.parallel-witness.manifest.schema.json"
@@ -4872,6 +4879,75 @@ assert receipt_a["witness_key_trust_state_sha256"] is not None
 assert receipt_a["witness_key_generation"] == 1
 assert b"v1517-e2e-bearer-token" not in receipt_b_path.read_bytes()
 assert b"v1517-e2e-bearer-token" not in receipt_a_path.read_bytes()
+PY
+
+# v1.519 structurally admits one canonical v1.517 final-witness receipt into
+# the existing signed approval transparency chain without changing its bytes.
+"$pcbex_binary" init-approval-log \
+  --log-id final-checkpoint-witness-receipts \
+  --output "$factory_final_checkpoint_remote_witness_receipt_log_empty"
+"$pcbex_binary" append-approval-log \
+  "$factory_final_checkpoint_remote_witness_receipt_log_empty" \
+  --artifact "$factory_final_checkpoint_remote_witness_b_receipt" \
+  --kind remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt \
+  --recorded-at-unix "$((factory_final_checkpoint_witness_quorum_at + 1))" \
+  --output "$factory_final_checkpoint_remote_witness_receipt_log"
+"$pcbex_binary" sign-approval-log \
+  "$factory_final_checkpoint_remote_witness_receipt_log" \
+  --private-key "$factory_checkpoint_witness_receipt_quorum_checkpoint_witness_b_private" \
+  --signer-id final-checkpoint-witness-receipt-log \
+  --output "$factory_final_checkpoint_remote_witness_receipt_log_checkpoint"
+"$pcbex_binary" verify-approval-log \
+  "$factory_final_checkpoint_remote_witness_receipt_log" \
+  --checkpoint "$factory_final_checkpoint_remote_witness_receipt_log_checkpoint" \
+  --public-key "$factory_checkpoint_witness_receipt_quorum_checkpoint_witness_b_public" \
+  --output "$factory_final_checkpoint_remote_witness_receipt_log_verification"
+
+jq '.verified = false' \
+  "$factory_final_checkpoint_remote_witness_b_receipt" \
+  >"$factory_final_checkpoint_remote_witness_rejected_receipt"
+if "$pcbex_binary" append-approval-log \
+  "$factory_final_checkpoint_remote_witness_receipt_log" \
+  --artifact "$factory_final_checkpoint_remote_witness_rejected_receipt" \
+  --kind remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt \
+  --recorded-at-unix "$((factory_final_checkpoint_witness_quorum_at + 2))" \
+  --output "$factory_final_checkpoint_remote_witness_rejected_receipt_log" \
+  2>"$factory_final_checkpoint_remote_witness_rejected_receipt_error"; then
+  echo "expected a false final checkpoint-witness receipt to fail transparency-log append" >&2
+  exit 1
+fi
+test ! -e "$factory_final_checkpoint_remote_witness_rejected_receipt_log"
+grep -Fq 'receipt invariants are invalid' \
+  "$factory_final_checkpoint_remote_witness_rejected_receipt_error"
+
+python3 - \
+  "$factory_final_checkpoint_remote_witness_b_receipt" \
+  "$factory_final_checkpoint_remote_witness_receipt_log" \
+  "$factory_final_checkpoint_remote_witness_receipt_log_verification" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+receipt_path, log_path, verification_path = map(Path, sys.argv[1:])
+receipt = json.loads(receipt_path.read_bytes())
+log = json.loads(log_path.read_bytes())
+verification = json.loads(verification_path.read_bytes())
+event = log["entries"][0]["event"]
+compact_receipt = json.dumps(receipt, separators=(",", ":")).encode("ascii")
+
+assert log["log_id"] == "final-checkpoint-witness-receipts"
+assert event["artifact_kind"] == (
+    "remote_factory_release_registry_history_receipt_quorum_log_checkpoint_"
+    "witness_receipt_quorum_log_checkpoint_witness_receipt"
+)
+assert event["artifact_sha256"] == hashlib.sha256(compact_receipt).hexdigest()
+assert event["subject_id"] == receipt["checkpoint_sha256"]
+assert event["request_sha256"] == receipt["request_sha256"]
+assert event["session_sha256"] == receipt["response_sha256"]
+assert event["signer_id"] is None
+assert event["outcome"] == f'verified-witness:{receipt["witness_id"]}'
+assert verification["verified"] is True
 PY
 
 "$pcbex_binary" verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witnesses \

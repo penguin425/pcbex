@@ -101,6 +101,16 @@ pcbex verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoi
   --output final-witness-quorum.json
 ```
 
+## Publish the Receipt
+
+Version 1.519 can normalize this canonical receipt into the existing signed
+approval transparency chain. Append remains structural: it does not replay the
+report, admission log, checkpoint, response, signature, freshness, or current
+trust evidence.
+
+Use the [final receipt transparency guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
+for the exact event mapping, limits, and trust boundary.
+
 ## HTTP Contract
 
 pcbex sends one compact JSON object:
