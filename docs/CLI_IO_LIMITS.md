@@ -1027,6 +1027,15 @@ access. Both commands re-read every input before one alias-free no-clobber
 publication, while a valid below-threshold report is retained before nonzero
 exit.
 
+The v1.516 final-witness trust state and signed key rotation are each capped at
+32 KiB. Initialization, rotation signing, and key export tighten key sources to
+64 lowercase hexadecimal digits plus an optional LF, capped at 65 bytes. Each
+rotation advances exactly one generation from 0 through 4096, binds the prior
+canonical rotation SHA-256, and caps timestamps at `999999999999999`. The
+unchanged v1.515 verifier accepts either 1–100 paired direct public keys or
+1–100 paired current trust states, never both. Every input is re-read before
+one alias-free no-clobber output is published.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

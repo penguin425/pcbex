@@ -3935,12 +3935,12 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses",
             "Verify factory checkpoint-witness receipt-quorum checkpoint witnesses",
-            "Re-verify the exact dedicated checkpoint evidence and require a fresh quorum of distinct trusted witness identities and keys.",
+            "Re-verify the exact dedicated checkpoint evidence and require a fresh quorum against either direct key pins or current generation-chained witness trust states.",
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
                     "log", "quorum_report", "checkpoint", "checkpoint_public_key",
-                    "witnesses", "witness_public_keys", "minimum_witnesses", "output"
+                    "witnesses", "minimum_witnesses", "output"
                 ],
                 "properties": {
                     "log": {"type": "string"},
@@ -3955,15 +3955,100 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {"type": "string", "minLength": 1}
                     },
+                    "witness_trust_states": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
                     "minimum_witnesses": {
                         "type": "integer", "minimum": 2, "maximum": 100
                     },
                     "evaluated_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"}
+                },
+                "oneOf": [
+                    {
+                        "required": ["witness_public_keys"],
+                        "not": {"required": ["witness_trust_states"]}
+                    },
+                    {
+                        "required": ["witness_trust_states"],
+                        "not": {"required": ["witness_public_keys"]}
+                    }
+                ]
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "init_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust",
+            "Initialize factory checkpoint-witness receipt-quorum checkpoint witness trust",
+            "Pin generation-zero trust for one factory checkpoint-witness receipt-quorum checkpoint witness identity and Ed25519 public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["witness_id", "public_key", "output"],
+                "properties": {
+                    "witness_id": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
                 }
             }),
             false,
             true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation",
+            "Sign factory checkpoint-witness receipt-quorum checkpoint witness key rotation",
+            "Require old-key authorization and new-key possession for one generation-chained factory checkpoint witness trust transition.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "old_private_key", "new_private_key", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation",
+            "Apply factory checkpoint-witness receipt-quorum checkpoint witness key rotation",
+            "Verify and atomically advance retained factory checkpoint witness trust by exactly one generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "rotation", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_public_key",
+            "Export factory checkpoint-witness receipt-quorum checkpoint witness public key",
+            "Validate retained factory checkpoint witness trust and export its currently trusted Ed25519 public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            true,
+            false,
             tasks_supported.then_some("forbidden"),
         ),
         tool(
@@ -5809,6 +5894,30 @@ fn call_tool(
         }
         "verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses" => {
             verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+                arguments,
+                cancellation,
+            )?
+        }
+        "init_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust" => {
+            init_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation" => {
+            sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation" => {
+            apply_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "export_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_public_key" => {
+            export_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_public_key(
                 arguments,
                 cancellation,
             )?
@@ -12388,16 +12497,38 @@ fn verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_
             "checkpoint_public_key",
             "witnesses",
             "witness_public_keys",
+            "witness_trust_states",
             "minimum_witnesses",
             "evaluated_at_unix",
             "output",
         ],
     )?;
     let witnesses = required_string_array(&arguments, "witnesses", false)?;
-    let public_keys = required_string_array(&arguments, "witness_public_keys", false)?;
-    if witnesses.len() != public_keys.len() {
+    let public_keys = arguments
+        .contains_key("witness_public_keys")
+        .then(|| required_string_array(&arguments, "witness_public_keys", false))
+        .transpose()?
+        .unwrap_or_default();
+    let trust_states = arguments
+        .contains_key("witness_trust_states")
+        .then(|| required_string_array(&arguments, "witness_trust_states", false))
+        .transpose()?
+        .unwrap_or_default();
+    if (!public_keys.is_empty() && !trust_states.is_empty())
+        || (public_keys.is_empty() && trust_states.is_empty())
+    {
         return Err(json!({
-            "detail": "factory checkpoint-witness receipt quorum checkpoint witnesses and public keys must be paired"
+            "detail": "use either factory checkpoint-witness receipt quorum checkpoint witness public keys or trust states"
+        }));
+    }
+    let trust_count = if trust_states.is_empty() {
+        public_keys.len()
+    } else {
+        trust_states.len()
+    };
+    if witnesses.len() != trust_count {
+        return Err(json!({
+            "detail": "factory checkpoint-witness receipt quorum checkpoint witnesses and trust inputs must be paired"
         }));
     }
     let output = required_string(&arguments, "output")?;
@@ -12418,6 +12549,9 @@ fn verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_
     for public_key in public_keys {
         command.extend(["--witness-public-keys".into(), public_key]);
     }
+    for trust_state in trust_states {
+        command.extend(["--witness-trust-states".into(), trust_state]);
+    }
     optional_positive_integer(
         &arguments,
         "minimum_witnesses",
@@ -12437,6 +12571,109 @@ fn verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_
         execution,
         json!({"output": output, "report": report}),
     ))
+}
+
+fn init_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["witness_id", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-trust"
+            .into(),
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-key-rotation"
+            .into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+    ];
+    optional_nonnegative_integer(
+        &arguments,
+        "rotated_at_unix",
+        "--rotated-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "rotation", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "apply-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-key-rotation"
+            .into(),
+        required_string(&arguments, "trust_state")?,
+        "--rotation".into(),
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn export_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_public_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-public-key"
+            .into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
 }
 
 fn sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint(
@@ -17082,6 +17319,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn final_factory_checkpoint_witness_quorum_requires_one_trust_mode() {
+        let base = json!({
+            "log": "log.json",
+            "quorum_report": "report.json",
+            "checkpoint": "checkpoint.json",
+            "checkpoint_public_key": "checkpoint.hex",
+            "witnesses": ["witness-a.json"],
+            "minimum_witnesses": 2,
+            "output": "quorum.json"
+        });
+
+        let mut absent = base.as_object().unwrap().clone();
+        let absent_error = verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+            std::mem::take(&mut absent),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            absent_error["detail"],
+            "use either factory checkpoint-witness receipt quorum checkpoint witness public keys or trust states"
+        );
+
+        let mut mixed = base.as_object().unwrap().clone();
+        mixed.insert("witness_public_keys".into(), json!(["witness-a.hex"]));
+        mixed.insert(
+            "witness_trust_states".into(),
+            json!(["witness-a.trust.json"]),
+        );
+        let mixed_error = verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+            mixed,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            mixed_error["detail"],
+            "use either factory checkpoint-witness receipt quorum checkpoint witness public keys or trust states"
+        );
+
+        let mut unpaired = base.as_object().unwrap().clone();
+        unpaired.insert(
+            "witness_trust_states".into(),
+            json!(["witness-a.trust.json", "witness-b.trust.json"]),
+        );
+        let unpaired_error = verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+            unpaired,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            unpaired_error["detail"],
+            "factory checkpoint-witness receipt quorum checkpoint witnesses and trust inputs must be paired"
+        );
+    }
+
     fn request(id: i64, method: &str, params: Value) -> Value {
         json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})
     }
@@ -17123,7 +17415,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 171);
+        assert_eq!(tools.len(), 175);
         let named = |name: &str| {
             tools
                 .iter()
@@ -18183,10 +18475,15 @@ mod tests {
                 "checkpoint",
                 "checkpoint_public_key",
                 "witnesses",
-                "witness_public_keys",
                 "minimum_witnesses",
                 "output"
             ])
+        );
+        assert_eq!(
+            named(
+                "verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses"
+            )["inputSchema"]["oneOf"][1]["required"][0],
+            "witness_trust_states"
         );
         assert_eq!(
             named(
@@ -18204,6 +18501,30 @@ mod tests {
             named(
                 "verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses"
             )["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named(
+                "init_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust"
+            )["inputSchema"]["required"],
+            json!(["witness_id", "public_key", "output"])
+        );
+        assert_eq!(
+            named(
+                "sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation"
+            )["inputSchema"]["properties"]["rotated_at_unix"]["minimum"],
+            0
+        );
+        assert_eq!(
+            named(
+                "apply_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation"
+            )["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named(
+                "export_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_public_key"
+            )["annotations"]["readOnlyHint"],
             true
         );
         assert_eq!(
