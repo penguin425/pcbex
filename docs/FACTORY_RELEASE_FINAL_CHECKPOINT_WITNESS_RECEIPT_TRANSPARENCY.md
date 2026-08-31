@@ -11,7 +11,8 @@ request, receipt, manifest, and acquisition-report format remains unchanged.
 > Append performs strict structural admission. It does not replay the v1.512
 > quorum report, admission log, v1.514 checkpoint, exact response, witness
 > signature, freshness, or current v1.516 trust state. Admit receipts only from
-> a trusted v1.517 or v1.518 acquisition boundary.
+> a trusted v1.517 or v1.518 acquisition boundary, or use the v1.520
+> verifier-bound append when the complete retained evidence is available.
 
 ## Key Features
 
@@ -144,3 +145,5 @@ order; approve payment; or guarantee exactly-once execution.
 The [remote final-witness guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
 defines the unchanged receipt. The [parallel acquisition guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
 defines how v1.518 retains multiple successful receipts beside coarse failures.
+The [verifier-bound admission guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+replays the complete retained boundary before emitting this same event.

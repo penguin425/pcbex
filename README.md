@@ -283,6 +283,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Remote final checkpoint witnesses v1 | Acquire unchanged final witnesses over bounded HTTPS and retain fully replayable, hash-bound transport receipts | [Remote final-witness guide](docs/FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md) |
 | Parallel final-witness quorum acquisition v1 | Acquire mixed-trust witnesses concurrently, retain partial failures, and replay the unchanged final quorum offline | [Parallel acquisition guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md) |
 | Final checkpoint-witness receipt transparency v1 | Normalize one canonical final transport receipt into the existing signed, anchored, consistency-proved, gossiped, and witnessed approval-log chain | [Final receipt transparency guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md) |
+| Verifier-bound final receipt admission v1 | Replay the exact final checkpoint, response, signature, freshness, and direct or rotated witness trust before appending the unchanged event | [Final receipt admission guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

@@ -212,6 +212,10 @@ boundary document for the artifact you plan to produce or trust.
   — normalize one canonical final transport receipt into the existing signed,
   anchored, consistency-proved, gossiped, and witnessed approval log.
 
+- [Verifier-bound Final Checkpoint-witness Receipt Admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+  — replay the exact report, admission log, final checkpoint, raw response,
+  signature, freshness, and direct or rotated trust before append.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

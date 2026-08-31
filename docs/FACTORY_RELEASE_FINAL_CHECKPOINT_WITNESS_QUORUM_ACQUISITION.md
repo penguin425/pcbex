@@ -250,3 +250,7 @@ remains authoritative for the unchanged v1.515 signature and quorum contracts.
 Version 1.519 adds a [structural transparency boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
 for any retained canonical success receipt. It does not change this acquisition
 report or independently reproduce historical failure conditions.
+
+Version 1.520 adds a [verifier-bound admission boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+for one retained success. It replays exact public evidence, response, signature,
+freshness, and trust without changing this acquisition report.
