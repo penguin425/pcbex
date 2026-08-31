@@ -164,6 +164,11 @@ adds generation-chained trust without changing either v1.515 wire contract.
 Use direct pins for static deployments or pair every witness with its current
 trust state when keys rotate; one invocation cannot mix the two modes.
 
+The v1.517
+[remote acquisition boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+returns this unchanged witness format and adds a fully replayable transport
+receipt. The existing quorum verifier remains final authority.
+
 The v1.514
 [dedicated checkpoint boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
 defines the exact checkpoint reverified by every witness.

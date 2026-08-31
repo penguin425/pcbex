@@ -146,3 +146,8 @@ The unchanged v1.515
 [witness boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
 accepts direct pins for static deployments and current trust states when final
 witness keys rotate.
+
+The v1.517
+[remote acquisition boundary](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+can resolve this current trust state before verifying and retaining an
+unchanged v1.515 response.

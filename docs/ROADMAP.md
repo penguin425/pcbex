@@ -229,6 +229,7 @@ auditable release.
 | v1.514.0 | Domain-separated signed factory checkpoint-witness receipt-quorum checkpoints | Preserve every v1.504–v1.513 wire artifact and the generic checkpoint path while adding closed canonical dedicated checkpoint and verification contracts that sign the normalized v1.512 report digest, registry identity/generation/checkpoint, exact v1.506 factory receipt-quorum checkpoint digest, admission-log identity/count/head/digest, enforced threshold/result, and signer under a checkpoint-witness receipt-quorum-specific Ed25519 domain; reject generic and v1.506 signature substitution; validate public evidence before key access; and re-read every input before alias-free no-clobber publication without claiming raw receipt/response/witness/trust replay at checkpoint time, protected files or keys, trusted time, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.515.0 | Independent factory checkpoint-witness receipt-quorum checkpoint witnesses | Preserve every v1.504–v1.514 wire artifact while adding closed canonical witness and quorum-report contracts that re-verify the exact successful v1.512 checkpoint-witness receipt quorum, complete admission log and suffix, v1.514 dedicated checkpoint signature, and independently pinned checkpoint key before witness-key access; sign the exact checkpoint/log state under a separate Ed25519 witness domain; require a fresh 2–100 quorum with distinct non-weak identities and keys disjoint from the checkpoint signer; retain valid below-threshold evidence before returning nonzero; and re-read every input before alias-free no-clobber publication without claiming protected files or keys, trusted time, real operational independence, generation-chained witness trust, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.516.1 | Final factory checkpoint-witness receipt-quorum checkpoint witness key rotation | Preserve the v1.515 signed witness and quorum-report wire contracts while binding each final witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing bounded monotonic generations and rotation times, and letting the unchanged quorum consume either paired direct keys or paired current trust states while rejecting stale keys, mixed trust modes, identity mismatch, and checkpoint-signer role collision without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.517.0 | Remote final factory checkpoint witnesses | Preserve every v1.512–v1.516 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one bounded no-redirect HTTPS acquisition path that validates endpoint and role-separated key configuration, production-verifies the exact v1.512 report/log/suffix and v1.514 checkpoint before credential or network access, accepts one unchanged canonical v1.515 witness under either a direct key or current v1.516 trust state, and publishes the witness with a closed 64 KiB credential-free receipt binding raw and semantic public evidence, request, response, endpoint, keys, trust generation, freshness time, and decision; add full offline receipt replay without claiming protected files or keys, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2383,7 +2384,7 @@ independence or generation-chained trust, provide global
 publication/non-equivocation, establish legal identity, or prove ordering,
 payment, or exactly-once execution.
 
-The current v1.516.1 milestone preserves those witness and quorum-report bytes
+The released v1.516.1 milestone preserves those witness and quorum-report bytes
 while binding each final witness identity to a generation-zero trust state.
 Each successor transition advances exactly one generation and commits to its
 predecessor digest; both the retained and successor Ed25519 keys sign one
@@ -2404,3 +2405,24 @@ The v1.516.1 patch also raises the bounded release-build job ceiling from 45 to
 60 minutes after two clean Windows release builds exhausted the earlier limit.
 Verification, draft preparation, audit, and publication retain their existing
 independent time ceilings.
+
+The current v1.517.0 milestone closes the final-witness transport gap without
+changing the v1.515 witness or quorum-report wire contracts. It validates the
+endpoint and role-separated keys, parses the complete v1.512 report and
+admission log, and re-runs the production v1.514 checkpoint verifier before it
+reads an optional Bearer token or sends one bounded no-redirect HTTPS request.
+
+The canonical response must pass the unchanged signature, exact evidence,
+identity, 24-hour freshness, and checkpoint-signer role-separation checks under
+either a direct key pin or current v1.516 trust state. pcbex then re-reads every
+local input and publishes the unchanged witness with a closed receipt binding
+raw and semantic evidence digests, endpoint, request, response, keys, trust
+generation, and evaluation time. The credential is never retained.
+
+The dedicated validator replays every retained input, the exact response, and
+current trust entirely offline before emitting the byte-identical normalized
+receipt. This proves one configured key signed one exact locally verified
+checkpoint and that those bytes crossed one bounded exchange. It does not
+protect files or keys, establish trusted time, endpoint legal identity or
+availability, independent operation, global publication/non-equivocation,
+ordering, payment, or exactly-once execution.

@@ -1036,6 +1036,17 @@ unchanged v1.515 verifier accepts either 1–100 paired direct public keys or
 1–100 paired current trust states, never both. Every input is re-read before
 one alias-free no-clobber output is published.
 
+The v1.517 remote final-witness request keeps the 128 MiB admission-log, 128
+KiB v1.512 report, 64 KiB v1.514 checkpoint, 65-byte key, and 32 KiB v1.516
+trust-state limits. Its compact public request is capped at 129 MiB, its
+end-to-end deadline at 1–600 seconds, and its `application/json` response at 1
+MiB before canonical v1.515 parsing tightens the witness to 64 KiB. The closed
+receipt is capped at 64 KiB. Acquisition verifies public evidence before
+credential or network access, then re-reads every input before publishing the
+unchanged witness and receipt as one alias-free no-clobber set. Offline receipt
+validation repeats the full evidence, signature, freshness, and trust replay
+and emits at most one 64 KiB normalized receipt.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
