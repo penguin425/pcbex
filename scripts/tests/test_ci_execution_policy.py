@@ -50,7 +50,7 @@ EXPECTED_TIMEOUTS = {
         "rust": 45,
         "python": 20,
         "python-boundaries": 60,
-        "rust-windows-boundaries": 45,
+        "rust-windows-boundaries": 60,
     },
     "codeql.yml": {"analyze": 30},
     "fuzz.yml": {"fuzz": 30},
