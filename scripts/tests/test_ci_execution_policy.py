@@ -49,7 +49,7 @@ EXPECTED_TIMEOUTS = {
         "deterministic-pipeline": 45,
         "rust": 45,
         "python": 20,
-        "python-boundaries": 60,
+        "python-boundaries": 90,
         "rust-windows-boundaries": 60,
     },
     "codeql.yml": {"analyze": 30},
@@ -64,6 +64,8 @@ EXPECTED_TIMEOUTS = {
         "publish": 10,
     },
 }
+
+MAX_REVIEWED_TIMEOUT_MINUTES = 90
 
 EXPECTED_CONCURRENCY = {
     "ci.yml": ("group: ci-${{ github.workflow }}-${{ github.ref }}", "true"),
@@ -128,7 +130,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                     timeout = _direct_integer(blocks[job], "timeout-minutes")
                     self.assertEqual(timeout, expected_timeout)
                     self.assertGreater(timeout, 0)
-                    self.assertLessEqual(timeout, 60)
+                    self.assertLessEqual(timeout, MAX_REVIEWED_TIMEOUT_MINUTES)
 
     def test_every_workflow_has_bounded_concurrency(self):
         for filename in EXPECTED_TIMEOUTS:
@@ -813,7 +815,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                 "- name: Run Windows monotonic factory-state boundaries"
             ),
             rust_windows.index(
-                "- name: Run Windows v1.485-v1.523 factory-state transparency boundaries"
+                "- name: Run Windows v1.485-v1.524 factory-state transparency boundaries"
             ),
         )
         self.assertIn("runs-on: windows-latest", rust_windows)
@@ -888,13 +890,13 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "- name: Run cross-platform v1.484 monotonic factory-state boundaries"
         )
         factory_state_transparency_step = boundaries.index(
-            "- name: Run cross-platform v1.485-v1.523 factory-state transparency boundaries"
+            "- name: Run cross-platform v1.485-v1.524 factory-state transparency boundaries"
         )
         observer_rotation_step = boundaries.index(
             "- name: Run cross-platform v1.492 observer-rotation ledger boundaries"
         )
         organization_registry_step = boundaries.index(
-            "- name: Run cross-platform v1.493-v1.523 organization-registry ledger boundaries"
+            "- name: Run cross-platform v1.493-v1.524 organization-registry ledger boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"

@@ -70,7 +70,8 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Witness and admit portable registry heads:** Replay complete governance
   history, rotate witness trust, acquire hash-bound remote endorsements, and
   require a distinct verifier-bound receipt quorum before issuing a
-  domain-separated checkpoint with a fresh independent witness quorum.
+  domain-separated checkpoint with a fresh independent witness quorum at the
+  [final release boundary](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md).
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.

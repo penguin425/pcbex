@@ -1098,6 +1098,14 @@ requires a separately supplied 65-byte trusted public key. Both paths reject
 aliases and existing destinations, then re-read every input before one
 no-clobber publication.
 
+The v1.524 witness boundary keeps the 128 MiB final log, 128 KiB v1.521 report,
+64 KiB v1.523 checkpoint, and 65-byte checkpoint-key bounds. Each closed signed
+witness is capped at 64 KiB. Quorum verification accepts 1–100 paired 64 KiB
+witnesses and 65-byte direct public keys, requires a threshold from 2 to 100,
+and emits a closed report capped at 128 KiB. Signing validates every public
+input before reading its 1 KiB private-key file; both commands re-read all
+inputs before alias-free no-clobber publication.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
