@@ -1134,6 +1134,11 @@
     {
       "id": "verifier-bound-factory-release-final-checkpoint-witness-receipt-admission",
       "release": "v1.520.0",
+      "status": "released"
+    },
+    {
+      "id": "verifier-bound-factory-release-final-checkpoint-witness-receipt-admission-quorum",
+      "release": "v1.521.0",
       "status": "current"
     }
   ]

@@ -174,3 +174,7 @@ The [receipt transparency guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIP
 defines the unchanged event. The
 [remote final-witness guide](FACTORY_RELEASE_REGISTRY_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
 defines the retained receipt and response contracts.
+
+Use the v1.521
+[quorum admission boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+when policy requires multiple distinct final witnesses.

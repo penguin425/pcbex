@@ -1076,6 +1076,14 @@ distinct no-clobber destination, replays the complete production verification
 path, and re-reads all eight inputs by identity, byte count, and SHA-256 before
 publishing the unchanged v1.519 event.
 
+The v1.521 quorum append keeps the 128 MiB destination and shared admission-log
+limits, 128 KiB v1.512 report, 64 KiB v1.514 checkpoint, and 65-byte checkpoint
+key. It accepts 1–100 paired 64 KiB v1.517 receipts and 64 KiB v1.515 responses,
+plus either 1–100 paired 65-byte direct keys or 1–100 current 32 KiB v1.516
+trust states. The threshold is 2–100. The closed report is capped at 128 KiB;
+both no-clobber outputs and every input must be distinct. All inputs pass a
+final identity, byte-count, and SHA-256 reread before two-output publication.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

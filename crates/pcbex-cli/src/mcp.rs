@@ -3735,6 +3735,73 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum",
+            "Verify and append final checkpoint-witness receipt quorum",
+            "Replay one exact checkpoint-witness receipt quorum report, complete admission log, signed final checkpoint, raw witness responses, checkpoint trust, per-witness trust, freshness, and Ed25519 signatures before no-clobber publication of the admitted final receipt quorum and report.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "log", "receipts", "quorum_report", "approval_log",
+                    "checkpoint", "checkpoint_public_key", "responses",
+                    "output", "report_output"
+                ],
+                "properties": {
+                    "log": {"type": "string"},
+                    "receipts": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "quorum_report": {"type": "string"},
+                    "approval_log": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "checkpoint_public_key": {"type": "string"},
+                    "responses": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "trusted_witness_ids": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "trusted_witness_public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "witness_trust_states": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "minimum_witnesses": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "report_output": {"type": "string"}
+                },
+                "oneOf": [
+                    {
+                        "required": [
+                            "trusted_witness_ids", "trusted_witness_public_keys"
+                        ],
+                        "not": {"required": ["witness_trust_states"]}
+                    },
+                    {
+                        "required": ["witness_trust_states"],
+                        "not": {
+                            "anyOf": [
+                                {"required": ["trusted_witness_ids"]},
+                                {"required": ["trusted_witness_public_keys"]}
+                            ]
+                        }
+                    }
+                ]
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum",
             "Verify and append factory checkpoint-witness receipt quorum",
             "Replay one exact quorum report, complete approval log, signed checkpoint, raw witness responses, checkpoint trust, per-witness trust, freshness, and Ed25519 signatures before no-clobber publication of the admitted receipt quorum and report.",
@@ -5889,6 +5956,12 @@ fn call_tool(
         }
         "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt" => {
             append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+                arguments,
+                cancellation,
+            )?
+        }
+        "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum" => {
+            append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum(
                 arguments,
                 cancellation,
             )?
@@ -12214,6 +12287,119 @@ fn append_verified_remote_factory_release_registry_history_receipt_quorum_log_ch
     ))
 }
 
+fn append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "log",
+            "receipts",
+            "quorum_report",
+            "approval_log",
+            "checkpoint",
+            "checkpoint_public_key",
+            "responses",
+            "trusted_witness_ids",
+            "trusted_witness_public_keys",
+            "witness_trust_states",
+            "minimum_witnesses",
+            "evaluated_at_unix",
+            "recorded_at_unix",
+            "output",
+            "report_output",
+        ],
+    )?;
+    let receipts = required_string_array(&arguments, "receipts", false)?;
+    let responses = required_string_array(&arguments, "responses", false)?;
+    let trusted_ids = required_string_array(&arguments, "trusted_witness_ids", true)?;
+    let trusted_keys = required_string_array(&arguments, "trusted_witness_public_keys", true)?;
+    let trust_states = required_string_array(&arguments, "witness_trust_states", true)?;
+    let direct_mode = !trusted_ids.is_empty() || !trusted_keys.is_empty();
+    if direct_mode == !trust_states.is_empty()
+        || (direct_mode && trusted_ids.len() != trusted_keys.len())
+    {
+        return Err(json!({
+            "detail": "use either paired trusted witness identities/keys or witness trust states"
+        }));
+    }
+    if receipts.len() != responses.len()
+        || (direct_mode && receipts.len() != trusted_ids.len())
+        || (!direct_mode && receipts.len() != trust_states.len())
+    {
+        return Err(json!({
+            "detail": "receipt, response, and witness trust counts must match"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let report_output = required_string(&arguments, "report_output")?;
+    let mut command = vec![
+        "append-verified-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt-quorum"
+            .into(),
+        required_string(&arguments, "log")?,
+    ];
+    for receipt in receipts {
+        command.extend(["--receipt".into(), receipt]);
+    }
+    command.extend([
+        "--quorum-report".into(),
+        required_string(&arguments, "quorum_report")?,
+        "--approval-log".into(),
+        required_string(&arguments, "approval_log")?,
+        "--checkpoint".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--checkpoint-public-key".into(),
+        required_string(&arguments, "checkpoint_public_key")?,
+    ]);
+    for response in responses {
+        command.extend(["--response".into(), response]);
+    }
+    for (id, key) in trusted_ids.into_iter().zip(trusted_keys) {
+        command.extend(["--trusted-witness-id".into(), id]);
+        command.extend(["--trusted-witness-public-key".into(), key]);
+    }
+    for state in trust_states {
+        command.extend(["--witness-trust-state".into(), state]);
+    }
+    optional_positive_integer(
+        &arguments,
+        "minimum_witnesses",
+        "--minimum-witnesses",
+        &mut command,
+    )?;
+    optional_nonnegative_integer(
+        &arguments,
+        "evaluated_at_unix",
+        "--evaluated-at-unix",
+        &mut command,
+    )?;
+    optional_nonnegative_integer(
+        &arguments,
+        "recorded_at_unix",
+        "--recorded-at-unix",
+        &mut command,
+    )?;
+    command.extend([
+        "--output".into(),
+        output.clone(),
+        "--report-output".into(),
+        report_output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let log = read_json_if_present(Path::new(&output));
+    let report = read_json_if_present(Path::new(&report_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "log": log,
+            "report_output": report_output,
+            "report": report
+        }),
+    ))
+}
+
 fn append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -17528,7 +17714,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 176);
+        assert_eq!(tools.len(), 177);
         let named = |name: &str| {
             tools
                 .iter()
@@ -18488,6 +18674,30 @@ mod tests {
         );
         assert_eq!(
             named(
+                "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum"
+            )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
+            2
+        );
+        assert_eq!(
+            named(
+                "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum"
+            )["inputSchema"]["required"][2],
+            "quorum_report"
+        );
+        assert_eq!(
+            named(
+                "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum"
+            )["inputSchema"]["oneOf"][1]["required"][0],
+            "witness_trust_states"
+        );
+        assert_eq!(
+            named(
+                "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum"
+            )["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named(
                 "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum"
             )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
             2
@@ -18903,6 +19113,35 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(invalid["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn final_receipt_admission_quorum_rejects_partial_direct_trust_first() {
+        let arguments = json!({
+            "log": "log.json",
+            "receipts": ["receipt.json"],
+            "quorum_report": "quorum-report.json",
+            "approval_log": "approval-log.json",
+            "checkpoint": "checkpoint.json",
+            "checkpoint_public_key": "checkpoint.pub",
+            "responses": ["response.json"],
+            "trusted_witness_ids": ["witness-a"],
+            "output": "output.json",
+            "report_output": "report.json"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let error = append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum(
+            arguments,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error["detail"],
+            "use either paired trusted witness identities/keys or witness trust states"
+        );
     }
 
     #[test]
