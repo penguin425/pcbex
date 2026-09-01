@@ -216,6 +216,10 @@ boundary document for the artifact you plan to produce or trust.
   — replay the exact report, admission log, final checkpoint, raw response,
   signature, freshness, and direct or rotated trust before append.
 
+- [Final Checkpoint-witness Receipt Quorum Admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+  — verify one shared checkpoint context and a distinct final-receipt threshold,
+  then bind the sorted unchanged event suffix to the resulting log.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

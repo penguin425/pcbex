@@ -237,3 +237,7 @@ The v1.520
 [verifier-bound admission boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
 replays this exact retained exchange before appending the unchanged v1.519
 transparency event.
+The v1.521
+[quorum admission boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+replays a distinct set of these exchanges and binds its sorted event suffix to
+one canonical report.

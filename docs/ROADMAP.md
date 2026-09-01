@@ -233,6 +233,7 @@ auditable release.
 | v1.518.0 | Parallel remote final checkpoint witness quorum acquisition | Preserve every v1.512–v1.517 wire contract while accepting one closed 1 MiB manifest of 2–100 sorted, distinct endpoints and either direct keys or current trust states; validate all configuration and production-verify the shared report/log/checkpoint before any credential or network access; acquire witnesses through 2–16 bounded parallel v1.517 workers; retain unchanged successful witness/receipt pairs and credential-free coarse failure categories; invoke the production v1.515 verifier over the verified subset; publish one closed 16 MiB acquisition report with the unchanged final quorum even when the threshold fails; and fully replay successful receipts, signatures, trust bindings, and quorum offline without claiming that historical network failures can be independently reproduced, or claiming protected state, trusted time, endpoint legal identity or availability, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.519.0 | Final checkpoint-witness receipt transparency | Preserve every v1.512–v1.518 wire artifact and acquisition path while structurally validating one canonical verified v1.517 final-witness receipt, normalizing its exact compact receipt, final checkpoint, request, raw response, and witness identities into one additive approval-log artifact kind, and reusing the unchanged signed hash chain, anchor, consistency, gossip, witness-rotation, and witness-quorum controls without claiming verifier-bound replay of the report/log/checkpoint/response/signature/trust evidence, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.520.0 | Verifier-bound final checkpoint-witness receipt admission | Preserve every v1.512–v1.519 wire artifact and structural append path while adding one dedicated immutable-admission command that production-verifies the canonical v1.512 receipt-quorum report, complete admission log and suffix, v1.514 final checkpoint, independently pinned checkpoint key, exact v1.515 response, and either direct or current v1.516 final-witness trust; reconstructs the compact v1.517 request; matches every semantic and raw receipt binding; re-verifies freshness, signer-role separation, and the Ed25519 signature; emits the unchanged v1.519 event; and re-reads all eight inputs before one alias-free no-clobber append without claiming multi-receipt admission quorum, protected state, trusted time, atomic same-principal snapshots, endpoint or legal identity, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
+| v1.521.0 | Verifier-bound final checkpoint-witness receipt admission quorum | Preserve every v1.512–v1.520 wire artifact and single-receipt path while adding one bounded multi-receipt admission command that production-verifies the shared report, complete log, final checkpoint, and independently pinned checkpoint key once; independently binds every canonical receipt to one exact response and either all direct keys or all current generation-bound trust states; invokes the production final-witness quorum verifier once for freshness, role separation, and distinct identities and keys; rejects duplicate receipt, response, and witness digests; sorts members by witness identity; appends the unchanged v1.519 events as one exact suffix; binds one new canonical report to the resulting admission log; and re-reads every input before alias-free no-clobber two-output publication without claiming protected state, trusted time, atomic same-principal snapshots or a globally atomic two-file commit, endpoint or legal identity, independent operation, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2463,7 +2464,7 @@ Protected files, states, and keys; trusted time; endpoint or legal identity;
 independent operation; global publication/non-equivocation; ordering; payment;
 and exactly-once execution remain false.
 
-The current v1.520.0 milestone adds a dedicated verifier-bound admission path
+The released v1.520.0 milestone adds a dedicated verifier-bound admission path
 without changing the v1.517 receipt or v1.519 event. It replays the production
 v1.514 checkpoint verifier over the exact v1.512 report, complete admission log
 and suffix, dedicated checkpoint, and independently pinned checkpoint key.
@@ -2475,7 +2476,24 @@ signature. Every input is re-read by identity, byte count, and SHA-256 before
 the unchanged event enters one new no-clobber log snapshot.
 
 This detects sequential mutation but does not create an atomic snapshot across
-same-principal files. It does not provide multi-receipt admission quorum,
-protect state or keys, establish trusted time, prove endpoint or legal identity
-or independent operation, provide global publication/non-equivocation, or
-establish ordering, payment, or exactly-once execution.
+same-principal files. It does not protect state or keys, establish trusted time,
+prove endpoint or legal identity or independent operation, provide global
+publication/non-equivocation, or establish ordering, payment, or exactly-once
+execution.
+
+The current v1.521.0 milestone extends that replay boundary to a configurable
+2–100 final-receipt quorum. It verifies the shared v1.512 report/log and v1.514
+checkpoint once, then independently binds every v1.517 receipt to its exact
+v1.515 response and either an all-direct or all-current-v1.516 trust set.
+
+The production final-witness verifier enforces signatures, freshness, role
+separation, and distinct identities and keys. Duplicate receipt, response, and
+witness digests fail. Successful members sort by witness ID; unchanged v1.519
+events form an exact suffix; and one closed report binds the complete resulting
+log before both no-clobber outputs publish.
+
+The boundary detects sequential mutation but does not provide an atomic
+same-principal snapshot or globally atomic two-file commit. Protected state,
+trusted time, endpoint or legal identity, operator independence, global
+publication/non-equivocation, ordering, payment, and exactly-once execution
+remain outside scope.
