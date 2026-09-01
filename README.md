@@ -285,6 +285,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Final checkpoint-witness receipt transparency v1 | Normalize one canonical final transport receipt into the existing signed, anchored, consistency-proved, gossiped, and witnessed approval-log chain | [Final receipt transparency guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md) |
 | Verifier-bound final receipt admission v1 | Replay the exact final checkpoint, response, signature, freshness, and direct or rotated witness trust before appending the unchanged event | [Final receipt admission guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md) |
 | Final receipt admission quorum v1 | Re-verify shared evidence once, require distinct final-witness receipts, and bind the sorted event suffix to one canonical report | [Final receipt quorum guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md) |
+| Quorum-bound final receipt-log signing v1 | Sign only the exact final admission log and sorted final-receipt suffix bound by a successful quorum report | [Final quorum signing guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

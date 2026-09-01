@@ -220,6 +220,10 @@ boundary document for the artifact you plan to produce or trust.
   — verify one shared checkpoint context and a distinct final-receipt threshold,
   then bind the sorted unchanged event suffix to the resulting log.
 
+- [Quorum-bound Final Checkpoint-witness Receipt-log Signing](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md)
+  — issue a generic approval checkpoint only for the exact successful v1.521
+  report, complete log, and sorted final-receipt suffix.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

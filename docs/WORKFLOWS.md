@@ -52,6 +52,7 @@ evidence your next consumer actually needs.
 | Canonical remote final-witness receipt | Signed final-receipt transparency | validate the closed v1.517 receipt → normalize exact receipt/final-checkpoint/request/response/witness bindings → append a new log snapshot → sign and verify the exact head |
 | Retained remote final-witness evidence | Verifier-bound final-receipt admission | replay exact v1.512 report/log and v1.514 checkpoint → reconstruct the request → match raw response and current trust → re-verify freshness/signature → append the unchanged v1.519 event |
 | Multiple retained remote final-witness receipts | Verifier-bound final-receipt quorum admission | verify shared v1.512/v1.514 evidence once → bind every exact receipt/response/uniform-trust source → enforce the production distinct-witness quorum → sort members → append and bind the exact v1.519 event suffix |
+| Successful final-receipt quorum admission | Quorum-bound final-receipt log checkpoint | validate the canonical v1.521 report → recompute the complete log identity → match every sorted suffix event → read the private key → issue and verify the unchanged generic checkpoint |
 | Retained authenticated receipt release | Local at-most-once admission | fresh v1.480 replay → active-window checks → pinned-ledger no-replace marker |
 | Circuit specification | Checked schematic and board handoff | circuit check → KiCad writers → binding |
 | Natural-language requirements | Provider proposal accepted by deterministic ERC | `pcbex-agent generate-circuit` |
