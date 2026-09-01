@@ -12317,19 +12317,19 @@ fn append_verified_remote_factory_release_registry_history_receipt_quorum_log_ch
     let trusted_keys = required_string_array(&arguments, "trusted_witness_public_keys", true)?;
     let trust_states = required_string_array(&arguments, "witness_trust_states", true)?;
     let direct_mode = !trusted_ids.is_empty() || !trusted_keys.is_empty();
+    if direct_mode == !trust_states.is_empty()
+        || (direct_mode && trusted_ids.len() != trusted_keys.len())
+    {
+        return Err(json!({
+            "detail": "use either paired trusted witness identities/keys or witness trust states"
+        }));
+    }
     if receipts.len() != responses.len()
         || (direct_mode && receipts.len() != trusted_ids.len())
         || (!direct_mode && receipts.len() != trust_states.len())
     {
         return Err(json!({
             "detail": "receipt, response, and witness trust counts must match"
-        }));
-    }
-    if direct_mode == !trust_states.is_empty()
-        || (direct_mode && trusted_ids.len() != trusted_keys.len())
-    {
-        return Err(json!({
-            "detail": "use either paired trusted witness identities/keys or witness trust states"
         }));
     }
     let output = required_string(&arguments, "output")?;
@@ -19113,6 +19113,35 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(invalid["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn final_receipt_admission_quorum_rejects_partial_direct_trust_first() {
+        let arguments = json!({
+            "log": "log.json",
+            "receipts": ["receipt.json"],
+            "quorum_report": "quorum-report.json",
+            "approval_log": "approval-log.json",
+            "checkpoint": "checkpoint.json",
+            "checkpoint_public_key": "checkpoint.pub",
+            "responses": ["response.json"],
+            "trusted_witness_ids": ["witness-a"],
+            "output": "output.json",
+            "report_output": "report.json"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let error = append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum(
+            arguments,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error["detail"],
+            "use either paired trusted witness identities/keys or witness trust states"
+        );
     }
 
     #[test]
