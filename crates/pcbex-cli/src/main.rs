@@ -962,6 +962,7 @@ use remote_factory_release_state_transparency_external_gossip_registry_checkpoin
     MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
     MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_BYTES,
     MAX_REMOTE_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+    MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_BYTES,
     MAX_SIGNED_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_BYTES,
     MAX_SIGNED_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES,
     MAX_SIGNED_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_BYTES,
@@ -988,12 +989,14 @@ use remote_factory_release_state_transparency_external_gossip_registry_checkpoin
     parse_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_trust_state,
     parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt,
     parse_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report,
+    parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint,
     parse_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint,
     parse_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness,
     parse_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation,
     parse_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint,
     parse_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness,
     parse_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation,
+    remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_verification_json_schema,
     remote_factory_release_registry_history_receipt_quorum_log_checkpoint_verification_json_schema,
     remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_quorum_report_json_schema,
     remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_json_schema,
@@ -1008,6 +1011,7 @@ use remote_factory_release_state_transparency_external_gossip_registry_checkpoin
     remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_trusted_public_key,
     remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_json_schema,
     remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report_json_schema,
+    render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_verification,
     render_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_verification,
     render_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_quorum_report,
     render_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt,
@@ -1020,6 +1024,7 @@ use remote_factory_release_state_transparency_external_gossip_registry_checkpoin
     render_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_trust_state,
     render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt,
     render_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report,
+    render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint,
     render_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint,
     render_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness,
     render_signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation,
@@ -1032,12 +1037,14 @@ use remote_factory_release_state_transparency_external_gossip_registry_checkpoin
     request_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_with_trust_state,
     request_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness,
     request_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_with_trust_state,
+    sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint,
     sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint,
     sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness,
     sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation,
     sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint,
     sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness,
     sign_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation,
+    signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_json_schema,
     signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_json_schema,
     signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_json_schema,
     signed_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation_json_schema,
@@ -1050,6 +1057,8 @@ use remote_factory_release_state_transparency_external_gossip_registry_checkpoin
     validate_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_report,
     validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_for_log,
     validate_remote_factory_release_state_transparency_external_gossip_organization_registry_history_checkpoint_witness_receipt_quorum_report,
+    validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint,
+    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint,
     verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint,
     verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt,
     verify_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum,
@@ -2018,6 +2027,22 @@ enum Command {
     /// Validate one canonical verifier-bound final checkpoint-witness receipt admission quorum.
     ValidateRemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport
     {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory final checkpoint-witness receipt-quorum checkpoint schema.
+    SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed factory final checkpoint-witness receipt-quorum checkpoint verification schema.
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointVerificationSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical factory final checkpoint-witness receipt-quorum checkpoint.
+    ValidateSignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint {
         input: CompactPath,
         #[arg(short, long)]
         output: Option<CompactPath>,
@@ -5749,6 +5774,30 @@ enum Command {
         private_key: CompactPath,
         #[arg(long)]
         signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Sign exact final checkpoint-witness receipt-quorum evidence under its dedicated domain.
+    SignRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint {
+        log: CompactPath,
+        #[arg(long)]
+        quorum_report: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify a dedicated final checkpoint-witness receipt-quorum checkpoint and exact evidence.
+    VerifyRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint {
+        log: CompactPath,
+        #[arg(long)]
+        quorum_report: CompactPath,
+        #[arg(long)]
+        checkpoint: CompactPath,
+        #[arg(long)]
+        public_key: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -21909,6 +21958,64 @@ fn run_cli() -> Result<()> {
                 io::stdout().write_all(&rendered)?;
             }
         }
+        Command::SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_json_schema(),
+                output.as_deref(),
+                "signed factory final checkpoint-witness receipt quorum log checkpoint schema output",
+            )?;
+        }
+        Command::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointVerificationSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_verification_json_schema(),
+                output.as_deref(),
+                "factory final checkpoint-witness receipt quorum log checkpoint verification schema output",
+            )?;
+        }
+        Command::ValidateSignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated signed factory final checkpoint-witness receipt quorum log checkpoint output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_BYTES,
+                "signed factory final checkpoint-witness receipt quorum log checkpoint",
+            )?;
+            let checkpoint =
+                parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                &checkpoint,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered =
+                render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                    &checkpoint,
+                )
+                .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
         Command::RemoteFactoryReleaseFinalCheckpointWitnessQuorumManifestSchema { output } => {
             write_closed_schema(
                 &remote_factory_release_final_checkpoint_witness_quorum_manifest_json_schema(),
@@ -32385,6 +32492,217 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "signed quorum-bound factory final checkpoint-witness receipt log {} at {} entries",
                 checkpoint.log_id, checkpoint.entry_count
+            );
+        }
+        Command::SignRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint {
+            log,
+            quorum_report,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &[
+                    log.0.as_ref(),
+                    quorum_report.0.as_ref(),
+                    private_key.0.as_ref(),
+                ],
+                "dedicated factory final checkpoint-witness receipt quorum checkpoint output",
+            )?;
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(quorum_report.0.as_ref()),
+                    Some(private_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "dedicated factory final checkpoint-witness receipt quorum checkpoint",
+            )?;
+            let (log_source, log_identity) = read_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                "approval transparency log",
+            )?;
+            let log_value: ApprovalTransparencyLog = serde_json::from_slice(&log_source)
+                .with_context(|| format!("parsing approval transparency log {}", log.0.display()))?;
+            let (report_source, report_identity) = read_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                "factory final checkpoint-witness receipt quorum report",
+            )?;
+            let report = parse_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            validate_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_for_log(
+                &report,
+                &log_value,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let (private_key_source, private_key_identity) = read_exact_artifact(
+                private_key.0.as_ref(),
+                1024,
+                "factory final checkpoint-witness receipt quorum checkpoint private key",
+            )?;
+            let private_key_text = std::str::from_utf8(&private_key_source).context(
+                "decoding factory final checkpoint-witness receipt quorum checkpoint private key",
+            )?;
+            let secret = decode_hex_key(
+                private_key_text.trim(),
+                "factory final checkpoint-witness receipt quorum checkpoint private key",
+            )?;
+            let checkpoint =
+                sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                    &report,
+                    &log_value,
+                    &signer_id,
+                    &secret,
+                )
+                .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                &log_identity,
+                "approval transparency log",
+            )?;
+            require_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                &report_identity,
+                "factory final checkpoint-witness receipt quorum report",
+            )?;
+            require_exact_artifact(
+                private_key.0.as_ref(),
+                1024,
+                &private_key_identity,
+                "factory final checkpoint-witness receipt quorum checkpoint private key",
+            )?;
+            let rendered =
+                render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                    &checkpoint,
+                )
+                .map_err(anyhow::Error::msg)?;
+            persist_atomic_new_file_bytes(
+                prepare_atomic_new_file(output.0.as_ref())?,
+                output.0.as_ref(),
+                &rendered,
+            )?;
+            eprintln!(
+                "signed dedicated factory final checkpoint-witness receipt quorum checkpoint for {} at {} entries",
+                checkpoint.final_admission_log_id, checkpoint.final_admission_log_entry_count
+            );
+        }
+        Command::VerifyRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint {
+            log,
+            quorum_report,
+            checkpoint,
+            public_key,
+            output,
+        } => {
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &[
+                    log.0.as_ref(),
+                    quorum_report.0.as_ref(),
+                    checkpoint.0.as_ref(),
+                    public_key.0.as_ref(),
+                ],
+                "factory final checkpoint-witness receipt quorum checkpoint verification output",
+            )?;
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(quorum_report.0.as_ref()),
+                    Some(checkpoint.0.as_ref()),
+                    Some(public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "factory final checkpoint-witness receipt quorum checkpoint verification",
+            )?;
+            let (log_source, log_identity) = read_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                "approval transparency log",
+            )?;
+            let log_value: ApprovalTransparencyLog = serde_json::from_slice(&log_source)
+                .with_context(|| format!("parsing approval transparency log {}", log.0.display()))?;
+            let (report_source, report_identity) = read_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                "factory final checkpoint-witness receipt quorum report",
+            )?;
+            let report = parse_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let (checkpoint_source, checkpoint_identity) = read_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_BYTES,
+                "signed factory final checkpoint-witness receipt quorum log checkpoint",
+            )?;
+            let checkpoint_value =
+                parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                    &checkpoint_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let (public_key_source, public_key_identity) = read_exact_artifact(
+                public_key.0.as_ref(),
+                1024,
+                "trusted factory final checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let public_key_text = std::str::from_utf8(&public_key_source).context(
+                "decoding trusted factory final checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let trusted = decode_hex_key(
+                public_key_text.trim(),
+                "trusted factory final checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let verification =
+                verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                    &report,
+                    &log_value,
+                    &checkpoint_value,
+                    &trusted,
+                )
+                .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                &log_identity,
+                "approval transparency log",
+            )?;
+            require_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                &report_identity,
+                "factory final checkpoint-witness receipt quorum report",
+            )?;
+            require_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_BYTES,
+                &checkpoint_identity,
+                "signed factory final checkpoint-witness receipt quorum log checkpoint",
+            )?;
+            require_exact_artifact(
+                public_key.0.as_ref(),
+                1024,
+                &public_key_identity,
+                "trusted factory final checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let rendered =
+                render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_verification(
+                    &verification,
+                )
+                .map_err(anyhow::Error::msg)?;
+            persist_atomic_new_file_bytes(
+                prepare_atomic_new_file(output.0.as_ref())?,
+                output.0.as_ref(),
+                &rendered,
+            )?;
+            eprintln!(
+                "verified dedicated factory final checkpoint-witness receipt quorum checkpoint for {}",
+                verification.final_admission_log_id
             );
         }
         Command::SignRemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpoint {

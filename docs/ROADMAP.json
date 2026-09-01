@@ -1144,6 +1144,11 @@
     {
       "id": "quorum-bound-factory-release-final-checkpoint-witness-receipt-log-signing",
       "release": "v1.522.0",
+      "status": "released"
+    },
+    {
+      "id": "domain-separated-signed-factory-final-checkpoint-witness-receipt-quorum-checkpoints",
+      "release": "v1.523.0",
       "status": "current"
     }
   ]

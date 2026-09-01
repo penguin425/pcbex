@@ -111,3 +111,8 @@ The gate does not protect files, state, or keys; add a dedicated signature
 domain; establish trusted time or operator independence; publish evidence
 globally; prevent equivocation; or prove ordering, payment, or exactly-once
 execution.
+
+The v1.523
+[dedicated checkpoint boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
+reuses this exact public-evidence gate and signs the final quorum under its own
+domain while binding both prior factory checkpoints.

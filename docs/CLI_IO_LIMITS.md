@@ -1090,6 +1090,14 @@ validates the complete public log/report binding before key access, rejects all
 input/output aliases and existing destinations, and re-reads the log, report,
 and key before publishing one unchanged generic approval checkpoint.
 
+The v1.523 dedicated checkpoint keeps the same 128 MiB final-admission log,
+128 KiB v1.521 report, and 1 KiB private-key bounds. The signed checkpoint and
+verification document are each capped at 64 KiB. Signing repeats the complete
+public v1.521 log/report/suffix gate before key access; verification also
+requires a separately supplied 65-byte trusted public key. Both paths reject
+aliases and existing destinations, then re-read every input before one
+no-clobber publication.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
