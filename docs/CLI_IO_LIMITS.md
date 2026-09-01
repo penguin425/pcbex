@@ -1084,6 +1084,12 @@ trust states. The threshold is 2–100. The closed report is capped at 128 KiB;
 both no-clobber outputs and every input must be distinct. All inputs pass a
 final identity, byte-count, and SHA-256 reread before two-output publication.
 
+The v1.522 signing gate accepts one 128 MiB approval log, one canonical 128 KiB
+v1.521 quorum report, one 1 KiB private-key file, and one bounded signer ID. It
+validates the complete public log/report binding before key access, rejects all
+input/output aliases and existing destinations, and re-reads the log, report,
+and key before publishing one unchanged generic approval checkpoint.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

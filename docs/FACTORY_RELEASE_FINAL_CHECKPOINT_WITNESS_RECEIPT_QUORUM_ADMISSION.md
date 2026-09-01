@@ -223,3 +223,8 @@ Use the v1.520
 when policy requires only one final witness. The v1.518
 [parallel acquisition boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
 can retain the receipt set consumed here.
+
+Use the v1.522
+[quorum-bound signing gate](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_SIGNING.md)
+to issue a generic approval checkpoint only for this exact successful report
+and complete resulting log.

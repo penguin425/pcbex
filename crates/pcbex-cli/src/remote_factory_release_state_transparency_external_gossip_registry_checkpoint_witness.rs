@@ -67,6 +67,9 @@
 //! witness quorum. It verifies the shared checkpoint context once, sorts
 //! distinct verified members by witness identity, appends the unchanged v1.519
 //! event suffix, and binds the complete destination log to a canonical report.
+//!
+//! The v1.522 boundary gates generic approval-log signing on that exact report,
+//! complete log binding, and sorted suffix before private-key access.
 
 use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
 use crate::factory_release_state_transparency_external_gossip_registry::{
