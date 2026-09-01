@@ -813,7 +813,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                 "- name: Run Windows monotonic factory-state boundaries"
             ),
             rust_windows.index(
-                "- name: Run Windows v1.485-v1.522 factory-state transparency boundaries"
+                "- name: Run Windows v1.485-v1.523 factory-state transparency boundaries"
             ),
         )
         self.assertIn("runs-on: windows-latest", rust_windows)
@@ -888,13 +888,13 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "- name: Run cross-platform v1.484 monotonic factory-state boundaries"
         )
         factory_state_transparency_step = boundaries.index(
-            "- name: Run cross-platform v1.485-v1.522 factory-state transparency boundaries"
+            "- name: Run cross-platform v1.485-v1.523 factory-state transparency boundaries"
         )
         observer_rotation_step = boundaries.index(
             "- name: Run cross-platform v1.492 observer-rotation ledger boundaries"
         )
         organization_registry_step = boundaries.index(
-            "- name: Run cross-platform v1.493-v1.522 organization-registry ledger boundaries"
+            "- name: Run cross-platform v1.493-v1.523 organization-registry ledger boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"

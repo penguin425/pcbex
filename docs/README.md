@@ -224,6 +224,10 @@ boundary document for the artifact you plan to produce or trust.
   — issue a generic approval checkpoint only for the exact successful v1.521
   report, complete log, and sorted final-receipt suffix.
 
+- [Domain-separated Final Checkpoint-witness Receipt-quorum Checkpoints](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md)
+  — sign the exact v1.521 report, both prior factory checkpoints, threshold,
+  and final log under a dedicated Ed25519 domain.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
