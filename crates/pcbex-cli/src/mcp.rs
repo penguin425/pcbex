@@ -12983,6 +12983,11 @@ fn verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_che
             "detail": "factory final checkpoint-witness receipt quorum checkpoint witnesses and public keys must be paired"
         }));
     }
+    let minimum_witnesses = arguments
+        .get("minimum_witnesses")
+        .and_then(Value::as_u64)
+        .filter(|value| (2..=100).contains(value))
+        .ok_or_else(|| json!({"detail": "minimum_witnesses must be an integer from 2 to 100"}))?;
     let output = required_string(&arguments, "output")?;
     let mut command = vec![
         "verify-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witnesses"
@@ -13001,12 +13006,7 @@ fn verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_che
     for public_key in public_keys {
         command.extend(["--witness-public-keys".into(), public_key]);
     }
-    optional_positive_integer(
-        &arguments,
-        "minimum_witnesses",
-        "--minimum-witnesses",
-        &mut command,
-    )?;
+    command.extend(["--minimum-witnesses".into(), minimum_witnesses.to_string()]);
     optional_nonnegative_integer(
         &arguments,
         "evaluated_at_unix",
@@ -18043,6 +18043,35 @@ mod tests {
             error["detail"],
             "factory final checkpoint-witness receipt quorum checkpoint witnesses and public keys must be paired"
         );
+    }
+
+    #[test]
+    fn final_dedicated_checkpoint_witness_quorum_requires_bounded_threshold() {
+        let base = json!({
+            "log": "log.json",
+            "quorum_report": "report.json",
+            "checkpoint": "checkpoint.json",
+            "checkpoint_public_key": "checkpoint.hex",
+            "witnesses": ["witness-a.json", "witness-b.json"],
+            "witness_public_keys": ["witness-a.hex", "witness-b.hex"],
+            "output": "quorum.json"
+        });
+
+        for minimum_witnesses in [None, Some(1), Some(101)] {
+            let mut arguments = base.as_object().unwrap().clone();
+            if let Some(minimum_witnesses) = minimum_witnesses {
+                arguments.insert("minimum_witnesses".into(), json!(minimum_witnesses));
+            }
+            let error = verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+                arguments,
+                None,
+            )
+            .unwrap_err();
+            assert_eq!(
+                error["detail"],
+                "minimum_witnesses must be an integer from 2 to 100"
+            );
+        }
     }
 
     fn request(id: i64, method: &str, params: Value) -> Value {
