@@ -151,5 +151,7 @@ separate people or organizations, protect files or keys, establish trusted
 time or legal identity, publish evidence globally, prevent equivocation, or
 prove ordering, payment, or exactly-once execution.
 
-The next key-rotation boundary can add generation-chained witness trust without
-changing either v1.524 wire contract.
+The v1.525
+[key-rotation boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md)
+adds generation-chained witness trust without changing either v1.524 wire
+contract.

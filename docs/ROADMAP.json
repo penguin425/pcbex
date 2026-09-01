@@ -1154,6 +1154,11 @@
     {
       "id": "independent-factory-final-checkpoint-witness-receipt-quorum-checkpoint-witnesses",
       "release": "v1.524.0",
+      "status": "released"
+    },
+    {
+      "id": "factory-final-checkpoint-witness-receipt-quorum-checkpoint-witness-key-rotation",
+      "release": "v1.525.0",
       "status": "current"
     }
   ]
