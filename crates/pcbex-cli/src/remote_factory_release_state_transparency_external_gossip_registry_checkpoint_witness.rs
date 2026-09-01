@@ -8642,6 +8642,16 @@ pub(crate) fn slug_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_factory_release_final_checkpoint_witness::{
+        parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report,
+        parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness,
+        remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report_json_schema,
+        render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report,
+        render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness,
+        signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_json_schema,
+        verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses,
+        witness_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint,
+    };
     use ed25519_dalek::SigningKey;
     use pcbex_kicad::{
         ApprovalEventDescriptor, append_approval_transparency_event, new_approval_transparency_log,
@@ -9342,6 +9352,126 @@ mod tests {
                 &SigningKey::from_bytes(&[112; 32])
                     .verifying_key()
                     .to_bytes(),
+            )
+            .is_err()
+        );
+
+        let final_witness_key_a = SigningKey::from_bytes(&[113; 32]);
+        let final_witness_a =
+            witness_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                &bound_report,
+                &final_log,
+                &final_checkpoint,
+                &final_checkpoint_key.verifying_key().to_bytes(),
+                "final-checkpoint-witness-a",
+                1_500,
+                &final_witness_key_a.to_bytes(),
+            )
+            .unwrap();
+        let final_witness_source = render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness(
+            &final_witness_a,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness(
+                &final_witness_source,
+            )
+            .unwrap(),
+            final_witness_a
+        );
+        assert_eq!(
+            signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_json_schema(
+            )["additionalProperties"],
+            false
+        );
+        let final_witness_key_b = SigningKey::from_bytes(&[114; 32]);
+        let final_witness_b =
+            witness_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                &bound_report,
+                &final_log,
+                &final_checkpoint,
+                &final_checkpoint_key.verifying_key().to_bytes(),
+                "final-checkpoint-witness-b",
+                1_501,
+                &final_witness_key_b.to_bytes(),
+            )
+            .unwrap();
+        let final_witness_quorum = verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+            &bound_report,
+            &final_log,
+            &final_checkpoint,
+            &final_checkpoint_key.verifying_key().to_bytes(),
+            &[final_witness_b.clone(), final_witness_a.clone()],
+            &[
+                final_witness_key_b.verifying_key().to_bytes(),
+                final_witness_key_a.verifying_key().to_bytes(),
+            ],
+            2,
+            1_502,
+        )
+        .unwrap();
+        assert!(final_witness_quorum.quorum_met);
+        assert_eq!(
+            final_witness_quorum.witness_ids,
+            vec![
+                "final-checkpoint-witness-a".to_string(),
+                "final-checkpoint-witness-b".to_string()
+            ]
+        );
+        let final_witness_quorum_source = render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report(
+            &final_witness_quorum,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report(
+                &final_witness_quorum_source,
+            )
+            .unwrap(),
+            final_witness_quorum
+        );
+        assert_eq!(
+            remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report_json_schema(
+            )["additionalProperties"],
+            false
+        );
+        assert!(
+            witness_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+                &bound_report,
+                &final_log,
+                &final_checkpoint,
+                &final_checkpoint_key.verifying_key().to_bytes(),
+                "reused-role-key",
+                1_500,
+                &final_checkpoint_key.to_bytes(),
+            )
+            .is_err()
+        );
+        assert!(
+            verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+                &bound_report,
+                &final_log,
+                &final_checkpoint,
+                &final_checkpoint_key.verifying_key().to_bytes(),
+                &[final_witness_a.clone(), final_witness_a.clone()],
+                &[
+                    final_witness_key_a.verifying_key().to_bytes(),
+                    final_witness_key_a.verifying_key().to_bytes(),
+                ],
+                2,
+                1_502,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+                &bound_report,
+                &final_log,
+                &final_checkpoint,
+                &final_checkpoint_key.verifying_key().to_bytes(),
+                &[final_witness_a],
+                &[final_witness_key_a.verifying_key().to_bytes()],
+                2,
+                87_901,
             )
             .is_err()
         );
