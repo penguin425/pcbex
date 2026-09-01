@@ -1786,7 +1786,8 @@ jobs:
   python-boundaries:
     name: Python boundaries (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Windows release builds can exceed 50 minutes before the boundary suite starts.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 2

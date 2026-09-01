@@ -49,7 +49,7 @@ EXPECTED_TIMEOUTS = {
         "deterministic-pipeline": 45,
         "rust": 45,
         "python": 20,
-        "python-boundaries": 60,
+        "python-boundaries": 90,
         "rust-windows-boundaries": 60,
     },
     "codeql.yml": {"analyze": 30},
@@ -64,6 +64,8 @@ EXPECTED_TIMEOUTS = {
         "publish": 10,
     },
 }
+
+MAX_REVIEWED_TIMEOUT_MINUTES = 90
 
 EXPECTED_CONCURRENCY = {
     "ci.yml": ("group: ci-${{ github.workflow }}-${{ github.ref }}", "true"),
@@ -128,7 +130,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                     timeout = _direct_integer(blocks[job], "timeout-minutes")
                     self.assertEqual(timeout, expected_timeout)
                     self.assertGreater(timeout, 0)
-                    self.assertLessEqual(timeout, 60)
+                    self.assertLessEqual(timeout, MAX_REVIEWED_TIMEOUT_MINUTES)
 
     def test_every_workflow_has_bounded_concurrency(self):
         for filename in EXPECTED_TIMEOUTS:
