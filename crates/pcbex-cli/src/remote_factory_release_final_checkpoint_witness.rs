@@ -7,6 +7,11 @@
 //! distinct, non-weak witness keys that cannot reuse the checkpoint signing
 //! key.
 //!
+//! The v1.525 boundary binds each v1.524 witness identity to a generation-zero
+//! trust state and advances its key only through a dual-signed,
+//! digest-chained, one-generation rotation. The unchanged v1.524 quorum can
+//! consume either direct key pins or current trust states.
+//!
 //! This is bounded, selected-witness evidence. It does not establish trusted
 //! time, legal identity, independent operation, global publication, or
 //! non-equivocation.
@@ -31,12 +36,17 @@ use std::collections::BTreeSet;
 
 const FINAL_CHECKPOINT_WITNESS_DOMAIN: &str =
     "pcbex-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-v1";
+const FINAL_CHECKPOINT_WITNESS_KEY_ROTATION_DOMAIN: &str = "pcbex-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-key-rotation-v1";
 const MAXIMUM_FINAL_CHECKPOINT_WITNESS_AGE_SECONDS: u64 = 86_400;
 
 pub(crate) const MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_BYTES: u64 =
     64 * 1024;
 pub(crate) const MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_QUORUM_REPORT_BYTES: u64 =
     128 * 1024;
+pub(crate) const MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_TRUST_STATE_BYTES: u64 =
+    32 * 1024;
+pub(crate) const MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES: u64 =
+    32 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,6 +90,35 @@ pub(crate) struct RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogChec
     pub(crate) witness_ids: Vec<String>,
     pub(crate) witness_public_keys: Vec<String>,
     pub(crate) quorum_met: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState
+{
+    pub(crate) schema_version: u32,
+    pub(crate) witness_id: String,
+    pub(crate) generation: u64,
+    pub(crate) current_public_key: String,
+    pub(crate) last_rotation_sha256: Option<String>,
+    pub(crate) last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation
+{
+    pub(crate) schema_version: u32,
+    pub(crate) witness_id: String,
+    pub(crate) from_generation: u64,
+    pub(crate) to_generation: u64,
+    pub(crate) previous_rotation_sha256: Option<String>,
+    pub(crate) old_public_key: String,
+    pub(crate) new_public_key: String,
+    pub(crate) rotated_at_unix: u64,
+    pub(crate) algorithm: String,
+    pub(crate) old_signature: String,
+    pub(crate) new_signature: String,
 }
 
 pub(crate) fn render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness(
@@ -138,6 +177,66 @@ pub(crate) fn parse_remote_factory_release_final_checkpoint_witness_receipt_quor
         &report,
     )?;
     Ok(report)
+}
+
+pub(crate) fn render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+    state: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+) -> Result<Vec<u8>, String> {
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    render_bounded(
+        state,
+        MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
+        "factory final checkpoint-witness receipt quorum checkpoint witness trust state",
+    )
+}
+
+pub(crate) fn parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+    source: &[u8],
+) -> Result<
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+    String,
+> {
+    let state = parse_canonical(
+        source,
+        MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
+        "factory final checkpoint-witness receipt quorum checkpoint witness trust state",
+    )?;
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        &state,
+    )?;
+    Ok(state)
+}
+
+pub(crate) fn render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    rotation: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<Vec<u8>, String> {
+    validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    render_bounded(
+        rotation,
+        MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES,
+        "signed factory final checkpoint-witness receipt quorum checkpoint witness key rotation",
+    )
+}
+
+pub(crate) fn parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    source: &[u8],
+) -> Result<
+    SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+    String,
+> {
+    let rotation = parse_canonical(
+        source,
+        MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_KEY_ROTATION_BYTES,
+        "signed factory final checkpoint-witness receipt quorum checkpoint witness key rotation",
+    )?;
+    validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
 }
 
 pub(crate) fn signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_json_schema()
@@ -243,6 +342,80 @@ pub(crate) fn remote_factory_release_final_checkpoint_witness_receipt_quorum_log
     })
 }
 
+pub(crate) fn remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state_json_schema()
+-> Value {
+    let digest = digest_schema();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-trust-state-v1.json",
+        "title": "pcbex generation-chained factory final checkpoint-witness receipt-quorum checkpoint witness trust state",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "generation": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+            },
+            "current_public_key": digest.clone(),
+            "last_rotation_sha256": {
+                "oneOf": [{"type": "null"}, digest]
+            },
+            "last_rotated_at_unix": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP}
+                ]
+            }
+        }
+    })
+}
+
+pub(crate) fn signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation_json_schema()
+-> Value {
+    let digest = digest_schema();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-key-rotation-v1.json",
+        "title": "pcbex dual-signed factory final checkpoint-witness receipt-quorum checkpoint witness key rotation",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "from_generation": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION - 1
+            },
+            "to_generation": {
+                "type": "integer", "minimum": 1,
+                "maximum": MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+            },
+            "previous_rotation_sha256": {
+                "oneOf": [{"type": "null"}, digest.clone()]
+            },
+            "old_public_key": digest.clone(),
+            "new_public_key": digest,
+            "rotated_at_unix": {
+                "type": "integer", "minimum": 0, "maximum": MAX_TIMESTAMP
+            },
+            "algorithm": {"const": "ed25519"},
+            "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
+            "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
 pub(crate) fn validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness(
     witness: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitness,
 ) -> Result<(), String> {
@@ -303,6 +476,137 @@ pub(crate) fn validate_signed_remote_factory_release_final_checkpoint_witness_re
         &witness.signature,
         "factory final checkpoint-witness receipt quorum checkpoint witness signature",
     )?;
+    Ok(())
+}
+
+pub(crate) fn validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+    state: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+) -> Result<(), String> {
+    if state.schema_version != 1
+        || state.generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || state
+            .last_rotated_at_unix
+            .is_some_and(|timestamp| timestamp > MAX_TIMESTAMP)
+    {
+        return Err(
+            "factory final checkpoint-witness receipt quorum checkpoint witness trust-state invariants are invalid"
+                .into(),
+        );
+    }
+    validate_slug(
+        &state.witness_id,
+        "factory final checkpoint-witness receipt quorum checkpoint witness id",
+    )?;
+    let public_key = decode_hex::<32>(
+        &state.current_public_key,
+        "current factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )?;
+    validate_nonweak_public_key(
+        &public_key,
+        "current factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => Ok(()),
+        (0, _, _) => Err(
+            "initial factory final checkpoint-witness receipt quorum checkpoint witness trust state references rotation"
+                .into(),
+        ),
+        (_, Some(digest), Some(_)) => validate_digest(
+            digest,
+            "factory final checkpoint-witness receipt quorum checkpoint witness rotation SHA-256",
+        ),
+        _ => Err(
+            "rotated factory final checkpoint-witness receipt quorum checkpoint witness trust state is incomplete"
+                .into(),
+        ),
+    }
+}
+
+pub(crate) fn validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    rotation: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<(), String> {
+    let expected_generation = rotation.from_generation.checked_add(1).ok_or_else(|| {
+        "factory final checkpoint-witness receipt quorum checkpoint witness generation overflow"
+            .to_string()
+    })?;
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.from_generation
+            >= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || rotation.to_generation != expected_generation
+        || rotation.to_generation
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        || rotation.rotated_at_unix > MAX_TIMESTAMP
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err(
+            "factory final checkpoint-witness receipt quorum checkpoint witness key-rotation invariants are invalid"
+                .into(),
+        );
+    }
+    validate_slug(
+        &rotation.witness_id,
+        "factory final checkpoint-witness receipt quorum checkpoint witness id",
+    )?;
+    match (rotation.from_generation, &rotation.previous_rotation_sha256) {
+        (0, None) => {}
+        (0, Some(_)) => {
+            return Err(
+                "initial factory final checkpoint-witness receipt quorum checkpoint witness rotation cannot reference a predecessor"
+                    .into(),
+            );
+        }
+        (_, Some(digest)) => validate_digest(
+            digest,
+            "previous factory final checkpoint-witness receipt quorum checkpoint witness rotation SHA-256",
+        )?,
+        (_, None) => {
+            return Err(
+                "advanced factory final checkpoint-witness receipt quorum checkpoint witness rotation requires predecessor evidence"
+                    .into(),
+            );
+        }
+    }
+    let old_key = decode_hex::<32>(
+        &rotation.old_public_key,
+        "old factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )?;
+    let new_key = decode_hex::<32>(
+        &rotation.new_public_key,
+        "new factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )?;
+    validate_nonweak_public_key(
+        &old_key,
+        "old factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )?;
+    validate_nonweak_public_key(
+        &new_key,
+        "new factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )?;
+    let payload = factory_final_checkpoint_witness_key_rotation_payload(rotation)?;
+    for (key, signature, label) in [
+        (
+            &old_key,
+            &rotation.old_signature,
+            "old factory final checkpoint-witness receipt quorum checkpoint witness rotation",
+        ),
+        (
+            &new_key,
+            &rotation.new_signature,
+            "new factory final checkpoint-witness receipt quorum checkpoint witness rotation",
+        ),
+    ] {
+        let signature = decode_hex::<64>(signature, label)?;
+        VerifyingKey::from_bytes(key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &Signature::from_bytes(&signature))
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
     Ok(())
 }
 
@@ -399,6 +703,184 @@ pub(crate) fn validate_remote_factory_release_final_checkpoint_witness_receipt_q
         previous_key = Some(key);
     }
     Ok(())
+}
+
+pub(crate) fn new_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+    String,
+> {
+    let state =
+        RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState {
+            schema_version: 1,
+            witness_id: witness_id.to_string(),
+            generation: 0,
+            current_public_key: hex::encode(public_key),
+            last_rotation_sha256: None,
+            last_rotated_at_unix: None,
+        };
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        &state,
+    )?;
+    Ok(state)
+}
+
+pub(crate) fn remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trusted_public_key(
+    state: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    decode_hex::<32>(
+        &state.current_public_key,
+        "current factory final checkpoint-witness receipt quorum checkpoint witness public key",
+    )
+}
+
+pub(crate) fn sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    state: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<
+    SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+    String,
+> {
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    if rotated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "factory final checkpoint-witness receipt quorum checkpoint witness rotation time exceeds its bound"
+                .into(),
+        );
+    }
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key_bytes = old_key.verifying_key().to_bytes();
+    let new_public_key_bytes = new_key.verifying_key().to_bytes();
+    validate_nonweak_public_key(
+        &old_public_key_bytes,
+        "old factory final checkpoint-witness receipt quorum checkpoint witness key",
+    )?;
+    validate_nonweak_public_key(
+        &new_public_key_bytes,
+        "new factory final checkpoint-witness receipt quorum checkpoint witness key",
+    )?;
+    let old_public_key = hex::encode(old_public_key_bytes);
+    let new_public_key = hex::encode(new_public_key_bytes);
+    if old_public_key != state.current_public_key {
+        return Err(
+            "old factory final checkpoint-witness receipt quorum checkpoint witness key is not currently trusted"
+                .into(),
+        );
+    }
+    if new_public_key == old_public_key {
+        return Err(
+            "new factory final checkpoint-witness receipt quorum checkpoint witness key must differ"
+                .into(),
+        );
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err(
+            "factory final checkpoint-witness receipt quorum checkpoint witness rotation time moved backwards"
+                .into(),
+        );
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .filter(|generation| {
+            *generation
+                <= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        })
+        .ok_or_else(|| {
+            "factory final checkpoint-witness receipt quorum checkpoint witness generation overflow"
+                .to_string()
+        })?;
+    let mut rotation =
+        SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation {
+            schema_version: 1,
+            witness_id: state.witness_id.clone(),
+            from_generation: state.generation,
+            to_generation,
+            previous_rotation_sha256: state.last_rotation_sha256.clone(),
+            old_public_key,
+            new_public_key,
+            rotated_at_unix,
+            algorithm: "ed25519".into(),
+            old_signature: String::new(),
+            new_signature: String::new(),
+        };
+    let payload = factory_final_checkpoint_witness_key_rotation_payload(&rotation)?;
+    rotation.old_signature = hex::encode(old_key.sign(&payload).to_bytes());
+    rotation.new_signature = hex::encode(new_key.sign(&payload).to_bytes());
+    validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub(crate) fn apply_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+    state: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+    rotation: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
+    String,
+> {
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    let expected_generation = state
+        .generation
+        .checked_add(1)
+        .filter(|generation| {
+            *generation
+                <= MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION
+        })
+        .ok_or_else(|| {
+            "factory final checkpoint-witness receipt quorum checkpoint witness generation overflow"
+                .to_string()
+        })?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.to_generation != expected_generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+        || state
+            .last_rotated_at_unix
+            .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err(
+            "factory final checkpoint-witness receipt quorum checkpoint witness rotation does not extend retained trust"
+                .into(),
+        );
+    }
+    let next =
+        RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState {
+            schema_version: 1,
+            witness_id: state.witness_id.clone(),
+            generation: rotation.to_generation,
+            current_public_key: rotation.new_public_key.clone(),
+            last_rotation_sha256: Some(
+                signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation_sha256(
+                    rotation,
+                )?,
+            ),
+            last_rotated_at_unix: Some(rotation.rotated_at_unix),
+        };
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        &next,
+    )?;
+    Ok(next)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -599,6 +1081,73 @@ pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quo
     Ok(quorum)
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses_with_trust_states(
+    report: &RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport,
+    log: &ApprovalTransparencyLog,
+    checkpoint: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint,
+    trusted_checkpoint_public_key: &[u8; 32],
+    witnesses: &[SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitness],
+    witness_trust_states: &[RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessQuorumReport,
+    String,
+> {
+    if witnesses.len() != witness_trust_states.len()
+        || witnesses.len()
+            > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+    {
+        return Err(
+            "factory final checkpoint-witness receipt quorum checkpoint witnesses and trust states must be paired and bounded"
+                .into(),
+        );
+    }
+    for (witness, state) in witnesses.iter().zip(witness_trust_states) {
+        validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+            state,
+        )?;
+        if witness.witness_id != state.witness_id {
+            return Err(
+                "factory final checkpoint-witness receipt quorum checkpoint witness identity does not match retained trust"
+                    .into(),
+            );
+        }
+    }
+    let trusted_keys = witness_trust_states
+        .iter()
+        .map(
+            remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trusted_public_key,
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses(
+        report,
+        log,
+        checkpoint,
+        trusted_checkpoint_public_key,
+        witnesses,
+        &trusted_keys,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
+}
+
+fn signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation_sha256(
+    rotation: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<String, String> {
+    validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    serde_json::to_vec(rotation)
+        .map(|bytes| sha256(&bytes))
+        .map_err(|error| {
+            format!(
+                "serializing factory final checkpoint-witness receipt quorum checkpoint witness rotation: {error}"
+            )
+        })
+}
+
 fn signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_sha256(
     checkpoint: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint,
 ) -> Result<String, String> {
@@ -637,6 +1186,32 @@ fn factory_final_checkpoint_witness_payload(
     payload.extend(serde_json::to_vec(&body).map_err(|error| {
         format!(
             "serializing factory final checkpoint-witness receipt quorum checkpoint witness: {error}"
+        )
+    })?);
+    Ok(payload)
+}
+
+fn factory_final_checkpoint_witness_key_rotation_payload(
+    rotation: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<Vec<u8>, String> {
+    let body = json!({
+        "schema_version": rotation.schema_version,
+        "witness_id": rotation.witness_id,
+        "from_generation": rotation.from_generation,
+        "to_generation": rotation.to_generation,
+        "previous_rotation_sha256": rotation.previous_rotation_sha256,
+        "old_public_key": rotation.old_public_key,
+        "new_public_key": rotation.new_public_key,
+        "rotated_at_unix": rotation.rotated_at_unix,
+        "algorithm": rotation.algorithm
+    });
+    let mut payload = FINAL_CHECKPOINT_WITNESS_KEY_ROTATION_DOMAIN
+        .as_bytes()
+        .to_vec();
+    payload.push(0);
+    payload.extend(serde_json::to_vec(&body).map_err(|error| {
+        format!(
+            "serializing factory final checkpoint-witness receipt quorum checkpoint witness rotation: {error}"
         )
     })?);
     Ok(payload)
@@ -891,6 +1466,206 @@ mod tests {
         assert!(
             validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_quorum_report(
                 &unsorted,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn witness_trust_rotation_is_dual_signed_chained_and_closed() {
+        let old_key = SigningKey::from_bytes(&[144; 32]);
+        let next_key = SigningKey::from_bytes(&[145; 32]);
+        let last_key = SigningKey::from_bytes(&[146; 32]);
+        let state = new_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+            "final-witness-a",
+            &old_key.verifying_key().to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(state.generation, 0);
+        assert_eq!(
+            remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trusted_public_key(
+                &state,
+            )
+            .unwrap(),
+            old_key.verifying_key().to_bytes()
+        );
+        let state_source = render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+            &state,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+                &state_source,
+            )
+            .unwrap(),
+            state
+        );
+
+        let rotation_1 = sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+            &state,
+            &old_key.to_bytes(),
+            &next_key.to_bytes(),
+            2_001,
+        )
+        .unwrap();
+        let rotation_source = render_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+            &rotation_1,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &rotation_source,
+            )
+            .unwrap(),
+            rotation_1
+        );
+        let state_1 = apply_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+            &state,
+            &rotation_1,
+        )
+        .unwrap();
+        assert_eq!(state_1.generation, 1);
+        assert_eq!(
+            state_1.current_public_key,
+            hex::encode(next_key.verifying_key().to_bytes())
+        );
+
+        let rotation_2 = sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+            &state_1,
+            &next_key.to_bytes(),
+            &last_key.to_bytes(),
+            2_002,
+        )
+        .unwrap();
+        assert_eq!(
+            rotation_2.previous_rotation_sha256,
+            state_1.last_rotation_sha256
+        );
+        let state_2 = apply_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+            &state_1,
+            &rotation_2,
+        )
+        .unwrap();
+        assert_eq!(state_2.generation, 2);
+        assert_eq!(
+            remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trusted_public_key(
+                &state_2,
+            )
+            .unwrap(),
+            last_key.verifying_key().to_bytes()
+        );
+
+        assert_eq!(
+            remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state_json_schema(
+            )["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation_json_schema(
+            )["additionalProperties"],
+            false
+        );
+
+        let mut tampered = rotation_1.clone();
+        tampered.new_signature.replace_range(..2, "00");
+        assert!(
+            validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &tampered,
+            )
+            .is_err()
+        );
+
+        let mut wrong_domain = rotation_1.clone();
+        let mut wrong_domain_payload =
+            factory_final_checkpoint_witness_key_rotation_payload(&wrong_domain).unwrap();
+        wrong_domain_payload.splice(
+            ..FINAL_CHECKPOINT_WITNESS_KEY_ROTATION_DOMAIN.len(),
+            b"pcbex-factory-release-registry-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-key-rotation-v1"
+                .iter()
+                .copied(),
+        );
+        wrong_domain.old_signature = hex::encode(old_key.sign(&wrong_domain_payload).to_bytes());
+        wrong_domain.new_signature = hex::encode(next_key.sign(&wrong_domain_payload).to_bytes());
+        assert!(
+            validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &wrong_domain,
+            )
+            .is_err()
+        );
+
+        let mut skipped = rotation_1.clone();
+        skipped.to_generation = 2;
+        assert!(
+            validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &skipped,
+            )
+            .is_err()
+        );
+        let mut missing_predecessor = rotation_2.clone();
+        missing_predecessor.previous_rotation_sha256 = None;
+        assert!(
+            validate_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &missing_predecessor,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &state_1,
+                &next_key.to_bytes(),
+                &last_key.to_bytes(),
+                2_000,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &state,
+                &old_key.to_bytes(),
+                &old_key.to_bytes(),
+                2_001,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &state,
+                &last_key.to_bytes(),
+                &next_key.to_bytes(),
+                2_001,
+            )
+            .is_err()
+        );
+        assert!(
+            apply_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &state_1,
+                &rotation_1,
+            )
+            .is_err()
+        );
+        assert!(
+            new_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+                "weak-final-witness",
+                &[0; 32],
+            )
+            .is_err()
+        );
+        let exhausted =
+            RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState {
+                schema_version: 1,
+                witness_id: "final-witness-a".into(),
+                generation:
+                    MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_REGISTRY_GENERATION,
+                current_public_key: hex::encode(last_key.verifying_key().to_bytes()),
+                last_rotation_sha256: Some("a".repeat(64)),
+                last_rotated_at_unix: Some(2_002),
+            };
+        assert!(
+            sign_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &exhausted,
+                &last_key.to_bytes(),
+                &SigningKey::from_bytes(&[147; 32]).to_bytes(),
+                2_003,
             )
             .is_err()
         );

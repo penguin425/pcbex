@@ -1106,6 +1106,13 @@ and emits a closed report capped at 128 KiB. Signing validates every public
 input before reading its 1 KiB private-key file; both commands re-read all
 inputs before alias-free no-clobber publication.
 
+The v1.525 trust state and signed key rotation are each capped at 32 KiB.
+Initialization and export accept one 65-byte Ed25519 key file. Rotation signing
+accepts one retained state plus two 65-byte private-key files; apply accepts one
+state and one rotation. The unchanged v1.524 quorum accepts either 1–100 paired
+65-byte direct keys or 1–100 paired 32 KiB current trust states, never both.
+Every command re-reads its inputs before one alias-free no-clobber output.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
