@@ -218,4 +218,6 @@ for the unchanged v1.524 signature and quorum contracts. Successful member
 receipts can enter the [v1.528 transparency chain](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md).
 Use [v1.529 verifier-bound admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
 when the append boundary must replay one successful member's complete retained
-evidence and current trust.
+evidence and current trust. Use the
+[v1.530 verifier-bound receipt quorum](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+to replay a uniformly trusted successful set and bind its sorted event suffix.

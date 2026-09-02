@@ -10,8 +10,9 @@ remains byte-compatible.
 > [!IMPORTANT]
 > Generic append performs strict structural admission. It does not replay the
 > v1.521 report, final admission log, v1.523 checkpoint, exact v1.524 response,
-> witness signature, freshness, or current v1.525 trust state. Use the v1.529
-> verifier-bound append when the complete retained evidence is available.
+> witness signature, freshness, or current v1.525 trust state. Use v1.529 for
+> one verifier-bound append or v1.530 for a verifier-bound receipt quorum when
+> the complete retained evidence is available.
 
 ## Key Features
 
@@ -71,7 +72,8 @@ pcbex verify-approval-log final-checkpoint-receipts.log.1.json \
 > [!TIP]
 > Prefer the v1.529 verifier-bound append when the complete retained evidence
 > is available. It repeats replay at an independent admission time and emits
-> this same event.
+> this same event. The v1.530 quorum path repeats that decision for a distinct
+> set and binds the sorted event suffix plus complete log to one report.
 
 ## Replay Before Admission
 

@@ -242,6 +242,7 @@ auditable release.
 | v1.527.0 | Parallel remote factory final receipt-quorum checkpoint witness acquisition | Preserve every v1.521–v1.526 wire artifact while adding one closed 1 MiB manifest for 2–100 sorted distinct identities, effective keys, and endpoints with 2–16 bounded workers and per-member direct v1.524 keys or embedded current v1.525 trust; validate the whole manifest and production-verify the exact shared v1.521 report/log/suffix plus v1.523 checkpoint before credential or network access; call the unchanged v1.526 adapter per member, retain unchanged successful v1.524 witnesses and v1.526 receipts plus credential-free coarse failures, invoke the production v1.524 verifier over the successful subset, and publish one closed 16 MiB acquisition report with the unchanged quorum even on threshold failure; add full offline replay of retained successes and the final quorum without claiming historical failed transport behavior, trusted time, endpoint identity or availability, independent operation, protected state or keys, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.528.0 | Final receipt-quorum checkpoint-witness receipt transparency | Preserve every v1.521–v1.527 wire artifact and acquisition path while structurally validating one canonical verified v1.526 transport receipt, normalizing its exact compact receipt, final receipt-quorum checkpoint, request, raw response, and witness identities into one additive approval-log artifact kind, and reusing the unchanged signed hash chain, anchor, consistency, gossip, witness-rotation, and witness-quorum controls without claiming verifier-bound replay of the report/log/checkpoint/response/signature/trust evidence, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.529.0 | Verifier-bound final receipt-quorum checkpoint-witness receipt admission | Preserve every v1.521–v1.528 wire artifact, remote acquisition path, and structural append while adding one dedicated immutable-admission command that production-verifies the exact successful v1.521 report, complete final admission log and suffix, v1.523 checkpoint and independently pinned key; reconstructs the expected-identity and direct/current-v1.525-trust-bound v1.526 request; matches the exact v1.524 response and every raw/semantic receipt binding; re-verifies signature, role separation, and freshness at an independent admission time; emits the unchanged v1.528 event; and re-reads all eight file inputs before alias-free no-clobber publication without claiming an atomic same-principal snapshot, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.530.0 | Verifier-bound final receipt-quorum checkpoint-witness receipt admission quorum | Preserve every v1.521–v1.529 wire artifact and single-receipt path while adding one bounded multi-receipt admission command that production-verifies the shared v1.521 report, complete final log, v1.523 checkpoint, and independently pinned key once; reconstructs every identity-specific direct/current-v1.525-trust-bound v1.526 request; matches each exact v1.524 response and semantic/raw receipt binding; invokes the production witness quorum once for signature, 24-hour freshness, signer-role separation, and distinct identities/keys; rejects duplicate receipt, request, response, and witness digests; sorts members by witness identity; appends the unchanged v1.528 events as one exact suffix; binds a new canonical report to the complete resulting log; and re-reads every input before alias-free no-clobber two-output publication without claiming protected state, trusted time, atomic same-principal snapshots or a globally atomic two-file commit, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2633,7 +2634,7 @@ Protected files, states, and keys; trusted time; endpoint or legal identity;
 independent operation; global publication/non-equivocation; ordering; payment;
 and exactly-once execution remain false.
 
-The current v1.529.0 milestone closes that structural trust gap for one
+The released v1.529.0 milestone closes that structural trust gap for one
 receipt. A dedicated append command production-verifies the exact v1.521
 report, complete final admission log and suffix, v1.523 checkpoint signature,
 and independently pinned checkpoint key.
@@ -2652,5 +2653,27 @@ verifier-bound outputs.
 
 This detects sequential input replacement, not an atomic snapshot across
 same-principal files. Protected state, trusted time, endpoint or receipt
+authenticity, independent operation, global publication/non-equivocation,
+legal identity, ordering, payment, and exactly-once execution remain false.
+
+The current v1.530.0 milestone extends that verifier-bound decision to a
+bounded final receipt set. pcbex verifies the shared v1.521 report, complete
+final admission log, v1.523 checkpoint, and pinned key once, then reconstructs
+each identity- and trust-specific compact v1.526 request.
+
+Every exact v1.524 response, receipt binding, signature, role separation, and
+24-hour freshness decision is checked at one independent admission time. The
+set uses either all direct keys or all current v1.525 trust states. Witness
+identities, keys, receipt, request, response, and witness digests must be
+distinct.
+
+Verified members sort by witness ID. Their unchanged v1.528 events form the
+exact final suffix, and one closed report binds the source evidence, threshold,
+members, complete destination log, and suffix. Both outputs are new and
+non-aliased; every input is re-read before publication, and below-threshold
+evidence publishes neither output.
+
+This does not provide an atomic same-principal snapshot or globally atomic
+two-file commit. Protected evidence or keys, trusted time, endpoint or receipt
 authenticity, independent operation, global publication/non-equivocation,
 legal identity, ordering, payment, and exactly-once execution remain false.

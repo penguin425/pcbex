@@ -980,6 +980,30 @@ pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quo
         checkpoint,
         trusted_checkpoint_public_key,
     )?;
+    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses_after_checkpoint_verification(
+        report,
+        checkpoint,
+        trusted_checkpoint_public_key,
+        witnesses,
+        trusted_witness_public_keys,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witnesses_after_checkpoint_verification(
+    report: &RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport,
+    checkpoint: &SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint,
+    trusted_checkpoint_public_key: &[u8; 32],
+    witnesses: &[SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitness],
+    trusted_witness_public_keys: &[[u8; 32]],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessQuorumReport,
+    String,
+> {
     if evaluated_at_unix > MAX_TIMESTAMP {
         return Err(
             "factory final checkpoint-witness receipt quorum checkpoint witness evaluation time exceeds its bound"

@@ -1152,6 +1152,13 @@ file inputs must be distinct from the destination and are re-read by identity,
 byte count, and SHA-256 immediately before atomic publication. Admission-time
 freshness remains capped at 86,400 seconds.
 
+The v1.530 quorum append accepts 1–100 paired 64 KiB receipts and responses,
+one shared v1.521 report/log/v1.523 checkpoint context, and either all paired
+65-byte direct ID/key inputs or all 32 KiB current v1.525 trust states. The
+minimum is 2–100. It reserves two distinct no-clobber outputs, caps the closed
+report at 128 KiB, re-reads every input, and publishes no output below
+threshold. If later publication fails, it attempts to remove an earlier output.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
