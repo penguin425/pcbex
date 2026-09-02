@@ -236,6 +236,10 @@ boundary document for the artifact you plan to produce or trust.
   — preserve the v1.524 witness and quorum contracts while advancing retained
   identity-bound trust through dual-signed generation chains.
 
+- [Remote Final Receipt-quorum Checkpoint Witnesses](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
+  — acquire one unchanged v1.524 witness through bounded HTTPS and retain a
+  credential-free receipt that fully replays the local decision offline.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

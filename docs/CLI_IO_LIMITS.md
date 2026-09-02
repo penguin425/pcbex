@@ -1113,6 +1113,17 @@ state and one rotation. The unchanged v1.524 quorum accepts either 1–100 paire
 65-byte direct keys or 1–100 paired 32 KiB current trust states, never both.
 Every command re-reads its inputs before one alias-free no-clobber output.
 
+The v1.526 remote acquisition keeps the 128 MiB final log, 128 KiB v1.521
+report, 64 KiB v1.523 checkpoint, 65-byte checkpoint/direct-key, and 32 KiB
+v1.525 trust-state bounds. It serializes at most 129 MiB, accepts an endpoint of
+at most 2,048 bytes, an optional 128-byte environment-variable name and 8 KiB
+Bearer token, and one 64 KiB canonical v1.524 response. Response headers are
+capped at 16 KiB; the no-redirect request deadline is 1–600 seconds. The
+credential-free receipt is capped at 64 KiB. Acquisition re-reads all five
+local inputs before publishing one distinct no-clobber witness/receipt set;
+offline replay adds the exact 64 KiB response and re-reads every retained input
+before optional normalized output.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
