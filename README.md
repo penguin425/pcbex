@@ -290,6 +290,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Dedicated final receipt-quorum checkpoint v1 | Sign the normalized final quorum report, both prior factory checkpoints, threshold, and exact final log under a new domain | [Dedicated final checkpoint guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) |
 | Independent final receipt-quorum checkpoint witnesses v1 | Re-verify the exact dedicated final checkpoint and require fresh, distinct witness keys with signer-role separation | [Final checkpoint witness guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) |
 | Dedicated final-checkpoint witness rotation v1 | Advance identity-bound v1.524 witness trust through dual-signed, generation- and digest-chained key transitions | [Dedicated final-witness rotation guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) |
+| Remote final receipt-quorum checkpoint witnesses v1 | Acquire one unchanged v1.524 witness over bounded HTTPS and replay its credential-free receipt offline | [Remote final-checkpoint witness guide](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md) |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
@@ -358,6 +359,7 @@ the security model for each adapter.
 | [Dedicated Final Receipt-quorum Checkpoint](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT.md) | Prevent cross-protocol signature reuse while binding the exact v1.521 final quorum evidence |
 | [Independent Final Receipt-quorum Checkpoint Witnesses](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md) | Require fresh, distinct endorsements of the exact v1.523 dedicated checkpoint |
 | [Dedicated Final-checkpoint Witness Key Rotation](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_ROTATION.md) | Rotate trusted v1.524 witness keys without changing witness or quorum-report bytes |
+| [Remote Final Receipt-quorum Checkpoint Witnesses](docs/FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md) | Acquire and fully replay one v1.524 witness exchange without changing signed witness bytes |
 | [Documentation Index](docs/README.md) | Find every detailed contract and operational limit |
 
 For release-by-release capability history, use the
