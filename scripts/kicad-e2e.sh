@@ -2963,6 +2963,22 @@ factory_final_checkpoint_dedicated_remote_witness_query_error="$output_directory
 factory_final_checkpoint_dedicated_remote_witness_invalid_evidence="$output_directory/factory-final-checkpoint.dedicated-remote-witness.invalid-evidence.json"
 factory_final_checkpoint_dedicated_remote_witness_invalid_evidence_receipt="$output_directory/factory-final-checkpoint.dedicated-remote-witness.invalid-evidence.receipt.json"
 factory_final_checkpoint_dedicated_remote_witness_invalid_evidence_error="$output_directory/factory-final-checkpoint.dedicated-remote-witness.invalid-evidence.stderr"
+factory_final_checkpoint_dedicated_parallel_witness_port="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.port"
+factory_final_checkpoint_dedicated_parallel_witness_manifest="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.manifest.json"
+factory_final_checkpoint_dedicated_parallel_witness_manifest_schema="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.manifest.schema.json"
+factory_final_checkpoint_dedicated_parallel_witness_manifest_normalized="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.manifest.normalized.json"
+factory_final_checkpoint_dedicated_parallel_witness_acquisition="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.acquisition.json"
+factory_final_checkpoint_dedicated_parallel_witness_acquisition_schema="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.acquisition.schema.json"
+factory_final_checkpoint_dedicated_parallel_witness_acquisition_replayed="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.acquisition.replayed.json"
+factory_final_checkpoint_dedicated_parallel_witness_quorum="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.quorum.json"
+factory_final_checkpoint_dedicated_parallel_witness_quorum_replayed="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.quorum.replayed.json"
+factory_final_checkpoint_dedicated_parallel_witness_below_manifest="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.below.manifest.json"
+factory_final_checkpoint_dedicated_parallel_witness_below_acquisition="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.below.acquisition.json"
+factory_final_checkpoint_dedicated_parallel_witness_below_quorum="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.below.quorum.json"
+factory_final_checkpoint_dedicated_parallel_witness_below_error="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.below.stderr"
+factory_final_checkpoint_dedicated_parallel_witness_invalid_acquisition="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.invalid.acquisition.json"
+factory_final_checkpoint_dedicated_parallel_witness_invalid_quorum="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.invalid.quorum.json"
+factory_final_checkpoint_dedicated_parallel_witness_invalid_error="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.invalid.stderr"
 factory_final_checkpoint_remote_witness_receipt_log_checkpoint="$output_directory/factory-final-checkpoint.remote-witness-receipts.checkpoint.json"
 factory_final_checkpoint_remote_witness_receipt_log_verification="$output_directory/factory-final-checkpoint.remote-witness-receipts.verification.json"
 factory_final_checkpoint_remote_witness_rejected_receipt="$output_directory/factory-final-checkpoint.remote-witness-receipt.rejected.json"
@@ -6276,6 +6292,311 @@ test "$(sha256sum "$factory_final_checkpoint_dedicated_remote_witness_b" | cut -
   "$factory_final_checkpoint_dedicated_remote_witness_b_sha256"
 test "$(sha256sum "$factory_final_checkpoint_dedicated_remote_witness_b_receipt" | cut -d ' ' -f1)" = \
   "$factory_final_checkpoint_dedicated_remote_witness_b_receipt_sha256"
+
+# v1.527 validates one complete manifest and the exact v1.521/v1.523 public
+# context before bounded parallel v1.526 workers can read credentials or open
+# connections. Mixed direct/current trust retains unchanged v1.524 witnesses,
+# v1.526 receipts, one coarse failure, and the unchanged quorum for replay.
+"$pcbex_binary" remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-manifest-schema \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_manifest_schema"
+test "$(jq -r '.additionalProperties' "$factory_final_checkpoint_dedicated_parallel_witness_manifest_schema")" = false
+test "$(jq -r '.properties.members.maxItems' "$factory_final_checkpoint_dedicated_parallel_witness_manifest_schema")" -eq 100
+
+export PCBEX_E2E_FACTORY_FINAL_DEDICATED_PARALLEL_TOKEN=v1527-e2e-bearer-token
+factory_registry_checkpoint_witness_server_pid=""
+python3 - \
+  "$factory_final_checkpoint_dedicated_parallel_witness_port" \
+  "$factory_final_checkpoint_dedicated_witness_a_rotated" \
+  "$factory_final_checkpoint_dedicated_witness_b" \
+  "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_report" \
+  "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_log" \
+  "$factory_final_checkpoint_witness_receipt_quorum_dedicated_checkpoint" \
+  "$factory_final_checkpoint_dedicated_witness_a_rotated_trust" \
+  "$factory_final_checkpoint_dedicated_witness_a_next_public" \
+  "$factory_final_checkpoint_dedicated_witness_b_public" \
+  "$factory_final_checkpoint_dedicated_witness_a_public" \
+  "$PCBEX_E2E_FACTORY_FINAL_DEDICATED_PARALLEL_TOKEN" <<'PY' &
+import hashlib
+import http.server
+import json
+from pathlib import Path
+import sys
+import threading
+
+port_path, witness_a_path, witness_b_path, report_path, log_path, checkpoint_path, \
+    trust_path, key_a_path, key_b_path, key_c_path = map(Path, sys.argv[1:11])
+expected_token = sys.argv[11]
+report = json.loads(report_path.read_bytes())
+approval_log = json.loads(log_path.read_bytes())
+checkpoint = json.loads(checkpoint_path.read_bytes())
+trust_digest = hashlib.sha256(trust_path.read_bytes()).hexdigest()
+cases = {
+    "/v1/final-dedicated-witness-quorum/a": {
+        "witness_id": "final-dedicated-witness-a",
+        "public_key": key_a_path.read_text(encoding="ascii").strip(),
+        "trust_sha256": trust_digest,
+        "trust_generation": 1,
+        "response": witness_a_path.read_bytes(),
+        "token": None,
+    },
+    "/v1/final-dedicated-witness-quorum/b": {
+        "witness_id": "final-dedicated-witness-b",
+        "public_key": key_b_path.read_text(encoding="ascii").strip(),
+        "trust_sha256": None,
+        "trust_generation": None,
+        "response": witness_b_path.read_bytes(),
+        "token": expected_token,
+    },
+    "/v1/final-dedicated-witness-quorum/c": {
+        "witness_id": "final-dedicated-witness-c",
+        "public_key": key_c_path.read_text(encoding="ascii").strip(),
+        "trust_sha256": None,
+        "trust_generation": None,
+        "response": None,
+        "token": None,
+    },
+}
+barrier = threading.Barrier(2, timeout=30)
+failures = []
+seen = []
+
+class Server(http.server.ThreadingHTTPServer):
+    allow_reuse_address = True
+    daemon_threads = False
+    block_on_close = True
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_POST(self):
+        try:
+            case = cases[self.path]
+            assert self.headers.get("Content-Type") == "application/json"
+            assert self.headers.get("Accept") == "application/json"
+            authorization = None if case["token"] is None else f"Bearer {case['token']}"
+            assert self.headers.get("Authorization") == authorization
+            length = int(self.headers.get("Content-Length", "0"))
+            assert 0 < length <= 129 * 1024 * 1024
+            request = json.loads(self.rfile.read(length))
+            assert request == {
+                "schema_version": 1,
+                "protocol": (
+                    "pcbex-remote-factory-release-final-checkpoint-witness-"
+                    "receipt-quorum-log-checkpoint-witness-v1"
+                ),
+                "expected_witness_id": case["witness_id"],
+                "expected_witness_public_key": case["public_key"],
+                "witness_key_trust_state_sha256": case["trust_sha256"],
+                "witness_key_generation": case["trust_generation"],
+                "quorum_report": report,
+                "approval_log": approval_log,
+                "checkpoint": checkpoint,
+            }
+            seen.append(self.path)
+            if case["response"] is None:
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                return
+            barrier.wait()
+            response = case["response"]
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(response)
+        except BaseException as error:
+            failures.append(repr(error))
+            raise
+
+    def log_message(self, *_args):
+        return
+
+server = Server(("127.0.0.1", 0), Handler)
+port_path.write_text(str(server.server_port) + "\n", encoding="ascii")
+for _ in range(6):
+    server.handle_request()
+server.server_close()
+assert not failures, failures
+for endpoint in cases:
+    assert seen.count(endpoint) == 2, seen
+PY
+factory_registry_checkpoint_witness_server_pid=$!
+for _ in $(seq 1 200); do
+  if [ -s "$factory_final_checkpoint_dedicated_parallel_witness_port" ]; then
+    break
+  fi
+  if ! kill -0 "$factory_registry_checkpoint_witness_server_pid" 2>/dev/null; then
+    wait "$factory_registry_checkpoint_witness_server_pid"
+    exit 1
+  fi
+  sleep 0.05
+done
+test -s "$factory_final_checkpoint_dedicated_parallel_witness_port"
+factory_final_checkpoint_dedicated_parallel_witness_base="http://127.0.0.1:$(tr -d '\r\n' < "$factory_final_checkpoint_dedicated_parallel_witness_port")/v1/final-dedicated-witness-quorum"
+
+python3 - \
+  "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  "$factory_final_checkpoint_dedicated_parallel_witness_below_manifest" \
+  "$factory_final_checkpoint_dedicated_witness_a_rotated_trust" \
+  "$factory_final_checkpoint_dedicated_witness_b_public" \
+  "$factory_final_checkpoint_dedicated_witness_a_public" \
+  "$factory_final_checkpoint_dedicated_parallel_witness_base" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+manifest_path, below_path, trust_path, key_b_path, key_c_path = map(Path, sys.argv[1:6])
+base = sys.argv[6]
+manifest = {
+    "schema_version": 1,
+    "minimum_witnesses": 2,
+    "maximum_parallelism": 3,
+    "members": [
+        {
+            "endpoint": f"{base}/a",
+            "witness_id": "final-dedicated-witness-a",
+            "witness_public_key": None,
+            "witness_trust_state": json.loads(trust_path.read_bytes()),
+            "bearer_token_env": None,
+            "timeout_seconds": 60,
+        },
+        {
+            "endpoint": f"{base}/b",
+            "witness_id": "final-dedicated-witness-b",
+            "witness_public_key": key_b_path.read_text(encoding="ascii").strip(),
+            "witness_trust_state": None,
+            "bearer_token_env": "PCBEX_E2E_FACTORY_FINAL_DEDICATED_PARALLEL_TOKEN",
+            "timeout_seconds": 60,
+        },
+        {
+            "endpoint": f"{base}/c",
+            "witness_id": "final-dedicated-witness-c",
+            "witness_public_key": key_c_path.read_text(encoding="ascii").strip(),
+            "witness_trust_state": None,
+            "bearer_token_env": None,
+            "timeout_seconds": 60,
+        },
+    ],
+}
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+manifest["minimum_witnesses"] = 3
+below_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+
+"$pcbex_binary" validate-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-manifest \
+  "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_manifest_normalized"
+cmp "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  "$factory_final_checkpoint_dedicated_parallel_witness_manifest_normalized"
+
+"$pcbex_binary" request-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum \
+  "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_log" \
+  --quorum-report "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_report" \
+  --checkpoint "$factory_final_checkpoint_witness_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_final_checkpoint_witness_receipt_quorum_dedicated_public" \
+  --manifest "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  --evaluated-at-unix "$factory_final_checkpoint_dedicated_witness_rotated_evaluated_at" \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" \
+  --quorum-output "$factory_final_checkpoint_dedicated_parallel_witness_quorum" \
+  --allow-http-loopback
+
+if "$pcbex_binary" request-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum \
+  "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_log" \
+  --quorum-report "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_report" \
+  --checkpoint "$factory_final_checkpoint_witness_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_final_checkpoint_witness_receipt_quorum_dedicated_public" \
+  --manifest "$factory_final_checkpoint_dedicated_parallel_witness_below_manifest" \
+  --evaluated-at-unix "$factory_final_checkpoint_dedicated_witness_rotated_evaluated_at" \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_below_acquisition" \
+  --quorum-output "$factory_final_checkpoint_dedicated_parallel_witness_below_quorum" \
+  --allow-http-loopback \
+  2>"$factory_final_checkpoint_dedicated_parallel_witness_below_error"; then
+  echo "expected remote final dedicated parallel witness quorum threshold failure" >&2
+  exit 1
+fi
+wait "$factory_registry_checkpoint_witness_server_pid"
+factory_registry_checkpoint_witness_server_pid=""
+unset PCBEX_E2E_FACTORY_FINAL_DEDICATED_PARALLEL_TOKEN
+
+test "$(jq -r '.protocol' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")" = \
+  pcbex-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-acquisition-v1
+test "$(jq -r '.requested_witnesses' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")" -eq 3
+test "$(jq -r '.verified_witnesses' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")" -eq 2
+test "$(jq -r '.failed_witnesses' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")" -eq 1
+test "$(jq -r '.members[2].failure_code' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")" = http_status
+test "$(jq -r '.members[0].receipt.request_sha256' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")" != \
+  "$(jq -r '.members[1].receipt.request_sha256' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition")"
+cmp "$factory_final_checkpoint_dedicated_witness_rotated_trust_quorum" \
+  "$factory_final_checkpoint_dedicated_parallel_witness_quorum"
+if grep -Fq 'v1527-e2e-bearer-token' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" || \
+   grep -Fq 'PCBEX_E2E_FACTORY_FINAL_DEDICATED_PARALLEL_TOKEN' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition"; then
+  echo "parallel final dedicated witness acquisition retained credential material" >&2
+  exit 1
+fi
+test "$(jq -r '.verified_witnesses' "$factory_final_checkpoint_dedicated_parallel_witness_below_acquisition")" -eq 2
+test "$(jq -r '.quorum_met' "$factory_final_checkpoint_dedicated_parallel_witness_below_acquisition")" = false
+test "$(jq -r '.quorum_met' "$factory_final_checkpoint_dedicated_parallel_witness_below_quorum")" = false
+
+"$pcbex_binary" remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-acquisition-report-schema \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_acquisition_schema"
+test "$(jq -r '.additionalProperties' "$factory_final_checkpoint_dedicated_parallel_witness_acquisition_schema")" = false
+"$pcbex_binary" validate-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-acquisition-report \
+  "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" \
+  --manifest "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  --log "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_log" \
+  --quorum-report "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_report" \
+  --checkpoint "$factory_final_checkpoint_witness_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_final_checkpoint_witness_receipt_quorum_dedicated_public" \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_acquisition_replayed" \
+  --quorum-output "$factory_final_checkpoint_dedicated_parallel_witness_quorum_replayed"
+cmp "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" \
+  "$factory_final_checkpoint_dedicated_parallel_witness_acquisition_replayed"
+cmp "$factory_final_checkpoint_dedicated_parallel_witness_quorum" \
+  "$factory_final_checkpoint_dedicated_parallel_witness_quorum_replayed"
+
+unset PCBEX_E2E_FACTORY_FINAL_DEDICATED_PARALLEL_TOKEN || true
+if "$pcbex_binary" request-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum \
+  "$factory_final_checkpoint_remote_witness_receipt_log_empty" \
+  --quorum-report "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_report" \
+  --checkpoint "$factory_final_checkpoint_witness_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_final_checkpoint_witness_receipt_quorum_dedicated_public" \
+  --manifest "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  --evaluated-at-unix "$factory_final_checkpoint_dedicated_witness_rotated_evaluated_at" \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_invalid_acquisition" \
+  --quorum-output "$factory_final_checkpoint_dedicated_parallel_witness_invalid_quorum" \
+  --allow-http-loopback \
+  2>"$factory_final_checkpoint_dedicated_parallel_witness_invalid_error"; then
+  echo "expected invalid shared evidence before parallel witness credential access" >&2
+  exit 1
+fi
+test ! -e "$factory_final_checkpoint_dedicated_parallel_witness_invalid_acquisition"
+test ! -e "$factory_final_checkpoint_dedicated_parallel_witness_invalid_quorum"
+if grep -Fq 'bearer-token environment' "$factory_final_checkpoint_dedicated_parallel_witness_invalid_error" || \
+   grep -Fq 'HTTPS request failed' "$factory_final_checkpoint_dedicated_parallel_witness_invalid_error"; then
+  echo "invalid shared evidence reached parallel witness credential or network access" >&2
+  exit 1
+fi
+
+factory_final_checkpoint_dedicated_parallel_witness_acquisition_sha256="$(sha256sum "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" | cut -d ' ' -f1)"
+if "$pcbex_binary" request-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum \
+  "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_log" \
+  --quorum-report "$factory_final_checkpoint_remote_witness_receipt_quorum_direct_report" \
+  --checkpoint "$factory_final_checkpoint_witness_receipt_quorum_dedicated_checkpoint" \
+  --checkpoint-public-key "$factory_final_checkpoint_witness_receipt_quorum_dedicated_public" \
+  --manifest "$factory_final_checkpoint_dedicated_parallel_witness_manifest" \
+  --evaluated-at-unix "$factory_final_checkpoint_dedicated_witness_rotated_evaluated_at" \
+  --output "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" \
+  --quorum-output "$factory_final_checkpoint_dedicated_parallel_witness_quorum" \
+  --allow-http-loopback \
+  2>/dev/null; then
+  echo "expected remote final dedicated parallel witness no-clobber rejection" >&2
+  exit 1
+fi
+test "$(sha256sum "$factory_final_checkpoint_dedicated_parallel_witness_acquisition" | cut -d ' ' -f1)" = \
+  "$factory_final_checkpoint_dedicated_parallel_witness_acquisition_sha256"
 
 "$pcbex_binary" verify-remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witnesses \
   "$factory_transparency_external_gossip_registry_history_checkpoint_receipt_quorum_remote_dedicated_witness_receipt_quorum_log" \
