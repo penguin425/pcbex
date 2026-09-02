@@ -253,6 +253,11 @@ boundary document for the artifact you plan to produce or trust.
   expected identity, freshness, and direct or current v1.525 trust before
   appending the unchanged v1.528 event.
 
+- [Final Receipt-quorum Checkpoint-witness Receipt Quorum Admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md)
+  — verify the shared evidence once, replay a distinct uniformly trusted
+  v1.526 receipt set, and bind the sorted unchanged v1.528 suffix plus complete
+  destination log to one closed report.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

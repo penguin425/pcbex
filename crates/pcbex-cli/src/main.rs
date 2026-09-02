@@ -974,15 +974,23 @@ use remote_factory_release_final_checkpoint_witness::{
 };
 use remote_factory_release_final_checkpoint_witness_acquisition::{
     MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_BYTES,
+    MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
     RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
     parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt,
+    parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report,
     remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_json_schema,
+    remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report_json_schema,
     render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt,
+    render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report,
     request_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness,
     request_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_with_trust_state,
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_for_log,
+    validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report,
     verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt,
     verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_for_admission,
     verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_for_admission_with_trust_state,
+    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum,
+    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_with_trust_states,
     verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_with_trust_state,
 };
 use remote_factory_release_final_checkpoint_witness_quorum::{
@@ -2213,6 +2221,67 @@ enum Command {
         recorded_at_unix: Option<u64>,
         #[arg(short, long)]
         output: CompactPath,
+    },
+    /// Print the closed verifier-bound final checkpoint witness receipt admission quorum schema.
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReportSchema
+    {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Validate one canonical verifier-bound final checkpoint witness receipt admission quorum.
+    ValidateRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport
+    {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Re-verify and atomically append a distinct final checkpoint witness receipt quorum.
+    AppendVerifiedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorum
+    {
+        /// Approval transparency log receiving the sorted unchanged receipt events.
+        log: CompactPath,
+        /// Canonical hash-bound v1.526 transport receipts.
+        #[arg(long = "receipt", required = true)]
+        receipts: Vec<CompactPath>,
+        /// Canonical successful v1.521 final checkpoint-witness receipt admission quorum.
+        #[arg(long)]
+        quorum_report: CompactPath,
+        /// Canonical complete final admission log bound by the v1.523 checkpoint.
+        #[arg(long)]
+        approval_log: CompactPath,
+        /// Canonical signed v1.523 final receipt-quorum checkpoint.
+        #[arg(long)]
+        checkpoint: CompactPath,
+        /// Hex-encoded independently pinned 32-byte checkpoint public key.
+        #[arg(long)]
+        checkpoint_public_key: CompactPath,
+        /// Exact canonical v1.524 witness responses, paired positionally with receipts.
+        #[arg(long = "response", required = true)]
+        responses: Vec<CompactPath>,
+        #[arg(long = "trusted-witness-id", conflicts_with = "witness_trust_states")]
+        trusted_witness_ids: Vec<String>,
+        #[arg(
+            long = "trusted-witness-public-key",
+            conflicts_with = "witness_trust_states"
+        )]
+        trusted_witness_public_keys: Vec<CompactPath>,
+        #[arg(
+            long = "witness-trust-state",
+            conflicts_with_all = ["trusted_witness_ids", "trusted_witness_public_keys"]
+        )]
+        witness_trust_states: Vec<CompactPath>,
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(2..=100))]
+        minimum_witnesses: u32,
+        /// Independent admission time for freshness verification; defaults to the current clock.
+        #[arg(long)]
+        evaluated_at_unix: Option<u64>,
+        /// Explicit common event time for reproducible imports; defaults to the current clock.
+        #[arg(long)]
+        recorded_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        report_output: CompactPath,
     },
     /// Print the closed independent final checkpoint witness-quorum schema.
     RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessQuorumReportSchema {
@@ -22657,6 +22726,53 @@ fn run_cli() -> Result<()> {
                 witness.witness_id, receipt_value.evaluated_at_unix
             );
         }
+        Command::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReportSchema {
+            output,
+        } => {
+            write_closed_schema(
+                &remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report_json_schema(),
+                output.as_deref(),
+                "remote factory final checkpoint witness receipt admission quorum report schema output",
+            )?;
+        }
+        Command::ValidateRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport {
+            input,
+            output,
+        } => {
+            if let Some(output) = &output {
+                reject_pipeline_output_aliases(
+                    output.0.as_ref(),
+                    &[input.0.as_ref()],
+                    "validated remote factory final checkpoint witness receipt admission quorum report output",
+                )?;
+            }
+            let (source, _) = read_exact_artifact(
+                input.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                "remote factory final checkpoint witness receipt admission quorum report",
+            )?;
+            let report = parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            if let Some(output) = output.as_deref() {
+                persist_atomic_new_file_bytes(
+                    prepare_atomic_new_file(output)?,
+                    output,
+                    &rendered,
+                )?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+            }
+        }
         Command::AppendVerifiedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt {
             log,
             receipt,
@@ -22868,6 +22984,346 @@ fn run_cli() -> Result<()> {
                 witness.witness_id,
                 digest,
                 destination_log.entries.len() - 1
+            );
+        }
+        Command::AppendVerifiedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorum {
+            log,
+            receipts,
+            quorum_report,
+            approval_log,
+            checkpoint,
+            checkpoint_public_key,
+            responses,
+            trusted_witness_ids,
+            trusted_witness_public_keys,
+            witness_trust_states,
+            minimum_witnesses,
+            evaluated_at_unix,
+            recorded_at_unix,
+            output,
+            report_output,
+        } => {
+            let direct_trust =
+                !trusted_witness_ids.is_empty() || !trusted_witness_public_keys.is_empty();
+            if direct_trust == !witness_trust_states.is_empty() {
+                bail!(
+                    "supply exactly one direct or trust-state final checkpoint-witness receipt quorum key source"
+                );
+            }
+            if trusted_witness_ids.len() != trusted_witness_public_keys.len() {
+                bail!(
+                    "--trusted-witness-id and --trusted-witness-public-key counts must match"
+                );
+            }
+            if receipts.len() != responses.len()
+                || (direct_trust && receipts.len() != trusted_witness_ids.len())
+                || (!direct_trust && receipts.len() != witness_trust_states.len())
+            {
+                bail!(
+                    "final checkpoint-witness receipt, response, and witness trust counts must match"
+                );
+            }
+            if receipts.is_empty()
+                || receipts.len()
+                    > MAX_FACTORY_RELEASE_STATE_TRANSPARENCY_EXTERNAL_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESSES
+            {
+                bail!("final checkpoint-witness receipt quorum must contain 1 to 100 members");
+            }
+
+            let mut input_paths = vec![
+                log.0.as_ref(),
+                quorum_report.0.as_ref(),
+                approval_log.0.as_ref(),
+                checkpoint.0.as_ref(),
+                checkpoint_public_key.0.as_ref(),
+            ];
+            input_paths.extend(receipts.iter().map(|path| path.0.as_ref()));
+            input_paths.extend(responses.iter().map(|path| path.0.as_ref()));
+            input_paths.extend(
+                trusted_witness_public_keys
+                    .iter()
+                    .map(|path| path.0.as_ref()),
+            );
+            input_paths.extend(witness_trust_states.iter().map(|path| path.0.as_ref()));
+            let mut log_output_conflicts = input_paths.clone();
+            log_output_conflicts.push(report_output.0.as_ref());
+            reject_pipeline_output_aliases(
+                output.0.as_ref(),
+                &log_output_conflicts,
+                "verified final checkpoint-witness receipt quorum log output",
+            )?;
+            let mut report_output_conflicts = input_paths;
+            report_output_conflicts.push(output.0.as_ref());
+            reject_pipeline_output_aliases(
+                report_output.0.as_ref(),
+                &report_output_conflicts,
+                "verified final checkpoint-witness receipt quorum report output",
+            )?;
+            let mut paths = vec![
+                Some(log.0.as_ref()),
+                Some(quorum_report.0.as_ref()),
+                Some(approval_log.0.as_ref()),
+                Some(checkpoint.0.as_ref()),
+                Some(checkpoint_public_key.0.as_ref()),
+                Some(output.0.as_ref()),
+                Some(report_output.0.as_ref()),
+            ];
+            paths.extend(receipts.iter().map(|path| Some(path.0.as_ref())));
+            paths.extend(responses.iter().map(|path| Some(path.0.as_ref())));
+            paths.extend(
+                trusted_witness_public_keys
+                    .iter()
+                    .map(|path| Some(path.0.as_ref())),
+            );
+            paths.extend(
+                witness_trust_states
+                    .iter()
+                    .map(|path| Some(path.0.as_ref())),
+            );
+            require_distinct_outputs(paths, "verified final checkpoint-witness receipt quorum")?;
+
+            let (log_source, log_identity) = read_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                "approval transparency log",
+            )?;
+            let mut log_value: ApprovalTransparencyLog = serde_json::from_slice(&log_source)
+                .with_context(|| format!("parsing approval transparency log {}", log.0.display()))?;
+            let receipt_documents = receipts
+                .iter()
+                .map(|path| -> Result<_> {
+                    let (source, identity) = read_exact_artifact(
+                        path.0.as_ref(),
+                        MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_BYTES,
+                        "remote factory final checkpoint-witness receipt",
+                    )?;
+                    let receipt = parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+                        &source,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    Ok((receipt, identity))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let receipt_values = receipt_documents
+                .iter()
+                .map(|(receipt, _)| receipt.clone())
+                .collect::<Vec<_>>();
+            let (quorum_report_source, quorum_report_identity) = read_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                "factory checkpoint-witness receipt quorum report",
+            )?;
+            let (approval_log_source, approval_log_identity) = read_exact_artifact(
+                approval_log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                "complete factory checkpoint-witness receipt admission log",
+            )?;
+            let (checkpoint_source, checkpoint_identity) = read_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_BYTES,
+                "signed factory checkpoint-witness receipt quorum checkpoint",
+            )?;
+            let (checkpoint_key_source, checkpoint_key_identity) = read_exact_artifact(
+                checkpoint_public_key.0.as_ref(),
+                65,
+                "trusted factory checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let checkpoint_key_text = std::str::from_utf8(&checkpoint_key_source).context(
+                "decoding trusted factory checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let trusted_checkpoint_key = decode_hex_key(
+                checkpoint_key_text.trim(),
+                "trusted factory checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            let response_documents = responses
+                .iter()
+                .map(|path| {
+                    read_exact_artifact(
+                        path.0.as_ref(),
+                        MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_BYTES,
+                        "retained remote factory final checkpoint witness response",
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let response_sources = response_documents
+                .iter()
+                .map(|(source, _)| source.clone())
+                .collect::<Vec<_>>();
+            let direct_witnesses = trusted_witness_ids
+                .into_iter()
+                .zip(&trusted_witness_public_keys)
+                .map(|(witness_id, path)| -> Result<_> {
+                    let (source, identity) = read_exact_artifact(
+                        path.0.as_ref(),
+                        65,
+                        "trusted factory final checkpoint witness public key",
+                    )?;
+                    let source = std::str::from_utf8(&source)
+                        .context("decoding trusted factory final checkpoint witness public key")?;
+                    let public_key = decode_hex_key(
+                        source.trim(),
+                        "trusted factory final checkpoint witness public key",
+                    )?;
+                    Ok(((witness_id, public_key), identity))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let direct_values = direct_witnesses
+                .iter()
+                .map(|(trusted, _)| trusted.clone())
+                .collect::<Vec<_>>();
+            let trust_state_documents = witness_trust_states
+                .iter()
+                .map(|path| {
+                    read_exact_artifact(
+                        path.0.as_ref(),
+                        MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
+                        "remote factory final checkpoint witness trust state",
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let trust_state_sources = trust_state_documents
+                .iter()
+                .map(|(source, _)| source.clone())
+                .collect::<Vec<_>>();
+            let now = current_unix_seconds()?;
+            let evaluated_at_unix = evaluated_at_unix.unwrap_or(now);
+            let (verified_receipts, mut report) = if direct_trust {
+                verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum(
+                    &receipt_values,
+                    &quorum_report_source,
+                    &approval_log_source,
+                    &checkpoint_source,
+                    &trusted_checkpoint_key,
+                    &response_sources,
+                    &direct_values,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+            } else {
+                verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_with_trust_states(
+                    &receipt_values,
+                    &quorum_report_source,
+                    &approval_log_source,
+                    &checkpoint_source,
+                    &trusted_checkpoint_key,
+                    &response_sources,
+                    &trust_state_sources,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+            }
+            .map_err(anyhow::Error::msg)?;
+            if !report.quorum_met {
+                bail!(
+                    "final checkpoint-witness receipt admission quorum was not met: {}/{}",
+                    report.valid_witnesses,
+                    report.minimum_witnesses
+                );
+            }
+            let recorded_at_unix = recorded_at_unix.unwrap_or(now);
+            for receipt in &verified_receipts {
+                append_approval_transparency_event(
+                    &mut log_value,
+                    remote_factory_release_final_receipt_quorum_checkpoint_witness_receipt_event(receipt)?,
+                    recorded_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            }
+            report.final_checkpoint_witness_receipt_admission_log_id = Some(log_value.log_id.clone());
+            report.final_checkpoint_witness_receipt_admission_log_entry_count = Some(log_value.entries.len() as u64);
+            report.final_checkpoint_witness_receipt_admission_log_head_sha256 = log_value.head_sha256.clone();
+            report.final_checkpoint_witness_receipt_admission_log_sha256 =
+                Some(approval_transparency_log_sha256(&log_value).map_err(anyhow::Error::msg)?);
+            validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_for_log(
+                &report,
+                &log_value,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let log_document = serde_json::to_string_pretty(&log_value)?;
+            let report_source = render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let report_document = std::str::from_utf8(&report_source)
+                .context("decoding final checkpoint-witness receipt quorum report")?;
+
+            require_exact_artifact(
+                log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                &log_identity,
+                "approval transparency log",
+            )?;
+            require_exact_artifact(
+                quorum_report.0.as_ref(),
+                MAX_REMOTE_FACTORY_RELEASE_REGISTRY_HISTORY_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_QUORUM_REPORT_BYTES,
+                &quorum_report_identity,
+                "factory checkpoint-witness receipt quorum report",
+            )?;
+            require_exact_artifact(
+                approval_log.0.as_ref(),
+                fs::MAX_FILE_BYTES,
+                &approval_log_identity,
+                "complete factory checkpoint-witness receipt admission log",
+            )?;
+            require_exact_artifact(
+                checkpoint.0.as_ref(),
+                MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_BYTES,
+                &checkpoint_identity,
+                "signed factory checkpoint-witness receipt quorum checkpoint",
+            )?;
+            require_exact_artifact(
+                checkpoint_public_key.0.as_ref(),
+                65,
+                &checkpoint_key_identity,
+                "trusted factory checkpoint-witness receipt quorum checkpoint public key",
+            )?;
+            for (path, (_, identity)) in receipts.iter().zip(&receipt_documents) {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_BYTES,
+                    identity,
+                    "remote factory final checkpoint-witness receipt",
+                )?;
+            }
+            for (path, (_, identity)) in responses.iter().zip(&response_documents) {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    MAX_SIGNED_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_BYTES,
+                    identity,
+                    "retained remote factory final checkpoint witness response",
+                )?;
+            }
+            for (path, (_, identity)) in
+                trusted_witness_public_keys.iter().zip(&direct_witnesses)
+            {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    65,
+                    identity,
+                    "trusted factory final checkpoint witness public key",
+                )?;
+            }
+            for (path, (_, identity)) in
+                witness_trust_states.iter().zip(&trust_state_documents)
+            {
+                require_exact_artifact(
+                    path.0.as_ref(),
+                    MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_TRUST_STATE_BYTES,
+                    identity,
+                    "remote factory final checkpoint witness trust state",
+                )?;
+            }
+            write_new_file_set(&[
+                (output.0.as_ref(), log_document.as_str()),
+                (report_output.0.as_ref(), report_document),
+            ])?;
+            eprintln!(
+                "verified and appended final checkpoint-witness receipt quorum: {}/{}",
+                report.valid_witnesses, report.minimum_witnesses
             );
         }
         Command::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessQuorumReportSchema {

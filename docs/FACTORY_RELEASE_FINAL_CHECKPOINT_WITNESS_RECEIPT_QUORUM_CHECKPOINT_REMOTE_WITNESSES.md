@@ -242,3 +242,5 @@ defines the optional current trust state. Publish a successful receipt through
 the [v1.528 transparency boundary](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md),
 or replay every retained input during
 [v1.529 verifier-bound admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md).
+For a distinct set, use the
+[v1.530 verifier-bound receipt quorum](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_QUORUM_ADMISSION.md).
