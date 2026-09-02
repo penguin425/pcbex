@@ -248,6 +248,11 @@ boundary document for the artifact you plan to produce or trust.
   — normalize one canonical v1.526 receipt into the existing signed, anchored,
   consistency-proved, gossiped, and witnessed approval-log chain.
 
+- [Verifier-bound Final Receipt-quorum Checkpoint-witness Receipt Admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+  — replay the exact v1.521 report/log, v1.523 checkpoint, v1.524 response,
+  expected identity, freshness, and direct or current v1.525 trust before
+  appending the unchanged v1.528 event.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

@@ -509,6 +509,34 @@ pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quo
         expected_witness_id,
         trusted_witness_public_key,
         None,
+        receipt.evaluated_at_unix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_for_admission(
+    receipt: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
+    quorum_report_source: &[u8],
+    approval_log_source: &[u8],
+    checkpoint_source: &[u8],
+    trusted_checkpoint_public_key: &[u8; 32],
+    response_source: &[u8],
+    expected_witness_id: &str,
+    trusted_witness_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitness, String>
+{
+    verify_receipt(
+        receipt,
+        quorum_report_source,
+        approval_log_source,
+        checkpoint_source,
+        trusted_checkpoint_public_key,
+        response_source,
+        expected_witness_id,
+        trusted_witness_public_key,
+        None,
+        evaluated_at_unix,
     )
 }
 
@@ -546,6 +574,46 @@ pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quo
         expected_witness_id,
         &trusted_witness_public_key,
         Some((&state, sha256(witness_trust_state_source))),
+        receipt.evaluated_at_unix,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_for_admission_with_trust_state(
+    receipt: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
+    quorum_report_source: &[u8],
+    approval_log_source: &[u8],
+    checkpoint_source: &[u8],
+    trusted_checkpoint_public_key: &[u8; 32],
+    response_source: &[u8],
+    expected_witness_id: &str,
+    witness_trust_state_source: &[u8],
+    evaluated_at_unix: u64,
+) -> Result<SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitness, String>
+{
+    let state = parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trust_state(
+        witness_trust_state_source,
+    )?;
+    if state.witness_id != expected_witness_id {
+        return Err(
+            "remote factory final checkpoint witness identity does not match its trust state"
+                .into(),
+        );
+    }
+    let trusted_witness_public_key = remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_trusted_public_key(
+        &state,
+    )?;
+    verify_receipt(
+        receipt,
+        quorum_report_source,
+        approval_log_source,
+        checkpoint_source,
+        trusted_checkpoint_public_key,
+        response_source,
+        expected_witness_id,
+        &trusted_witness_public_key,
+        Some((&state, sha256(witness_trust_state_source))),
+        evaluated_at_unix,
     )
 }
 
@@ -757,11 +825,22 @@ fn verify_receipt(
         &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessTrustState,
         String,
     )>,
+    evaluated_at_unix: u64,
 ) -> Result<SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitness, String>
 {
     validate_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
         receipt,
     )?;
+    if evaluated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "remote factory final checkpoint witness admission time is outside its bound".into(),
+        );
+    }
+    if evaluated_at_unix < receipt.evaluated_at_unix {
+        return Err(
+            "remote factory final checkpoint witness receipt is future-dated at admission".into(),
+        );
+    }
     let context = prepare_verification_context(
         quorum_report_source,
         approval_log_source,
@@ -851,7 +930,7 @@ fn verify_receipt(
         std::slice::from_ref(&witness),
         std::slice::from_ref(trusted_witness_public_key),
         2,
-        receipt.evaluated_at_unix,
+        evaluated_at_unix,
     )?;
     if single.valid_witnesses != 1 || single.quorum_met {
         return Err(

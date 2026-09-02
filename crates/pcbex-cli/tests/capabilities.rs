@@ -200,6 +200,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "validate-signed-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness",
         "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt-schema",
         "validate-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
+        "append-verified-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
         "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-report-schema",
         "validate-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-quorum-report",
         "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-trust-state-schema",

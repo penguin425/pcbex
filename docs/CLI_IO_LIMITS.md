@@ -1143,6 +1143,15 @@ text bounds. The source log, receipt, and no-clobber destination must be
 distinct; malformed, noncanonical, false, incomplete-trust, weak-key, or
 role-reusing receipts create no successor snapshot.
 
+The v1.529 verifier-bound append reserves its no-clobber destination before
+reading evidence. It accepts one 128 MiB destination log, 64 KiB v1.526
+receipt, 128 KiB v1.521 report, 128 MiB complete final admission log, 64 KiB
+v1.523 checkpoint, 65-byte checkpoint key, 64 KiB v1.524 response, and exactly
+one 65-byte direct witness key or 32 KiB current v1.525 trust state. All eight
+file inputs must be distinct from the destination and are re-read by identity,
+byte count, and SHA-256 immediately before atomic publication. Admission-time
+freshness remains capped at 86,400 seconds.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

@@ -3803,6 +3803,40 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt",
+            "Verify and append final receipt-quorum checkpoint-witness receipt",
+            "Replay the exact final receipt-admission quorum report, complete final admission log, signed receipt-quorum checkpoint, raw witness response, independently pinned checkpoint trust, expected final-witness identity and trust, and admission-time freshness before appending the unchanged v1.528 event.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "log", "receipt", "quorum_report", "approval_log", "checkpoint",
+                    "checkpoint_public_key", "response", "witness_id", "output"
+                ],
+                "properties": {
+                    "log": {"type": "string"},
+                    "receipt": {"type": "string"},
+                    "quorum_report": {"type": "string"},
+                    "approval_log": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "checkpoint_public_key": {"type": "string"},
+                    "response": {"type": "string"},
+                    "witness_id": {"type": "string", "minLength": 1},
+                    "witness_public_key": {"type": "string"},
+                    "witness_trust_state": {"type": "string"},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                },
+                "oneOf": [
+                    {"required": ["witness_public_key"], "not": {"required": ["witness_trust_state"]}},
+                    {"required": ["witness_trust_state"], "not": {"required": ["witness_public_key"]}}
+                ]
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum",
             "Verify and append factory checkpoint-witness receipt quorum",
             "Replay one exact quorum report, complete approval log, signed checkpoint, raw witness responses, checkpoint trust, per-witness trust, freshness, and Ed25519 signatures before no-clobber publication of the admitted receipt quorum and report.",
@@ -6158,6 +6192,12 @@ fn call_tool(
         }
         "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt" => {
             append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+                arguments,
+                cancellation,
+            )?
+        }
+        "append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt" => {
+            append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
                 arguments,
                 cancellation,
             )?
@@ -12543,6 +12583,82 @@ fn append_verified_remote_factory_release_registry_history_receipt_quorum_log_ch
     ))
 }
 
+fn append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "log",
+            "receipt",
+            "quorum_report",
+            "approval_log",
+            "checkpoint",
+            "checkpoint_public_key",
+            "response",
+            "witness_id",
+            "witness_public_key",
+            "witness_trust_state",
+            "evaluated_at_unix",
+            "recorded_at_unix",
+            "output",
+        ],
+    )?;
+    let witness_public_key = optional_string(&arguments, "witness_public_key")?;
+    let witness_trust_state = optional_string(&arguments, "witness_trust_state")?;
+    if witness_public_key.is_some() == witness_trust_state.is_some() {
+        return Err(json!({
+            "detail": "exactly one of witness_public_key or witness_trust_state is required"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "append-verified-remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt"
+            .into(),
+        required_string(&arguments, "log")?,
+        "--receipt".into(),
+        required_string(&arguments, "receipt")?,
+        "--quorum-report".into(),
+        required_string(&arguments, "quorum_report")?,
+        "--approval-log".into(),
+        required_string(&arguments, "approval_log")?,
+        "--checkpoint".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--checkpoint-public-key".into(),
+        required_string(&arguments, "checkpoint_public_key")?,
+        "--response".into(),
+        required_string(&arguments, "response")?,
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+    ];
+    if let Some(path) = witness_public_key {
+        command.extend(["--witness-public-key".into(), path]);
+    }
+    if let Some(path) = witness_trust_state {
+        command.extend(["--witness-trust-state".into(), path]);
+    }
+    optional_nonnegative_integer(
+        &arguments,
+        "evaluated_at_unix",
+        "--evaluated-at-unix",
+        &mut command,
+    )?;
+    optional_nonnegative_integer(
+        &arguments,
+        "recorded_at_unix",
+        "--recorded-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let log = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "log": log}),
+    ))
+}
+
 fn append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -18382,7 +18498,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 186);
+        assert_eq!(tools.len(), 187);
         let named = |name: &str| {
             tools
                 .iter()
@@ -19347,6 +19463,24 @@ mod tests {
         );
         assert_eq!(
             named(
+                "append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
+            )["inputSchema"]["required"][7],
+            "witness_id"
+        );
+        assert_eq!(
+            named(
+                "append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
+            )["inputSchema"]["oneOf"][1]["required"][0],
+            "witness_trust_state"
+        );
+        assert_eq!(
+            named(
+                "append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
+            )["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named(
                 "append_verified_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum"
             )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
             2
@@ -19958,6 +20092,46 @@ mod tests {
         assert_eq!(
             error["detail"],
             "use either paired trusted witness identities/keys or witness trust states"
+        );
+    }
+
+    #[test]
+    fn final_receipt_admission_requires_exactly_one_witness_trust_source() {
+        let mut arguments = json!({
+            "log": "log.json",
+            "receipt": "receipt.json",
+            "quorum_report": "quorum-report.json",
+            "approval_log": "approval-log.json",
+            "checkpoint": "checkpoint.json",
+            "checkpoint_public_key": "checkpoint.pub",
+            "response": "response.json",
+            "witness_id": "witness-a",
+            "output": "output.json"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let absent = append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+            arguments.clone(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            absent["detail"],
+            "exactly one of witness_public_key or witness_trust_state is required"
+        );
+
+        arguments.insert("witness_public_key".into(), json!("witness.pub"));
+        arguments.insert("witness_trust_state".into(), json!("witness.trust.json"));
+        let mixed = append_verified_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+            arguments,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            mixed["detail"],
+            "exactly one of witness_public_key or witness_trust_state is required"
         );
     }
 
