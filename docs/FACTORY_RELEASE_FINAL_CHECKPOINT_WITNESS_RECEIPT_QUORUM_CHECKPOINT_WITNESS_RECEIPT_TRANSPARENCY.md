@@ -10,7 +10,8 @@ remains byte-compatible.
 > [!IMPORTANT]
 > Generic append performs strict structural admission. It does not replay the
 > v1.521 report, final admission log, v1.523 checkpoint, exact v1.524 response,
-> witness signature, freshness, or current v1.525 trust state.
+> witness signature, freshness, or current v1.525 trust state. Use the v1.529
+> verifier-bound append when the complete retained evidence is available.
 
 ## Key Features
 
@@ -68,9 +69,9 @@ pcbex verify-approval-log final-checkpoint-receipts.log.1.json \
 ```
 
 > [!TIP]
-> Run the v1.526 offline validator first when the complete retained evidence is
-> available. Append the byte-identical normalized receipt only after replay
-> succeeds.
+> Prefer the v1.529 verifier-bound append when the complete retained evidence
+> is available. It repeats replay at an independent admission time and emits
+> this same event.
 
 ## Replay Before Admission
 
@@ -166,3 +167,5 @@ place an order; approve payment; or guarantee exactly-once execution.
 The [single-witness transport guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
 defines the unchanged v1.526 receipt. The [parallel acquisition guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_QUORUM_ACQUISITION.md)
 defines how v1.527 retains successful receipts beside coarse failures.
+The [verifier-bound admission guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+replays the complete retained boundary before emitting this same event.

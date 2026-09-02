@@ -241,6 +241,7 @@ auditable release.
 | v1.526.0 | Remote factory final receipt-quorum checkpoint witnesses | Preserve every v1.521–v1.525 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one CLI-only bounded no-redirect HTTPS acquisition path that validates endpoint and role-separated identity/key configuration, production-verifies the exact v1.521 report/log/suffix and v1.523 checkpoint before credential or network access, commits the expected identity and direct key or current v1.525 trust to one compact request, accepts one unchanged canonical v1.524 witness, and publishes it with a closed 64 KiB credential-free receipt binding semantic/raw evidence, request, response, keys, and trust generation while recording endpoint, freshness time, and decision; add full offline receipt replay without claiming historical network behavior, protected files or keys, trusted time, endpoint legal identity or availability, independent operation or key custody, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.527.0 | Parallel remote factory final receipt-quorum checkpoint witness acquisition | Preserve every v1.521–v1.526 wire artifact while adding one closed 1 MiB manifest for 2–100 sorted distinct identities, effective keys, and endpoints with 2–16 bounded workers and per-member direct v1.524 keys or embedded current v1.525 trust; validate the whole manifest and production-verify the exact shared v1.521 report/log/suffix plus v1.523 checkpoint before credential or network access; call the unchanged v1.526 adapter per member, retain unchanged successful v1.524 witnesses and v1.526 receipts plus credential-free coarse failures, invoke the production v1.524 verifier over the successful subset, and publish one closed 16 MiB acquisition report with the unchanged quorum even on threshold failure; add full offline replay of retained successes and the final quorum without claiming historical failed transport behavior, trusted time, endpoint identity or availability, independent operation, protected state or keys, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.528.0 | Final receipt-quorum checkpoint-witness receipt transparency | Preserve every v1.521–v1.527 wire artifact and acquisition path while structurally validating one canonical verified v1.526 transport receipt, normalizing its exact compact receipt, final receipt-quorum checkpoint, request, raw response, and witness identities into one additive approval-log artifact kind, and reusing the unchanged signed hash chain, anchor, consistency, gossip, witness-rotation, and witness-quorum controls without claiming verifier-bound replay of the report/log/checkpoint/response/signature/trust evidence, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
+| v1.529.0 | Verifier-bound final receipt-quorum checkpoint-witness receipt admission | Preserve every v1.521–v1.528 wire artifact, remote acquisition path, and structural append while adding one dedicated immutable-admission command that production-verifies the exact successful v1.521 report, complete final admission log and suffix, v1.523 checkpoint and independently pinned key; reconstructs the expected-identity and direct/current-v1.525-trust-bound v1.526 request; matches the exact v1.524 response and every raw/semantic receipt binding; re-verifies signature, role separation, and freshness at an independent admission time; emits the unchanged v1.528 event; and re-reads all eight file inputs before alias-free no-clobber publication without claiming an atomic same-principal snapshot, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2616,7 +2617,7 @@ endpoint legal identity or availability, independent operation or key custody,
 protected state, global publication/non-equivocation, ordering, payment, or
 exactly-once execution.
 
-The current v1.528.0 milestone publishes one unchanged successful v1.526
+The released v1.528.0 milestone publishes one unchanged successful v1.526
 transport receipt through the existing approval transparency chain. One
 additive artifact kind accepts only the closed canonical receipt and maps its
 compact digest, final receipt-quorum checkpoint, request, raw response, and
@@ -2631,3 +2632,25 @@ freshness, or current v1.525 trust state.
 Protected files, states, and keys; trusted time; endpoint or legal identity;
 independent operation; global publication/non-equivocation; ordering; payment;
 and exactly-once execution remain false.
+
+The current v1.529.0 milestone closes that structural trust gap for one
+receipt. A dedicated append command production-verifies the exact v1.521
+report, complete final admission log and suffix, v1.523 checkpoint signature,
+and independently pinned checkpoint key.
+
+It reconstructs the identity- and trust-bound compact v1.526 request, matches
+the exact v1.524 response and every receipt digest, and applies the production
+signature, role-separation, and 24-hour freshness checks at an independent
+admission time. Direct key pins and current v1.525 trust states remain mutually
+exclusive.
+
+The destination is reserved before evidence reads. After verification, pcbex
+emits the unchanged v1.528 event, re-reads all eight file inputs by identity,
+size, and SHA-256, then publishes one no-clobber successor snapshot. Equal
+source logs, receipts, and event times produce byte-identical structural and
+verifier-bound outputs.
+
+This detects sequential input replacement, not an atomic snapshot across
+same-principal files. Protected state, trusted time, endpoint or receipt
+authenticity, independent operation, global publication/non-equivocation,
+legal identity, ordering, payment, and exactly-once execution remain false.

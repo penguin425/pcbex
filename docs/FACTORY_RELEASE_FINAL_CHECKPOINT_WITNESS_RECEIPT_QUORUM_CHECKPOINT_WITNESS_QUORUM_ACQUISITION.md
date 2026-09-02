@@ -216,3 +216,6 @@ See the [single-witness transport guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNES
 for each retained v1.526 receipt and the [witness guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
 for the unchanged v1.524 signature and quorum contracts. Successful member
 receipts can enter the [v1.528 transparency chain](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md).
+Use [v1.529 verifier-bound admission](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_ADMISSION.md)
+when the append boundary must replay one successful member's complete retained
+evidence and current trust.
