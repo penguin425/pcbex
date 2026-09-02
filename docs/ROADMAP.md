@@ -239,6 +239,7 @@ auditable release.
 | v1.524.0 | Independent factory final checkpoint-witness receipt-quorum checkpoint witnesses | Preserve every v1.512–v1.523 wire artifact while adding closed canonical witness and quorum-report contracts that production-reverify the exact successful v1.521 final receipt quorum, complete final admission log and suffix, v1.523 dedicated checkpoint signature, and independently pinned checkpoint key before witness-key access; sign the exact checkpoint chain and log state under a separate Ed25519 witness domain; require a fresh 2–100 quorum with distinct non-weak identities and keys disjoint from the checkpoint signer; retain valid below-threshold evidence before returning nonzero; and re-read every input before alias-free no-clobber publication without claiming protected files or keys, trusted time, real operational independence, generation-chained witness trust, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.525.0 | Factory final checkpoint-witness receipt-quorum checkpoint witness key rotation | Preserve the v1.524 signed witness and quorum-report wire contracts while binding each configured witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing at most 4,096 generations and nondecreasing bounded rotation times, and letting the unchanged quorum consume either all paired direct keys or all paired current trust states while rejecting stale keys, mixed modes, identity mismatch, weak or unchanged keys, and checkpoint-signer role reuse without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.526.0 | Remote factory final receipt-quorum checkpoint witnesses | Preserve every v1.521–v1.525 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one CLI-only bounded no-redirect HTTPS acquisition path that validates endpoint and role-separated identity/key configuration, production-verifies the exact v1.521 report/log/suffix and v1.523 checkpoint before credential or network access, commits the expected identity and direct key or current v1.525 trust to one compact request, accepts one unchanged canonical v1.524 witness, and publishes it with a closed 64 KiB credential-free receipt binding semantic/raw evidence, request, response, keys, and trust generation while recording endpoint, freshness time, and decision; add full offline receipt replay without claiming historical network behavior, protected files or keys, trusted time, endpoint legal identity or availability, independent operation or key custody, global publication/non-equivocation, ordering, payment, or exactly-once execution |
+| v1.527.0 | Parallel remote factory final receipt-quorum checkpoint witness acquisition | Preserve every v1.521–v1.526 wire artifact while adding one closed 1 MiB manifest for 2–100 sorted distinct identities, effective keys, and endpoints with 2–16 bounded workers and per-member direct v1.524 keys or embedded current v1.525 trust; validate the whole manifest and production-verify the exact shared v1.521 report/log/suffix plus v1.523 checkpoint before credential or network access; call the unchanged v1.526 adapter per member, retain unchanged successful v1.524 witnesses and v1.526 receipts plus credential-free coarse failures, invoke the production v1.524 verifier over the successful subset, and publish one closed 16 MiB acquisition report with the unchanged quorum even on threshold failure; add full offline replay of retained successes and the final quorum without claiming historical failed transport behavior, trusted time, endpoint identity or availability, independent operation, protected state or keys, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2568,7 +2569,7 @@ This is continuity of configured key control, not protected storage, trusted
 time, proof of separate operators or key custody, global publication or
 non-equivocation, legal identity, ordering, payment, or exactly-once execution.
 
-The current v1.526.0 milestone carries that final witness boundary across one
+The released v1.526.0 milestone carries that final witness boundary across one
 explicit network exchange. It validates endpoint, identity, direct/current
 trust, and signer-role separation, then production-verifies the complete
 v1.521 report and final log plus the v1.523 checkpoint before credential access
@@ -2590,3 +2591,26 @@ it does not prove historical transport behavior, trusted time, endpoint legal
 identity or availability, independent operation or key custody, protected
 state, global publication/non-equivocation, ordering, payment, or exactly-once
 execution.
+
+The current v1.527.0 milestone carries that explicit adapter across a bounded
+witness set. One closed manifest sorts 2–100 distinct identities, effective
+keys, and endpoints, selects a threshold, and caps active workers at 2–16.
+Members may independently use a direct v1.524 key or embedded current v1.525
+trust state.
+
+pcbex validates the entire manifest and signer-role separation, then repeats
+the production v1.521 report/log/suffix and v1.523 checkpoint verification
+before any worker reads a credential or opens a connection. Each worker calls
+the unchanged v1.526 adapter and retains only a verified v1.524 witness/receipt
+pair or one credential-free coarse failure code.
+
+The verified subset enters the production v1.524 quorum verifier. pcbex
+publishes one closed acquisition report and the unchanged quorum before a
+below-threshold nonzero exit; offline replay reconstructs every successful
+request and receipt and recomputes that quorum without current time or network
+access.
+
+The result does not prove historical failed transport behavior, trusted time,
+endpoint legal identity or availability, independent operation or key custody,
+protected state, global publication/non-equivocation, ordering, payment, or
+exactly-once execution.

@@ -112,6 +112,18 @@ struct VerificationContext {
     request_bytes: Vec<u8>,
 }
 
+struct SharedVerificationContext {
+    report:
+        RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport,
+    approval_log: ApprovalTransparencyLog,
+    checkpoint: SignedRemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpoint,
+    report_source_sha256: String,
+    approval_log_source_sha256: String,
+    checkpoint_source_sha256: String,
+    checkpoint_sha256: String,
+    checkpoint_public_key: String,
+}
+
 pub(crate) fn render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
     receipt: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
 ) -> Result<Vec<u8>, String> {
@@ -447,6 +459,32 @@ pub(crate) fn request_remote_factory_release_final_checkpoint_witness_receipt_qu
         evaluated_at_unix,
         allow_http_loopback,
     )
+}
+
+pub(crate) fn preflight_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_request(
+    quorum_report_source: &[u8],
+    approval_log_source: &[u8],
+    checkpoint_source: &[u8],
+    trusted_checkpoint_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<(), String> {
+    if evaluated_at_unix > MAX_TIMESTAMP {
+        return Err(
+            "remote factory final checkpoint witness evaluation time is outside its bound".into(),
+        );
+    }
+    let context = prepare_shared_verification_context(
+        quorum_report_source,
+        approval_log_source,
+        checkpoint_source,
+        trusted_checkpoint_public_key,
+    )?;
+    if evaluated_at_unix < context.report.evaluated_at_unix {
+        return Err(
+            "remote factory final checkpoint witness evaluation predates its quorum report".into(),
+        );
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -869,18 +907,10 @@ fn prepare_verification_context(
             "remote factory final checkpoint witness trust-state SHA-256",
         )?;
     }
-    let report = parse_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+    let shared = prepare_shared_verification_context(
         quorum_report_source,
-    )?;
-    let approval_log = parse_remote_receipt_quorum_approval_log(approval_log_source)?;
-    let checkpoint =
-        parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
-            checkpoint_source,
-        )?;
-    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
-        &report,
-        &approval_log,
-        &checkpoint,
+        approval_log_source,
+        checkpoint_source,
         trusted_checkpoint_public_key,
     )?;
     let expected_witness_public_key = hex::encode(trusted_witness_public_key);
@@ -895,9 +925,9 @@ fn prepare_verification_context(
             expected_witness_public_key,
             witness_key_trust_state_sha256: trust_digest,
             witness_key_generation: trust_generation,
-            quorum_report: &report,
-            approval_log: &approval_log,
-            checkpoint: &checkpoint,
+            quorum_report: &shared.report,
+            approval_log: &shared.approval_log,
+            checkpoint: &shared.checkpoint,
         };
     let request_bytes = serde_json::to_vec(&request).map_err(|error| {
         format!("serializing remote factory final checkpoint witness request: {error}")
@@ -908,6 +938,44 @@ fn prepare_verification_context(
         ));
     }
     Ok(VerificationContext {
+        report: shared.report,
+        approval_log: shared.approval_log,
+        checkpoint: shared.checkpoint,
+        report_source_sha256: shared.report_source_sha256,
+        approval_log_source_sha256: shared.approval_log_source_sha256,
+        checkpoint_source_sha256: shared.checkpoint_source_sha256,
+        checkpoint_sha256: shared.checkpoint_sha256,
+        checkpoint_public_key: shared.checkpoint_public_key,
+        request_sha256: sha256(&request_bytes),
+        request_bytes,
+    })
+}
+
+fn prepare_shared_verification_context(
+    quorum_report_source: &[u8],
+    approval_log_source: &[u8],
+    checkpoint_source: &[u8],
+    trusted_checkpoint_public_key: &[u8; 32],
+) -> Result<SharedVerificationContext, String> {
+    validate_nonweak_public_key(
+        trusted_checkpoint_public_key,
+        "trusted factory final checkpoint-witness receipt quorum checkpoint key",
+    )?;
+    let report = parse_remote_factory_release_registry_history_receipt_quorum_log_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_quorum_report(
+        quorum_report_source,
+    )?;
+    let approval_log = parse_remote_receipt_quorum_approval_log(approval_log_source)?;
+    let checkpoint =
+        parse_signed_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+            checkpoint_source,
+        )?;
+    verify_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint(
+        &report,
+        &approval_log,
+        &checkpoint,
+        trusted_checkpoint_public_key,
+    )?;
+    Ok(SharedVerificationContext {
         report,
         approval_log,
         checkpoint_sha256: canonical_sha256(
@@ -919,8 +987,6 @@ fn prepare_verification_context(
         approval_log_source_sha256: sha256(approval_log_source),
         checkpoint_source_sha256: sha256(checkpoint_source),
         checkpoint_public_key: hex::encode(trusted_checkpoint_public_key),
-        request_sha256: sha256(&request_bytes),
-        request_bytes,
     })
 }
 

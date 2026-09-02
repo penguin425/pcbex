@@ -1124,6 +1124,18 @@ local inputs before publishing one distinct no-clobber witness/receipt set;
 offline replay adds the exact 64 KiB response and re-reads every retained input
 before optional normalized output.
 
+The v1.527 parallel acquisition accepts one closed 1 MiB manifest containing
+2–100 sorted members, a threshold from 2 through the member count, and a
+parallelism limit from 2 through 16. Each member retains the v1.526 endpoint,
+identity, 1–600 second timeout, optional 128-byte credential-variable name,
+and either one direct 65-byte key or one embedded 32 KiB v1.525 trust state.
+All workers keep the v1.526 129 MiB request, 16 KiB header, 8 KiB token, and
+64 KiB response/receipt limits. The closed credential-free acquisition report
+is capped at 16 MiB and embeds the unchanged 128 KiB v1.524 quorum. Both
+no-clobber outputs publish after all shared inputs are re-read; threshold
+failure retains both before returning nonzero. Offline replay adds no current
+clock, credential, or network access.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact
