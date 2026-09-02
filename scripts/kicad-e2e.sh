@@ -2963,6 +2963,13 @@ factory_final_checkpoint_dedicated_remote_witness_query_error="$output_directory
 factory_final_checkpoint_dedicated_remote_witness_invalid_evidence="$output_directory/factory-final-checkpoint.dedicated-remote-witness.invalid-evidence.json"
 factory_final_checkpoint_dedicated_remote_witness_invalid_evidence_receipt="$output_directory/factory-final-checkpoint.dedicated-remote-witness.invalid-evidence.receipt.json"
 factory_final_checkpoint_dedicated_remote_witness_invalid_evidence_error="$output_directory/factory-final-checkpoint.dedicated-remote-witness.invalid-evidence.stderr"
+factory_final_checkpoint_dedicated_remote_witness_receipt_log_empty="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipts.log.0.json"
+factory_final_checkpoint_dedicated_remote_witness_receipt_log="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipts.log.1.json"
+factory_final_checkpoint_dedicated_remote_witness_receipt_log_checkpoint="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipts.checkpoint.json"
+factory_final_checkpoint_dedicated_remote_witness_receipt_log_verification="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipts.verification.json"
+factory_final_checkpoint_dedicated_remote_witness_rejected_receipt="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipt.rejected.json"
+factory_final_checkpoint_dedicated_remote_witness_rejected_receipt_log="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipts.rejected-log.json"
+factory_final_checkpoint_dedicated_remote_witness_rejected_receipt_error="$output_directory/factory-final-checkpoint.dedicated-remote-witness-receipts.rejected.stderr"
 factory_final_checkpoint_dedicated_parallel_witness_port="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.port"
 factory_final_checkpoint_dedicated_parallel_witness_manifest="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.manifest.json"
 factory_final_checkpoint_dedicated_parallel_witness_manifest_schema="$output_directory/factory-final-checkpoint.dedicated-parallel-witness.manifest.schema.json"
@@ -6292,6 +6299,78 @@ test "$(sha256sum "$factory_final_checkpoint_dedicated_remote_witness_b" | cut -
   "$factory_final_checkpoint_dedicated_remote_witness_b_sha256"
 test "$(sha256sum "$factory_final_checkpoint_dedicated_remote_witness_b_receipt" | cut -d ' ' -f1)" = \
   "$factory_final_checkpoint_dedicated_remote_witness_b_receipt_sha256"
+
+# v1.528 structurally admits one canonical v1.526 final receipt-quorum
+# checkpoint-witness receipt into the existing signed approval transparency
+# chain without changing the receipt or log wire contracts.
+"$pcbex_binary" init-approval-log \
+  --log-id final-receipt-quorum-checkpoint-witness-receipts \
+  --output "$factory_final_checkpoint_dedicated_remote_witness_receipt_log_empty"
+"$pcbex_binary" append-approval-log \
+  "$factory_final_checkpoint_dedicated_remote_witness_receipt_log_empty" \
+  --artifact "$factory_final_checkpoint_dedicated_remote_witness_b_receipt" \
+  --kind remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt \
+  --recorded-at-unix "$((factory_final_checkpoint_dedicated_witness_rotated_evaluated_at + 1))" \
+  --output "$factory_final_checkpoint_dedicated_remote_witness_receipt_log"
+"$pcbex_binary" sign-approval-log \
+  "$factory_final_checkpoint_dedicated_remote_witness_receipt_log" \
+  --private-key "$factory_final_checkpoint_dedicated_witness_b_private" \
+  --signer-id final-receipt-quorum-checkpoint-witness-receipt-log \
+  --output "$factory_final_checkpoint_dedicated_remote_witness_receipt_log_checkpoint"
+"$pcbex_binary" verify-approval-log \
+  "$factory_final_checkpoint_dedicated_remote_witness_receipt_log" \
+  --checkpoint "$factory_final_checkpoint_dedicated_remote_witness_receipt_log_checkpoint" \
+  --public-key "$factory_final_checkpoint_dedicated_witness_b_public" \
+  --output "$factory_final_checkpoint_dedicated_remote_witness_receipt_log_verification"
+
+jq '.verified = false' \
+  "$factory_final_checkpoint_dedicated_remote_witness_b_receipt" \
+  >"$factory_final_checkpoint_dedicated_remote_witness_rejected_receipt"
+if "$pcbex_binary" append-approval-log \
+  "$factory_final_checkpoint_dedicated_remote_witness_receipt_log" \
+  --artifact "$factory_final_checkpoint_dedicated_remote_witness_rejected_receipt" \
+  --kind remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt \
+  --recorded-at-unix "$((factory_final_checkpoint_dedicated_witness_rotated_evaluated_at + 2))" \
+  --output "$factory_final_checkpoint_dedicated_remote_witness_rejected_receipt_log" \
+  2>"$factory_final_checkpoint_dedicated_remote_witness_rejected_receipt_error"; then
+  echo "expected a false final receipt-quorum checkpoint-witness receipt to fail transparency-log append" >&2
+  exit 1
+fi
+test ! -e "$factory_final_checkpoint_dedicated_remote_witness_rejected_receipt_log"
+grep -Fq 'receipt invariants are invalid' \
+  "$factory_final_checkpoint_dedicated_remote_witness_rejected_receipt_error"
+
+python3 - \
+  "$factory_final_checkpoint_dedicated_remote_witness_b_receipt" \
+  "$factory_final_checkpoint_dedicated_remote_witness_receipt_log" \
+  "$factory_final_checkpoint_dedicated_remote_witness_receipt_log_verification" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+receipt_path, log_path, verification_path = map(Path, sys.argv[1:])
+receipt = json.loads(receipt_path.read_bytes())
+log = json.loads(log_path.read_bytes())
+verification = json.loads(verification_path.read_bytes())
+event = log["entries"][0]["event"]
+compact_receipt = json.dumps(
+    receipt, ensure_ascii=False, separators=(",", ":")
+).encode("utf-8")
+
+assert log["log_id"] == "final-receipt-quorum-checkpoint-witness-receipts"
+assert event["artifact_kind"] == (
+    "remote_factory_release_final_checkpoint_witness_receipt_quorum_"
+    "log_checkpoint_witness_receipt"
+)
+assert event["artifact_sha256"] == hashlib.sha256(compact_receipt).hexdigest()
+assert event["subject_id"] == receipt["checkpoint_sha256"]
+assert event["request_sha256"] == receipt["request_sha256"]
+assert event["session_sha256"] == receipt["response_sha256"]
+assert event["signer_id"] is None
+assert event["outcome"] == f'verified-witness:{receipt["witness_id"]}'
+assert verification["verified"] is True
+PY
 
 # v1.527 validates one complete manifest and the exact v1.521/v1.523 public
 # context before bounded parallel v1.526 workers can read credentials or open

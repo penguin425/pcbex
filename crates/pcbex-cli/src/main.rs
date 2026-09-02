@@ -974,6 +974,7 @@ use remote_factory_release_final_checkpoint_witness::{
 };
 use remote_factory_release_final_checkpoint_witness_acquisition::{
     MAX_REMOTE_FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_LOG_CHECKPOINT_WITNESS_RECEIPT_BYTES,
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
     parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt,
     remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt_json_schema,
     render_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt,
@@ -1344,6 +1345,7 @@ enum ApprovalArtifactKindArg {
     RemoteFactoryReleaseRegistryHistoryCheckpointWitnessReceipt,
     RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceipt,
     RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
+    RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
 }
 
 impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
@@ -1368,6 +1370,9 @@ impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
             }
             ApprovalArtifactKindArg::RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt => {
                 Self::RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt
+            }
+            ApprovalArtifactKindArg::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt => {
+                Self::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt
             }
         }
     }
@@ -47736,6 +47741,14 @@ fn approval_event_descriptor(
                 .map_err(anyhow::Error::msg)?;
             remote_factory_release_final_checkpoint_witness_receipt_event(&artifact)
         }
+        ApprovalArtifactKindArg::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt => {
+            let artifact =
+                parse_remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt(
+                    source.as_bytes(),
+                )
+                .map_err(anyhow::Error::msg)?;
+            remote_factory_release_final_receipt_quorum_checkpoint_witness_receipt_event(&artifact)
+        }
     }
 }
 
@@ -47789,6 +47802,21 @@ fn remote_factory_release_final_checkpoint_witness_receipt_event(
     Ok(ApprovalEventDescriptor {
         artifact_kind:
             ApprovalArtifactKind::RemoteFactoryReleaseRegistryHistoryReceiptQuorumLogCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
+        artifact_sha256: normalized_json_sha256(artifact)?,
+        subject_id: artifact.checkpoint_sha256.clone(),
+        request_sha256: Some(artifact.request_sha256.clone()),
+        session_sha256: Some(artifact.response_sha256.clone()),
+        signer_id: None,
+        outcome: format!("verified-witness:{}", artifact.witness_id),
+    })
+}
+
+fn remote_factory_release_final_receipt_quorum_checkpoint_witness_receipt_event(
+    artifact: &RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
+) -> Result<ApprovalEventDescriptor> {
+    Ok(ApprovalEventDescriptor {
+        artifact_kind:
+            ApprovalArtifactKind::RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceipt,
         artifact_sha256: normalized_json_sha256(artifact)?,
         subject_id: artifact.checkpoint_sha256.clone(),
         request_sha256: Some(artifact.request_sha256.clone()),

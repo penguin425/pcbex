@@ -244,6 +244,10 @@ boundary document for the artifact you plan to produce or trust.
   — acquire mixed direct/current-trust v1.524 witnesses concurrently, retain
   coarse partial failures, and replay the unchanged quorum offline.
 
+- [Final Receipt-quorum Checkpoint-witness Receipt Transparency](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md)
+  — normalize one canonical v1.526 receipt into the existing signed, anchored,
+  consistency-proved, gossiped, and witnessed approval-log chain.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 

@@ -3598,7 +3598,8 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "remote-approval-registry-history-checkpoint-witness-receipt",
                         "remote-factory-release-registry-history-checkpoint-witness-receipt",
                         "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt",
-                        "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt"
+                        "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
+                        "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt"
                     ]},
                     "recorded_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"}
@@ -19277,6 +19278,11 @@ mod tests {
             named("append_approval_transparency_log")["inputSchema"]["properties"]["kind"]["enum"]
                 [9],
             "remote-factory-release-registry-history-receipt-quorum-log-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt"
+        );
+        assert_eq!(
+            named("append_approval_transparency_log")["inputSchema"]["properties"]["kind"]["enum"]
+                [10],
+            "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt"
         );
         assert_eq!(
             named("append_verified_remote_approval_registry_history_witness_receipt")["inputSchema"]
