@@ -214,4 +214,5 @@ inventory remains 186 tools.
 
 See the [single-witness transport guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_REMOTE_WITNESSES.md)
 for each retained v1.526 receipt and the [witness guide](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESSES.md)
-for the unchanged v1.524 signature and quorum contracts.
+for the unchanged v1.524 signature and quorum contracts. Successful member
+receipts can enter the [v1.528 transparency chain](FACTORY_RELEASE_FINAL_CHECKPOINT_WITNESS_RECEIPT_QUORUM_CHECKPOINT_WITNESS_RECEIPT_TRANSPARENCY.md).

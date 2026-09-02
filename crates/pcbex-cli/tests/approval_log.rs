@@ -32,6 +32,12 @@ fn temp_dir() -> PathBuf {
     path
 }
 
+fn write_canonical_json(path: &Path, value: &impl serde::Serialize) {
+    let mut source = serde_json::to_vec_pretty(value).unwrap();
+    source.push(b'\n');
+    fs::write(path, source).unwrap();
+}
+
 fn remote_witness_server(
     checkpoint: SignedApprovalLogCheckpoint,
     secret: [u8; 32],
@@ -3041,6 +3047,169 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    assert!(!rejected_output.exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn appends_factory_final_checkpoint_witness_receipts_without_changing_log_contract() {
+    #[derive(Clone, serde::Serialize)]
+    struct ReceiptFixture {
+        schema_version: u32,
+        adapter: String,
+        endpoint: String,
+        final_checkpoint_witness_receipt_quorum_report_sha256: String,
+        final_checkpoint_witness_receipt_quorum_report_source_sha256: String,
+        registry_id: String,
+        generation: u64,
+        registry_checkpoint_sha256: String,
+        receipt_quorum_checkpoint_sha256: String,
+        checkpoint_witness_receipt_quorum_checkpoint_sha256: String,
+        final_admission_log_id: String,
+        final_admission_log_entry_count: u64,
+        final_admission_log_head_sha256: String,
+        final_admission_log_sha256: String,
+        final_admission_log_source_sha256: String,
+        checkpoint_sha256: String,
+        checkpoint_source_sha256: String,
+        checkpoint_public_key: String,
+        request_sha256: String,
+        response_sha256: String,
+        response_bytes: u64,
+        witness_sha256: String,
+        evaluated_at_unix: u64,
+        witness_id: String,
+        witness_public_key: String,
+        witness_key_trust_state_sha256: Option<String>,
+        witness_key_generation: Option<u64>,
+        witnessed_at_unix: u64,
+        verified: bool,
+    }
+
+    let directory = temp_dir();
+    let checkpoint_private = directory.join("final-checkpoint.key");
+    let checkpoint_public = directory.join("final-checkpoint.pub");
+    let witness_private = directory.join("final-witness.key");
+    let witness_public = directory.join("final-witness.pub");
+    for (private_key, public_key) in [
+        (&checkpoint_private, &checkpoint_public),
+        (&witness_private, &witness_public),
+    ] {
+        let generated = run(&[
+            "approval-keygen",
+            "--private-key",
+            path(private_key),
+            "--public-key",
+            path(public_key),
+        ]);
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+    }
+
+    let checkpoint_public_key = fs::read_to_string(&checkpoint_public).unwrap();
+    let witness_public_key = fs::read_to_string(&witness_public).unwrap();
+    let receipt_fixture = ReceiptFixture {
+        schema_version: 1,
+        adapter: "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-https-v1".into(),
+        endpoint: "https://witness.example/v1/final-checkpoint".into(),
+        final_checkpoint_witness_receipt_quorum_report_sha256: "1".repeat(64),
+        final_checkpoint_witness_receipt_quorum_report_source_sha256: "2".repeat(64),
+        registry_id: "factory-registry".into(),
+        generation: 7,
+        registry_checkpoint_sha256: "3".repeat(64),
+        receipt_quorum_checkpoint_sha256: "4".repeat(64),
+        checkpoint_witness_receipt_quorum_checkpoint_sha256: "5".repeat(64),
+        final_admission_log_id: "final-admission".into(),
+        final_admission_log_entry_count: 2,
+        final_admission_log_head_sha256: "6".repeat(64),
+        final_admission_log_sha256: "7".repeat(64),
+        final_admission_log_source_sha256: "8".repeat(64),
+        checkpoint_sha256: "9".repeat(64),
+        checkpoint_source_sha256: "a".repeat(64),
+        checkpoint_public_key: checkpoint_public_key.trim().into(),
+        request_sha256: "b".repeat(64),
+        response_sha256: "c".repeat(64),
+        response_bytes: 1_024,
+        witness_sha256: "d".repeat(64),
+        evaluated_at_unix: 2_100,
+        witness_id: "final-witness-a".into(),
+        witness_public_key: witness_public_key.trim().into(),
+        witness_key_trust_state_sha256: None,
+        witness_key_generation: None,
+        witnessed_at_unix: 2_000,
+        verified: true,
+    };
+    let receipt_value = serde_json::to_value(&receipt_fixture).unwrap();
+    let receipt = directory.join("final-witness.receipt.json");
+    write_canonical_json(&receipt, &receipt_fixture);
+
+    let empty = directory.join("final-witness-receipts.log.0.json");
+    assert!(
+        run(&[
+            "init-approval-log",
+            "--log-id",
+            "final-witness-receipts",
+            "--output",
+            path(&empty),
+        ])
+        .status
+        .success()
+    );
+    let appended = directory.join("final-witness-receipts.log.1.json");
+    let append = run(&[
+        "append-approval-log",
+        path(&empty),
+        "--artifact",
+        path(&receipt),
+        "--kind",
+        "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
+        "--recorded-at-unix",
+        "2200",
+        "--output",
+        path(&appended),
+    ]);
+    assert!(
+        append.status.success(),
+        "{}",
+        String::from_utf8_lossy(&append.stderr)
+    );
+    let log: Value = serde_json::from_slice(&fs::read(&appended).unwrap()).unwrap();
+    let event = &log["entries"][0]["event"];
+    assert_eq!(
+        event["artifact_kind"],
+        "remote_factory_release_final_checkpoint_witness_receipt_quorum_log_checkpoint_witness_receipt"
+    );
+    assert_eq!(event["artifact_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(event["subject_id"], receipt_value["checkpoint_sha256"]);
+    assert_eq!(event["request_sha256"], receipt_value["request_sha256"]);
+    assert_eq!(event["session_sha256"], receipt_value["response_sha256"]);
+    assert_eq!(event["signer_id"], Value::Null);
+    assert_eq!(event["outcome"], "verified-witness:final-witness-a");
+
+    let rejected_fixture = ReceiptFixture {
+        verified: false,
+        ..receipt_fixture
+    };
+    let rejected_receipt = directory.join("final-witness.rejected.receipt.json");
+    write_canonical_json(&rejected_receipt, &rejected_fixture);
+    let rejected_output = directory.join("final-witness-receipts.rejected.json");
+    let rejected = run(&[
+        "append-approval-log",
+        path(&appended),
+        "--artifact",
+        path(&rejected_receipt),
+        "--kind",
+        "remote-factory-release-final-checkpoint-witness-receipt-quorum-log-checkpoint-witness-receipt",
+        "--recorded-at-unix",
+        "2201",
+        "--output",
+        path(&rejected_output),
+    ]);
+    assert!(!rejected.status.success());
     assert!(!rejected_output.exists());
 
     fs::remove_dir_all(directory).unwrap();

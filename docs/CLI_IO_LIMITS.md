@@ -1136,6 +1136,13 @@ no-clobber outputs publish after all shared inputs are re-read; threshold
 failure retains both before returning nonzero. Offline replay adds no current
 clock, credential, or network access.
 
+The v1.528 structural append accepts one canonical 64 KiB v1.526 receipt
+through the existing 128 MiB generic artifact reader. It emits the unchanged
+approval-log schema with at most 100,000 entries and existing 256-byte event
+text bounds. The source log, receipt, and no-clobber destination must be
+distinct; malformed, noncanonical, false, incomplete-trust, weak-key, or
+role-reusing receipts create no successor snapshot.
+
 All seven v1.499–v1.501 registry artifacts require canonical pretty JSON plus LF
 and reject duplicate or unknown keys. Rotation apply publishes the next trust
 state and exported public key as one alias-free no-clobber set after exact

@@ -240,6 +240,7 @@ auditable release.
 | v1.525.0 | Factory final checkpoint-witness receipt-quorum checkpoint witness key rotation | Preserve the v1.524 signed witness and quorum-report wire contracts while binding each configured witness identity to a generation-zero non-weak Ed25519 key, advancing trust only through exact one-generation old/new dual-signed and predecessor-digest-chained transitions, enforcing at most 4,096 generations and nondecreasing bounded rotation times, and letting the unchanged quorum consume either all paired direct keys or all paired current trust states while rejecting stale keys, mixed modes, identity mismatch, weak or unchanged keys, and checkpoint-signer role reuse without claiming protected trust storage, trusted time, independent operators or key custody, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 | v1.526.0 | Remote factory final receipt-quorum checkpoint witnesses | Preserve every v1.521–v1.525 report, log, checkpoint, witness, quorum, trust-state, and rotation wire contract while adding one CLI-only bounded no-redirect HTTPS acquisition path that validates endpoint and role-separated identity/key configuration, production-verifies the exact v1.521 report/log/suffix and v1.523 checkpoint before credential or network access, commits the expected identity and direct key or current v1.525 trust to one compact request, accepts one unchanged canonical v1.524 witness, and publishes it with a closed 64 KiB credential-free receipt binding semantic/raw evidence, request, response, keys, and trust generation while recording endpoint, freshness time, and decision; add full offline receipt replay without claiming historical network behavior, protected files or keys, trusted time, endpoint legal identity or availability, independent operation or key custody, global publication/non-equivocation, ordering, payment, or exactly-once execution |
 | v1.527.0 | Parallel remote factory final receipt-quorum checkpoint witness acquisition | Preserve every v1.521–v1.526 wire artifact while adding one closed 1 MiB manifest for 2–100 sorted distinct identities, effective keys, and endpoints with 2–16 bounded workers and per-member direct v1.524 keys or embedded current v1.525 trust; validate the whole manifest and production-verify the exact shared v1.521 report/log/suffix plus v1.523 checkpoint before credential or network access; call the unchanged v1.526 adapter per member, retain unchanged successful v1.524 witnesses and v1.526 receipts plus credential-free coarse failures, invoke the production v1.524 verifier over the successful subset, and publish one closed 16 MiB acquisition report with the unchanged quorum even on threshold failure; add full offline replay of retained successes and the final quorum without claiming historical failed transport behavior, trusted time, endpoint identity or availability, independent operation, protected state or keys, global publication/non-equivocation, ordering, payment, or exactly-once execution |
+| v1.528.0 | Final receipt-quorum checkpoint-witness receipt transparency | Preserve every v1.521–v1.527 wire artifact and acquisition path while structurally validating one canonical verified v1.526 transport receipt, normalizing its exact compact receipt, final receipt-quorum checkpoint, request, raw response, and witness identities into one additive approval-log artifact kind, and reusing the unchanged signed hash chain, anchor, consistency, gossip, witness-rotation, and witness-quorum controls without claiming verifier-bound replay of the report/log/checkpoint/response/signature/trust evidence, protected state, trusted time, endpoint or receipt authenticity, independent operation, global publication/non-equivocation, legal identity, ordering, payment, or exactly-once execution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
@@ -2592,7 +2593,7 @@ identity or availability, independent operation or key custody, protected
 state, global publication/non-equivocation, ordering, payment, or exactly-once
 execution.
 
-The current v1.527.0 milestone carries that explicit adapter across a bounded
+The released v1.527.0 milestone carries that explicit adapter across a bounded
 witness set. One closed manifest sorts 2–100 distinct identities, effective
 keys, and endpoints, selects a threshold, and caps active workers at 2–16.
 Members may independently use a direct v1.524 key or embedded current v1.525
@@ -2614,3 +2615,19 @@ The result does not prove historical failed transport behavior, trusted time,
 endpoint legal identity or availability, independent operation or key custody,
 protected state, global publication/non-equivocation, ordering, payment, or
 exactly-once execution.
+
+The current v1.528.0 milestone publishes one unchanged successful v1.526
+transport receipt through the existing approval transparency chain. One
+additive artifact kind accepts only the closed canonical receipt and maps its
+compact digest, final receipt-quorum checkpoint, request, raw response, and
+witness identity into one immutable successor event.
+
+Existing approval-log signing, anchoring, consistency, gossip, witness
+rotation, and witness-quorum controls apply unchanged. Append remains a
+structural boundary: it does not replay the v1.521 report, complete final
+admission log, v1.523 checkpoint, exact v1.524 response, witness signature,
+freshness, or current v1.525 trust state.
+
+Protected files, states, and keys; trusted time; endpoint or legal identity;
+independent operation; global publication/non-equivocation; ordering; payment;
+and exactly-once execution remain false.
