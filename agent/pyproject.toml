@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 pcbex-agent = "pcbex_agent.cli:main"
 
 [project.optional-dependencies]
-kicad = ["kicad-python>=0.6,<0.8"]
+kicad = ["kicad-python>=0.6,<0.9"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
