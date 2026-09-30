@@ -116,6 +116,86 @@ def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _rust_typed_policy_pack(value: dict[str, Any]) -> dict[str, Any]:
+    """Serialize policy-pack material in serde struct field order."""
+    def ordered(obj: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+        if not isinstance(obj, dict) or set(obj) - set(fields):
+            raise FixtureError("policy pack contains an unsupported typed object")
+        return {key: obj[key] for key in fields if key in obj}
+
+    profile = value.get("dfm_profile")
+    if not isinstance(profile, dict):
+        raise FixtureError("policy pack DFM profile is invalid")
+    rule_order = (
+        "minimum_track_width_nm", "minimum_clearance_nm", "minimum_drill_nm",
+        "minimum_annular_ring_nm", "minimum_copper_to_edge_nm", "board_thickness_nm",
+        "maximum_via_aspect_ratio", "minimum_drill_to_drill_nm", "allow_via_in_pad",
+        "minimum_trace_angle_deg",
+    )
+    ordered_profile = {key: profile[key] for key in (
+        "schema_version", "id", "aliases", "revision", "verified_on", "description", "source_urls"
+    ) if key in profile}
+    rules = profile.get("rules")
+    if isinstance(rules, dict):
+        rules = {
+            "maximum_via_aspect_ratio": 10,
+            "minimum_drill_to_drill_nm": 0,
+            "allow_via_in_pad": True,
+            "minimum_trace_angle_deg": 0,
+            **rules,
+        }
+        ordered_profile["rules"] = ordered(rules, rule_order)
+    order = (
+        "schema_version", "id", "revision", "verified_on", "description", "dfm_profile",
+        "electrical_policy", "ai_requirements", "require_simulation_evidence",
+        "trusted_approval_keys", "trusted_human_escalation_keys",
+        "fabrication_authorization_policy", "procurement_authorization_policy",
+        "factory_receipt_attestation_policy", "factory_adapter_response_authentication_policy",
+    )
+    result = ordered(value, order)
+    result["dfm_profile"] = ordered_profile
+    electrical = ordered(value["electrical_policy"], ("schema_version", "id", "rules"))
+    electrical["rules"] = {
+        name: ordered(rule, ("enabled", "severity"))
+        for name, rule in sorted(electrical["rules"].items())
+    }
+    result["electrical_policy"] = electrical
+    result["ai_requirements"] = [
+        ordered(item, ("id", "text")) for item in value["ai_requirements"]
+    ]
+    for field in ("trusted_approval_keys", "trusted_human_escalation_keys"):
+        if field in result:
+            result[field] = [ordered(item, ("signer_id", "public_key")) for item in value[field]]
+    if not result.get("trusted_human_escalation_keys"):
+        result.pop("trusted_human_escalation_keys", None)
+    policy_fields = {
+        "fabrication_authorization_policy": (
+            "minimum_approvals", "maximum_validity_seconds", "trusted_keys"
+        ),
+        "procurement_authorization_policy": (
+            "minimum_approvals", "currency", "maximum_validity_seconds",
+            "maximum_receipt_observation_age_seconds", "maximum_component_subtotal_micros",
+            "trusted_keys",
+        ),
+        "factory_receipt_attestation_policy": ("maximum_validity_seconds", "trusted_keys"),
+        "factory_adapter_response_authentication_policy": ("maximum_validity_seconds", "trusted_keys"),
+    }
+    for field, fields in policy_fields.items():
+        if result.get(field) is None:
+            result.pop(field, None)
+            continue
+        policy = ordered(result[field], fields)
+        if field == "factory_receipt_attestation_policy":
+            key_fields = ("factory_id", "provider", "public_key")
+        elif field == "factory_adapter_response_authentication_policy":
+            key_fields = ("key_id", "factory_id", "provider", "public_key")
+        else:
+            key_fields = ("signer_id", "public_key")
+        policy["trusted_keys"] = [ordered(item, key_fields) for item in policy["trusted_keys"]]
+        result[field] = policy
+    return result
+
+
 def _read_stable(path: Path, *, maximum: int, role: str) -> bytes:
     """Read one regular file twice, rejecting links and concurrent changes."""
 
@@ -300,7 +380,13 @@ def _descriptor(path: Path, *, archive_name: str | None = None) -> dict[str, Any
     }
 
 
-def _write_manufacturing_package(path: Path, board: Path, *, engine_version: str) -> None:
+def _write_manufacturing_package(
+    path: Path,
+    board: Path,
+    *,
+    engine_version: str,
+    policy_pack: Path | None = None,
+) -> None:
     board_bytes = _read_stable(board, maximum=MAX_SOURCE_BYTES, role="fixture board")
     artifact_data: list[tuple[str, bytes, str]] = [
         ("design-F_Cu.gtl", b"front-copper", "Copper,L1,Top"),
@@ -338,7 +424,7 @@ def _write_manufacturing_package(path: Path, board: Path, *, engine_version: str
         ]
     )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 3 if policy_pack is not None else 1,
         "engine": "pcbex",
         "engine_version": engine_version,
         "tools": {
@@ -358,6 +444,27 @@ def _write_manufacturing_package(path: Path, board: Path, *, engine_version: str
         ],
         "archive": path.name,
     }
+    if policy_pack is not None:
+        policy_raw = _read_stable(policy_pack, maximum=64 * 1024 * 1024, role="policy pack")
+        policy = _parse_json(policy_raw, role="policy pack")
+        if not isinstance(policy, dict) or not isinstance(policy.get("dfm_profile"), dict):
+            raise FixtureError("policy pack DFM profile is invalid")
+        typed_policy = _rust_typed_policy_pack(policy)
+        profile = typed_policy["dfm_profile"]
+        canonical_profile = json.dumps(profile, ensure_ascii=False, separators=(",", ":")).encode()
+        manifest["dfm_profile"] = {
+            "schema_version": 1,
+            "id": profile.get("id"),
+            "revision": profile.get("revision"),
+            "canonical_sha256": _sha256(b"pcbex-dfm-profile-v1\0" + canonical_profile),
+            "origin": {
+                "kind": "policy_pack",
+                "source": {"path": policy_pack.name, "bytes": len(policy_raw), "sha256": _sha256(policy_raw)},
+                "id": policy.get("id"),
+                "revision": policy.get("revision"),
+                "canonical_sha256": _sha256(json.dumps(typed_policy, ensure_ascii=False, separators=(",", ":")).encode()),
+            },
+        }
     entries = [(name, payload) for name, payload, _ in artifact_data]
     entries.append(("manifest.json", json.dumps(manifest, separators=(",", ":")).encode()))
     if path.exists() or path.is_symlink():

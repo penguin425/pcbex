@@ -2,9 +2,11 @@
 //!
 //! Physical constraint profiles have a separate binding contract because they
 //! describe board geometry as well as manufacturing rules.  This module only
-//! binds the DFM profile selected by `--fab`/`--fab-profile`; the two kinds of
+//! binds the DFM profile selected by `--fab`/`--fab-profile`/`--policy-pack`; the two kinds of
 //! profile remain mutually exclusive at the CLI boundary.
 
+use crate::fabrication_authorization::MAX_POLICY_PACK_BYTES;
+use crate::policy_pack::{OrganizationPolicyPack, parse_policy_pack, policy_pack_sha256};
 use anyhow::{Context, Result, bail};
 use pcbex_core::{DfmProfile, MAX_DFM_PROFILE_TEXT_BYTES, dfm_profile, validate_dfm_profile};
 use serde::{Deserialize, Serialize};
@@ -25,14 +27,21 @@ pub(crate) struct DfmProfileSource {
 
 /// Explicit provenance for one normalized DFM profile.
 ///
-/// Policy-pack provenance is intentionally not represented in v1.447.  The
-/// policy-pack path remains on its existing analysis-only contract until a
-/// later release can bind the containing pack as well as its embedded object.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DfmProfileOrigin {
-    External { source: DfmProfileSource },
-    Builtin { id: String },
+    External {
+        source: DfmProfileSource,
+    },
+    Builtin {
+        id: String,
+    },
+    PolicyPack {
+        source: DfmProfileSource,
+        id: String,
+        revision: u32,
+        canonical_sha256: String,
+    },
 }
 
 /// Stable identity for the normalized DFM profile selected for a run.
@@ -93,6 +102,50 @@ pub(crate) fn builtin_dfm_profile_binding(profile: &DfmProfile) -> Result<DfmPro
     Ok(binding)
 }
 
+/// Bind an embedded DFM profile to the exact policy-pack source selected by a
+/// producer.  This records provenance only; policy signatures and trust are
+/// deliberately verified by their existing policy workflow.
+pub(crate) fn policy_pack_dfm_profile_binding(
+    pack: &OrganizationPolicyPack,
+    path: &Path,
+    raw: &[u8],
+) -> Result<DfmProfileBinding> {
+    let source_path = portable_source_name(path)?;
+    let source_bytes = u64::try_from(raw.len())
+        .map_err(|_| anyhow::anyhow!("policy pack byte count cannot be represented"))?;
+    if source_bytes == 0 || source_bytes > MAX_POLICY_PACK_BYTES {
+        bail!(
+            "policy pack source must contain 1 to {} bytes",
+            MAX_POLICY_PACK_BYTES
+        );
+    }
+    let source = std::str::from_utf8(raw).context("decoding policy pack source as UTF-8")?;
+    let parsed = parse_policy_pack(source).map_err(anyhow::Error::msg)?;
+    if parsed != *pack {
+        bail!("policy pack source does not match the supplied policy pack");
+    }
+    let pack_canonical_sha256 = policy_pack_sha256(pack).map_err(anyhow::Error::msg)?;
+    let binding = DfmProfileBinding {
+        schema_version: DFM_PROFILE_BINDING_SCHEMA_VERSION,
+        id: pack.dfm_profile.id.clone(),
+        revision: pack.dfm_profile.revision,
+        canonical_sha256: canonical_dfm_profile_sha256(&pack.dfm_profile)?,
+        origin: DfmProfileOrigin::PolicyPack {
+            source: DfmProfileSource {
+                path: source_path,
+                bytes: source_bytes,
+                sha256: hex::encode(Sha256::digest(raw)),
+            },
+            id: pack.id.clone(),
+            revision: pack.revision,
+            canonical_sha256: pack_canonical_sha256,
+        },
+    };
+    validate_dfm_profile_binding(&binding)?;
+    binding_matches_profile(&binding, &pack.dfm_profile)?;
+    Ok(binding)
+}
+
 pub(crate) fn canonical_dfm_profile_sha256(profile: &DfmProfile) -> Result<String> {
     validate_dfm_profile(profile).map_err(anyhow::Error::msg)?;
     let canonical = serde_json::to_vec(profile).context("serializing canonical DFM profile")?;
@@ -144,6 +197,30 @@ pub(crate) fn validate_dfm_profile_binding(binding: &DfmProfileBinding) -> Resul
                 bail!("DFM built-in origin canonical digest does not match the built-in profile");
             }
         }
+        DfmProfileOrigin::PolicyPack {
+            source,
+            id,
+            revision,
+            canonical_sha256,
+        } => {
+            validate_source_name(&source.path)?;
+            if source.bytes == 0 || source.bytes > MAX_POLICY_PACK_BYTES {
+                bail!(
+                    "policy pack binding source must contain 1 to {} bytes",
+                    MAX_POLICY_PACK_BYTES
+                );
+            }
+            if !is_sha256(&source.sha256) {
+                bail!("policy pack binding source sha256 is invalid");
+            }
+            validate_identifier(id, "policy pack binding id")?;
+            if *revision == 0 {
+                bail!("policy pack binding revision must be greater than zero");
+            }
+            if !is_sha256(canonical_sha256) {
+                bail!("policy pack binding canonical_sha256 is invalid");
+            }
+        }
     }
     Ok(())
 }
@@ -160,10 +237,13 @@ pub(crate) fn binding_matches_profile(
     if binding.canonical_sha256 != canonical_dfm_profile_sha256(profile)? {
         bail!("DFM profile binding canonical digest does not match the normalized profile");
     }
-    if let DfmProfileOrigin::Builtin { id } = &binding.origin
-        && id != &profile.id
-    {
-        bail!("DFM built-in origin id does not match the normalized profile");
+    match &binding.origin {
+        DfmProfileOrigin::Builtin { id } if id != &profile.id => {
+            bail!("DFM built-in origin id does not match the normalized profile");
+        }
+        DfmProfileOrigin::External { .. }
+        | DfmProfileOrigin::Builtin { .. }
+        | DfmProfileOrigin::PolicyPack { .. } => {}
     }
     Ok(())
 }
@@ -220,6 +300,78 @@ mod tests {
 
     fn profile() -> DfmProfile {
         dfm_profile("jlcpcb-2layer").unwrap()
+    }
+
+    fn policy_pack() -> OrganizationPolicyPack {
+        parse_policy_pack(include_str!("../../../examples/acme-policy-pack.json")).unwrap()
+    }
+
+    #[test]
+    fn policy_pack_binding_roundtrips_and_separates_raw_and_pack_identity() {
+        let pack = policy_pack();
+        let raw = serde_json::to_vec(&pack).unwrap();
+        let binding =
+            policy_pack_dfm_profile_binding(&pack, Path::new("organization-policy.json"), &raw)
+                .unwrap();
+        assert!(matches!(
+            &binding.origin,
+            DfmProfileOrigin::PolicyPack { .. }
+        ));
+        let value = serde_json::to_value(&binding).unwrap();
+        let decoded: DfmProfileBinding = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, binding);
+        binding_matches_profile(&binding, &pack.dfm_profile).unwrap();
+
+        let pretty = serde_json::to_vec_pretty(&pack).unwrap();
+        let other = policy_pack_dfm_profile_binding(&pack, Path::new("other-policy.json"), &pretty)
+            .unwrap();
+        assert_eq!(binding.id, other.id);
+        assert_eq!(binding.revision, other.revision);
+        assert_eq!(binding.canonical_sha256, other.canonical_sha256);
+        assert_ne!(binding, other);
+    }
+
+    #[test]
+    fn policy_pack_binding_distinguishes_pack_revision_and_non_dfm_changes() {
+        let pack = policy_pack();
+        let raw = serde_json::to_vec(&pack).unwrap();
+        let first = policy_pack_dfm_profile_binding(&pack, Path::new("policy.json"), &raw).unwrap();
+
+        let mut changed = pack.clone();
+        changed.revision += 1;
+        changed.description.push_str(" changed");
+        let changed_raw = serde_json::to_vec(&changed).unwrap();
+        let second =
+            policy_pack_dfm_profile_binding(&changed, Path::new("policy.json"), &changed_raw)
+                .unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.canonical_sha256, second.canonical_sha256);
+        assert_ne!(first.origin, second.origin);
+    }
+
+    #[test]
+    fn policy_pack_binding_rejects_raw_pack_mismatch() {
+        let first = policy_pack();
+        let mut second = first.clone();
+        second.description.push_str(" substituted");
+        let raw = serde_json::to_vec(&second).unwrap();
+        assert!(policy_pack_dfm_profile_binding(&first, Path::new("policy.json"), &raw).is_err());
+    }
+
+    #[test]
+    fn policy_pack_binding_rejects_bad_structure_and_unknown_origin() {
+        let pack = policy_pack();
+        let raw = serde_json::to_vec(&pack).unwrap();
+        let binding =
+            policy_pack_dfm_profile_binding(&pack, Path::new("policy.json"), &raw).unwrap();
+        let mut value = serde_json::to_value(&binding).unwrap();
+        value["origin"]["revision"] = 0.into();
+        let bad: DfmProfileBinding = serde_json::from_value(value).unwrap();
+        assert!(validate_dfm_profile_binding(&bad).is_err());
+
+        let mut unknown = serde_json::to_value(&binding).unwrap();
+        unknown["origin"]["kind"] = "unknown".into();
+        assert!(serde_json::from_value::<DfmProfileBinding>(unknown).is_err());
     }
 
     #[test]
@@ -290,7 +442,9 @@ mod tests {
     fn external_source(binding: &DfmProfileBinding) -> &DfmProfileSource {
         match &binding.origin {
             DfmProfileOrigin::External { source } => source,
-            DfmProfileOrigin::Builtin { .. } => panic!("expected external origin"),
+            DfmProfileOrigin::Builtin { .. } | DfmProfileOrigin::PolicyPack { .. } => {
+                panic!("expected external origin")
+            }
         }
     }
 }

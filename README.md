@@ -164,8 +164,8 @@ and publish normalized manufacturing artifacts plus a canonical ZIP:
   --output-dir build/manufacturing
 ```
 
-Add `--physical-profile`, `--fab`, or `--fab-profile` when the package must bind
-organization or fabricator constraints. Read the
+Add one of `--physical-profile`, `--fab`, `--fab-profile`, or `--policy-pack` to bind
+manufacturing constraints. Read the
 [manufacturing package contract](docs/MANUFACTURING_PACKAGE.md) before treating
 the archive as release evidence.
 

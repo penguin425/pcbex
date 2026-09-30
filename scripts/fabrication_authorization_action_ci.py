@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import sys
 import tempfile
@@ -469,10 +470,21 @@ def _build_fixture(
     *,
     board: Path | None,
     manufacturing_package: Path | None,
+    native_manufacturing: bool = False,
+    kicad_cli: Path | None = None,
+    kicad_project: Path | None = None,
     timeout_seconds: int,
     executable_identity: pipeline_fixture.ExecutableIdentity,
 ) -> dict[str, Any]:
-    if (board is None) != (manufacturing_package is None):
+    if native_manufacturing and manufacturing_package is not None:
+        raise FixtureError("--native-manufacturing cannot be combined with --manufacturing-package")
+    if native_manufacturing and kicad_cli is None:
+        raise FixtureError("--native-manufacturing requires --kicad-cli")
+    if not native_manufacturing and (kicad_cli is not None or kicad_project is not None):
+        raise FixtureError("KiCad selections require --native-manufacturing")
+    if (board is None) != (manufacturing_package is None) and not (
+        native_manufacturing and board is not None
+    ):
         raise FixtureError(
             "--board and --manufacturing-package must be supplied together"
         )
@@ -518,6 +530,17 @@ def _build_fixture(
         ):
             raise FixtureError("externally supplied board filename collides")
         board_path.write_bytes(board_override)
+    native_project_target: Path | None = None
+    native_project_raw: bytes | None = None
+    if native_manufacturing and kicad_project is not None:
+        project_bytes = _read(kicad_project, maximum=MAX_SOURCE_BYTES, role="KiCad project")
+        native_project_raw = project_bytes
+        native_project_target = output_dir / f"{board_path.stem}.kicad_pro"
+        if native_project_target.exists() or native_project_target.is_symlink():
+            raise FixtureError("native KiCad project destination already exists")
+        pipeline_fixture.atomic_write_no_clobber(
+            native_project_target, project_bytes, max_bytes=MAX_SOURCE_BYTES
+        )
 
     version_result = _run_checked(
         pcbex,
@@ -634,16 +657,38 @@ def _build_fixture(
         )
 
         package_path = output_dir / "manufacturing.zip"
-        if package_override is None:
+        if native_manufacturing:
+            if kicad_project is not None and _read(kicad_project, maximum=MAX_SOURCE_BYTES, role="KiCad project") != native_project_raw:
+                raise FixtureError("KiCad project changed during native fabrication")
+            native_dir = output_dir / "native-manufacturing"
+            _run_checked(
+                pcbex,
+                ["fabricate", board_path.name, "--output-dir", native_dir.name,
+                 "--kicad-cli", str(kicad_cli), "--policy-pack", "final-policy-pack.json"],
+                cwd=output_dir,
+                timeout_seconds=timeout_seconds,
+                executable_identity=executable_identity,
+            )
+            native_package = native_dir / "manufacturing.zip"
+            if not native_package.is_file():
+                raise FixtureError("native fabrication did not retain manufacturing.zip")
+            package_path = output_dir / "manufacturing.zip"
+            pipeline_fixture.atomic_write_no_clobber(
+                package_path,
+                _read(native_package, maximum=MAX_REPORT_BYTES, role="native manufacturing package"),
+                max_bytes=pipeline_fixture.MAX_PACKAGE_BYTES,
+            )
+        if manufacturing_package is None and not native_manufacturing:
             try:
                 pipeline_fixture._write_manufacturing_package(
                     package_path,
                     board_path,
                     engine_version=engine_version,
+                    policy_pack=output_dir / "final-policy-pack.json",
                 )
             except pipeline_fixture.FixtureError as error:
                 raise FixtureError(str(error)) from error
-        else:
+        elif manufacturing_package is not None:
             try:
                 pipeline_fixture.atomic_write_no_clobber(
                     package_path,
@@ -683,7 +728,11 @@ def _build_fixture(
                 output_dir, output_dir / "analysis/checks.json"
             ),
             "quality": _descriptor(output_dir, output_dir / "analysis/quality.json"),
-            "analysis_project": None,
+            "analysis_project": (
+                _descriptor(output_dir, output_dir / f"{board_path.stem}.kicad_pro")
+                if native_project_target is not None
+                else None
+            ),
             "analysis_rules": None,
             "analysis_dfm_profile": None,
             "analysis_policy_pack": _descriptor(
@@ -841,6 +890,9 @@ def _parser() -> argparse.ArgumentParser:
             "the fixture package"
         ),
     )
+    parser.add_argument("--native-manufacturing", action="store_true")
+    parser.add_argument("--kicad-cli", help="KiCad CLI used by native fabrication")
+    parser.add_argument("--kicad-project", help="optional project source for native fabrication")
     parser.add_argument(
         "--timeout-seconds",
         type=int,
@@ -859,6 +911,18 @@ def main(argv: list[str] | None = None) -> int:
             pcbex, executable_identity = pipeline_fixture._resolve_pcbex(args.pcbex)
         except pipeline_fixture.FixtureError as error:
             raise FixtureError(str(error)) from error
+        kicad_cli = None
+        if args.kicad_cli is not None:
+            candidate = Path(args.kicad_cli)
+            if not candidate.is_absolute():
+                if candidate.parent == Path(".") and not Path(args.kicad_cli).exists():
+                    found = shutil.which(args.kicad_cli)
+                    if found is None:
+                        raise FixtureError("could not resolve --kicad-cli")
+                    candidate = Path(found)
+                else:
+                    candidate = Path.cwd() / candidate
+            kicad_cli = candidate.resolve(strict=True)
         summary = _build_fixture(
             pcbex,
             Path(args.fixture_dir),
@@ -870,6 +934,9 @@ def main(argv: list[str] | None = None) -> int:
                 if args.manufacturing_package is not None
                 else None
             ),
+            native_manufacturing=args.native_manufacturing,
+            kicad_cli=kicad_cli,
+            kicad_project=Path(args.kicad_project) if args.kicad_project else None,
             timeout_seconds=args.timeout_seconds,
             executable_identity=executable_identity,
         )

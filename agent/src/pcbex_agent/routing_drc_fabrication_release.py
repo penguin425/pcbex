@@ -1363,6 +1363,15 @@ def _evaluate_impl(
     except Exception:
         raise _fail("retained routing/DRC/manufacturing report is invalid") from None
 
+    # Reproduce an explicitly retained routing selection, not an implicit
+    # reuse of the authorization policy. The plan already captures this pack.
+    routing_uses_policy_pack = "analysis_policy_pack" in retained_routing["sources"]
+    if routing_uses_policy_pack:
+        if retained_routing["sources"]["analysis_policy_pack"] != _identity(policy_pack_raw):
+            raise _fail("routing policy pack does not match the captured pipeline policy pack")
+        if any(source is not None for source in (fab, fab_profile, physical_profile)):
+            raise _fail("manufacturing profile selections are mutually exclusive")
+
     total_input = sum(len(raw) for _path, raw, _maximum, _label in caller_sources)
     total_input += sum(
         len(raw)
@@ -1612,6 +1621,11 @@ def _evaluate_impl(
                     fab=fab,
                     fab_profile=staged_fab_profile,
                     physical_profile=staged_physical_profile,
+                    analysis_policy_pack=(
+                        staged_role_paths["analysis_policy_pack"]
+                        if routing_uses_policy_pack
+                        else None
+                    ),
                     timeout_seconds=routing_timeout,
                     _clock=guarded_clock,
                 )

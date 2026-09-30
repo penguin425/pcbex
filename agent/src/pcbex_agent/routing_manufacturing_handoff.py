@@ -308,6 +308,7 @@ def _normalize_routing_verification(
     rules_identity: dict[str, Any] | None,
     fab: str | None,
     fab_profile_identity: dict[str, Any] | None,
+    analysis_policy_pack_identity: dict[str, Any] | None,
     physical_profile_identity: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(value, Mapping):
@@ -389,7 +390,7 @@ def _normalize_routing_verification(
         "project": project_identity,
         "rules_file": rules_identity,
         "fab_profile": fab_profile_identity,
-        "policy_pack": None,
+        "policy_pack": analysis_policy_pack_identity,
         "physical_profile": physical_profile_identity,
     }
     if sources != expected_sources:
@@ -511,7 +512,7 @@ def _normalize_manufacturing_replay(value: Any) -> dict[str, Any]:
         except _manufacturing.ManufacturingReplayError:
             raise _fail("manufacturing replay profile is invalid") from None
         profile = {"kind": "builtin", "id": profile_id}
-    elif kind in {"dfm-file", "physical-file"}:
+    elif kind in {"dfm-file", "policy-pack", "physical-file"}:
         _exact_keys(profile_value, ("kind", "source"), "manufacturing replay profile")
         source_value = profile_value.get("source")
         if not isinstance(source_value, Mapping):
@@ -522,7 +523,7 @@ def _normalize_manufacturing_replay(value: Any) -> dict[str, Any]:
             raise _fail("manufacturing replay profile is invalid")
         source_identity = _normalize_identity(
             {"bytes": source_value.get("bytes"), "sha256": source_value.get("sha256")},
-            _manufacturing.MAXIMUM_PROFILE_BYTES,
+            64 * 1024 * 1024 if kind == "policy-pack" else _manufacturing.MAXIMUM_PROFILE_BYTES,
             "manufacturing profile",
         )
         profile = {"kind": kind, "source": {"name": source_name, **source_identity}}
@@ -702,12 +703,15 @@ def _profile_arguments(
     *,
     fab: str | None,
     fab_profile: Path | None,
+    policy_pack: Path | None,
     physical_profile: Path | None,
 ) -> list[str]:
     if fab is not None:
         return [f"--fab={fab}"]
     if fab_profile is not None:
         return [f"--fab-profile={fab_profile}"]
+    if policy_pack is not None:
+        return [f"--policy-pack={policy_pack}"]
     if physical_profile is not None:
         return [f"--physical-profile={physical_profile}"]
     return []
@@ -751,6 +755,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
     via_cost: int = 20,
     fab: str | None = None,
     fab_profile: str | os.PathLike[str] | None = None,
+    analysis_policy_pack: str | os.PathLike[str] | None = None,
     physical_profile: str | os.PathLike[str] | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     _clock: Callable[[], float] = time.monotonic,
@@ -759,7 +764,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
     """Freshly replay routing and, when complete, its exact manufacturing ZIP."""
 
     selections = sum(
-        source is not None for source in (fab, fab_profile, physical_profile)
+        source is not None for source in (fab, fab_profile, analysis_policy_pack, physical_profile)
     )
     if selections > 1:
         raise _fail("manufacturing profile selections are mutually exclusive")
@@ -816,6 +821,9 @@ def _evaluate_routing_manufacturing_handoff_impl(
     )
     fab_profile_source, fab_profile_raw = capture_optional(
         fab_profile, _manufacturing.MAXIMUM_PROFILE_BYTES, "DFM profile"
+    )
+    analysis_policy_pack_source, analysis_policy_pack_raw = capture_optional(
+        analysis_policy_pack, 64 * 1024 * 1024, "analysis policy pack"
     )
     physical_profile_source, physical_profile_raw = capture_optional(
         physical_profile,
@@ -885,6 +893,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
             kicad_rules=rules_source,
             fab=normalized_fab,
             fab_profile=fab_profile_source,
+            policy_pack=analysis_policy_pack_source,
             physical_profile=physical_profile_source,
             deadline=deadline,
             clock=guarded_clock,
@@ -898,6 +907,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
         or manufacturing_capture.project_raw != project_raw
         or manufacturing_capture.rules_raw != rules_raw
         or manufacturing_capture.fab_profile_raw != fab_profile_raw
+        or manufacturing_capture.policy_pack_raw != analysis_policy_pack_raw
         or manufacturing_capture.physical_profile_raw != physical_profile_raw
     ):
         raise _fail("manufacturing replay did not preserve the captured closure")
@@ -949,6 +959,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
             staged_project: Path | None = None
             staged_rules: Path | None = None
             staged_fab_profile: Path | None = None
+            staged_analysis_policy_pack: Path | None = None
             staged_physical_profile: Path | None = None
             optional_staging = (
                 (
@@ -970,6 +981,12 @@ def _evaluate_routing_manufacturing_handoff_impl(
                     "staged DFM profile",
                 ),
                 (
+                    "routing-analysis-policy-pack.json",
+                    analysis_policy_pack_raw,
+                    64 * 1024 * 1024,
+                    "staged analysis policy pack",
+                ),
+                (
                     "routing-physical-profile.json",
                     manufacturing_capture.physical_profile_raw,
                     _manufacturing.MAXIMUM_PROFILE_BYTES,
@@ -989,6 +1006,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
                 staged_project,
                 staged_rules,
                 staged_fab_profile,
+                staged_analysis_policy_pack,
                 staged_physical_profile,
             ) = staged_optionals
 
@@ -1013,6 +1031,7 @@ def _evaluate_routing_manufacturing_handoff_impl(
                 _profile_arguments(
                     fab=manufacturing_capture.fab,
                     fab_profile=staged_fab_profile,
+                    policy_pack=staged_analysis_policy_pack,
                     physical_profile=staged_physical_profile,
                 )
             )
@@ -1061,6 +1080,11 @@ def _evaluate_routing_manufacturing_handoff_impl(
         rules_identity=manufacturing_capture.rules_identity,
         fab=manufacturing_capture.fab,
         fab_profile_identity=manufacturing_capture.fab_profile_identity,
+        analysis_policy_pack_identity=(
+            _identity(analysis_policy_pack_raw)
+            if analysis_policy_pack_raw is not None
+            else None
+        ),
         physical_profile_identity=manufacturing_capture.physical_profile_identity,
     )
     _remaining(deadline, guarded_clock)
@@ -1098,6 +1122,8 @@ def _evaluate_routing_manufacturing_handoff_impl(
             fab=manufacturing_capture.fab,
             fab_profile_identity=manufacturing_capture.fab_profile_identity,
             fab_profile_name=manufacturing_capture.fab_profile_name,
+            policy_pack_identity=manufacturing_capture.policy_pack_identity,
+            policy_pack_name=manufacturing_capture.policy_pack_name,
             physical_profile_identity=manufacturing_capture.physical_profile_identity,
             physical_profile_name=manufacturing_capture.physical_profile_name,
         )
@@ -1125,6 +1151,8 @@ def _evaluate_routing_manufacturing_handoff_impl(
         "fab_profile": manufacturing_capture.fab_profile_identity,
         "physical_profile": manufacturing_capture.physical_profile_identity,
     }
+    if analysis_policy_pack_raw is not None:
+        sources["analysis_policy_pack"] = _identity(analysis_policy_pack_raw)
     result: dict[str, Any] = {
         "schema_version": ROUTING_MANUFACTURING_HANDOFF_SCHEMA_VERSION,
         "verification_scope": ROUTING_MANUFACTURING_HANDOFF_SCOPE,
@@ -1174,6 +1202,7 @@ def evaluate_routing_manufacturing_handoff(
     via_cost: int = 20,
     fab: str | None = None,
     fab_profile: str | os.PathLike[str] | None = None,
+    analysis_policy_pack: str | os.PathLike[str] | None = None,
     physical_profile: str | os.PathLike[str] | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     _clock: Callable[[], float] = time.monotonic,
@@ -1202,6 +1231,7 @@ def evaluate_routing_manufacturing_handoff(
         via_cost=via_cost,
         fab=fab,
         fab_profile=fab_profile,
+        analysis_policy_pack=analysis_policy_pack,
         physical_profile=physical_profile,
         timeout_seconds=timeout_seconds,
         _clock=_clock,
@@ -1232,7 +1262,11 @@ def _normalize_report(value: Any) -> dict[str, Any]:
     sources_value = value.get("sources")
     if not isinstance(sources_value, Mapping):
         raise _fail("routing/manufacturing handoff sources are invalid")
-    _exact_keys(sources_value, _SOURCE_KEYS, "routing/manufacturing handoff sources")
+    allowed_source_keys = set(_SOURCE_KEYS)
+    if "analysis_policy_pack" in sources_value:
+        allowed_source_keys.add("analysis_policy_pack")
+    if set(sources_value) != allowed_source_keys:
+        raise _fail("routing/manufacturing handoff sources contains unknown keys")
     sources = {
         "input_board": _normalize_identity(
             sources_value["input_board"], MAXIMUM_ROUTING_INPUT_BYTES, "input board"
@@ -1270,7 +1304,10 @@ def _normalize_report(value: Any) -> dict[str, Any]:
             "physical profile",
         ),
     }
-
+    if "analysis_policy_pack" in sources_value:
+        sources["analysis_policy_pack"] = _normalize_identity(
+            sources_value["analysis_policy_pack"], 64 * 1024 * 1024, "analysis policy pack"
+        )
     routing = value.get("routing_verification")
     if not isinstance(routing, Mapping):
         raise _fail("routing verification projection is invalid")
@@ -1285,6 +1322,16 @@ def _normalize_report(value: Any) -> dict[str, Any]:
             )
         except _manufacturing.ManufacturingReplayError:
             raise _fail("routing verification projection is invalid") from None
+    if sum(
+        selected is not None
+        for selected in (
+            built_in_profile,
+            sources["fab_profile"],
+            sources.get("analysis_policy_pack"),
+            sources["physical_profile"],
+        )
+    ) > 1:
+        raise _fail("routing/manufacturing profile selections are mutually exclusive")
     if (
         routing.get("source") != sources["routing_verification_report"]
         or not _is_bounded_utf8(routing.get("engine_version"), 128)
@@ -1305,7 +1352,7 @@ def _normalize_report(value: Any) -> dict[str, Any]:
         "project": sources["project"],
         "rules_file": sources["rules_file"],
         "fab_profile": sources["fab_profile"],
-        "policy_pack": None,
+        "policy_pack": sources.get("analysis_policy_pack"),
         "physical_profile": sources["physical_profile"],
     }
     if dict(routing_sources) != expected_routing_sources:
@@ -1360,6 +1407,14 @@ def _normalize_report(value: Any) -> dict[str, Any]:
                 "source": {
                     "name": manufacturing["profile"].get("source", {}).get("name"),
                     **sources["fab_profile"],
+                },
+            }
+        elif sources.get("analysis_policy_pack") is not None:
+            expected_profile = {
+                "kind": "policy-pack",
+                "source": {
+                    "name": manufacturing["profile"].get("source", {}).get("name"),
+                    **sources["analysis_policy_pack"],
                 },
             }
         elif sources["physical_profile"] is not None:
@@ -1445,6 +1500,9 @@ def routing_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
     optional_profile = {
         "anyOf": [identity(_manufacturing.MAXIMUM_PROFILE_BYTES), {"type": "null"}]
     }
+    optional_policy_pack = {
+        "anyOf": [identity(64 * 1024 * 1024), {"type": "null"}]
+    }
     routing_sources = {
         "type": "object",
         "additionalProperties": False,
@@ -1456,7 +1514,7 @@ def routing_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
             "project": deepcopy(optional_project),
             "rules_file": deepcopy(optional_rules),
             "fab_profile": deepcopy(optional_profile),
-            "policy_pack": {"type": "null"},
+            "policy_pack": deepcopy(optional_policy_pack),
             "physical_profile": deepcopy(optional_profile),
         },
     }
@@ -1502,6 +1560,7 @@ def routing_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
                     "rules_file": deepcopy(optional_rules),
                     "fab_profile": deepcopy(optional_profile),
                     "physical_profile": deepcopy(optional_profile),
+                    "analysis_policy_pack": identity(64 * 1024 * 1024),
                 },
             },
             "routing_verification": {

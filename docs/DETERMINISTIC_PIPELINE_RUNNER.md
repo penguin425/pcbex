@@ -559,10 +559,12 @@ role is actually read; this tightening is not represented as a new `$defs`
 entry or schema version. The embedded DFM object inside an organization
 policy pack remains on the policy-pack loading/validation path and is not
 treated as an external profile file by this preflight. When the analysis
-manifest selects an external or built-in DFM profile, the in-process pipeline
+manifest selects an external, built-in, or policy-pack DFM profile, the in-process pipeline
 gate additionally requires the exact matching schema-v3 manufacturing
-binding. Policy-pack DFM keeps its existing analysis-only behavior; plan and
-runner-report schemas remain v1.
+binding. The pack-derived binding also fixes the containing pack's raw source,
+canonical digest, ID, and revision. Pack-analysis plans with older unbound
+packages must regenerate the ZIP using the same `fabricate --policy-pack`
+source. Plan and runner-report schemas remain v1.
 
 The firmware descriptor must name `manifest.json`. Its original directory must
 contain exactly that manifest and the seven v2 source artifacts—no extra file,

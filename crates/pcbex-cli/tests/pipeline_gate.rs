@@ -153,6 +153,54 @@ fn external_dfm_binding(profile: &Value, source: &Path) -> Value {
     })
 }
 
+fn compact_json(raw: &[u8]) -> Vec<u8> {
+    let text = std::str::from_utf8(raw).unwrap();
+    let mut compact = Vec::with_capacity(raw.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    for byte in text.bytes() {
+        if quoted {
+            compact.push(byte);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else if byte == b'"' {
+            quoted = true;
+            compact.push(byte);
+        } else if !byte.is_ascii_whitespace() {
+            compact.push(byte);
+        }
+    }
+    compact
+}
+
+fn policy_pack_dfm_binding(policy: &Value, source: &Path) -> Value {
+    let raw = fs::read(source).unwrap();
+    let profile_binding = external_dfm_binding(&policy["dfm_profile"], source);
+    let canonical_pack = sha256(&compact_json(&raw));
+    json!({
+        "schema_version": 1,
+        "id": policy["dfm_profile"]["id"],
+        "revision": policy["dfm_profile"]["revision"],
+        "canonical_sha256": profile_binding["canonical_sha256"],
+        "origin": {
+            "kind": "policy_pack",
+            "source": {
+                "path": source.file_name().unwrap().to_str().unwrap(),
+                "bytes": raw.len(),
+                "sha256": sha256(&raw),
+            },
+            "id": policy["id"],
+            "revision": policy["revision"],
+            "canonical_sha256": canonical_pack,
+        }
+    })
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -766,7 +814,22 @@ fn fabrication_cli_fixture(directory: &Path) -> FabricationCliFixture {
         ]
     });
     let policy_pack = directory.join("fabrication-policy-pack.json");
-    write_json(&policy_pack, &policy);
+    let mut policy_raw = fs::read(example("acme-policy-pack.json")).unwrap();
+    while policy_raw.last().is_some_and(u8::is_ascii_whitespace) {
+        policy_raw.pop();
+    }
+    assert_eq!(policy_raw.pop(), Some(b'}'));
+    let public_a = fs::read_to_string(&public_a).unwrap();
+    let public_b = fs::read_to_string(&public_b).unwrap();
+    policy_raw.extend_from_slice(
+        format!(
+            ",\"fabrication_authorization_policy\":{{\"minimum_approvals\":2,\"maximum_validity_seconds\":7200,\"trusted_keys\":[{{\"signer_id\":\"fabrication-a\",\"public_key\":\"{}\"}},{{\"signer_id\":\"fabrication-b\",\"public_key\":\"{}\"}}]}}}}\n",
+            public_a.trim(),
+            public_b.trim()
+        )
+        .as_bytes(),
+    );
+    fs::write(&policy_pack, policy_raw).unwrap();
     let validation = Command::new(binary())
         .arg("validate-policy-pack")
         .arg(&policy_pack)
@@ -786,7 +849,12 @@ fn fabrication_cli_fixture(directory: &Path) -> FabricationCliFixture {
     let (analysis_manifest, analysis_checks, quality) =
         make_runner_clean_analysis_with_policy(&analysis_directory, &board, &policy_pack);
     let manufacturing_package = directory.join("fabrication-manufacturing.zip");
-    write_manufacturing_package(&manufacturing_package, &board);
+    let policy_dfm_binding = policy_pack_dfm_binding(&policy, &policy_pack);
+    write_manufacturing_package_with_dfm_profile(
+        &manufacturing_package,
+        &board,
+        &policy_dfm_binding,
+    );
     let factory_receipt = directory.join("fabrication-factory-receipt.json");
     write_factory_receipt(&factory_receipt, &manufacturing_package);
     let firmware_manifest = write_firmware_manifest(directory, &schematic_sha256);
@@ -1834,6 +1902,14 @@ fn pipeline_verify_recomputes_an_explicit_policy_pack() {
     inputs.quality = analysis.join("quality.json");
     inputs.analysis_policy_pack = Some(policy_pack.clone());
 
+    let policy_value = read_json(&policy_pack);
+    let policy_dfm_binding = policy_pack_dfm_binding(&policy_value, &policy_pack);
+    write_manufacturing_package_with_dfm_profile(
+        &inputs.manufacturing_package,
+        &inputs.board,
+        &policy_dfm_binding,
+    );
+
     let mut manifest = read_json(&inputs.analysis_manifest);
     manifest["policy_pack_file"]["path"] = Value::String("/untrusted/policy-pack".into());
     write_json(&inputs.analysis_manifest, &manifest);
@@ -1850,6 +1926,63 @@ fn pipeline_verify_recomputes_an_explicit_policy_pack() {
         .find(|evidence| evidence["role"] == "analysis-policy-pack")
         .unwrap();
     assert_eq!(evidence["sha256"], sha256_file(&policy_pack));
+
+    rewrite_manufacturing_manifest(&inputs.manufacturing_package, |manifest| {
+        manifest["schema_version"] = json!(1);
+        manifest.as_object_mut().unwrap().remove("dfm_profile");
+    });
+    let legacy_report_path = temporary.path().join("policy-pack-legacy-package.json");
+    let legacy = inputs.command(&legacy_report_path).output().unwrap();
+    assert!(!legacy.status.success());
+    let legacy_report = read_json(&legacy_report_path);
+    assert!(
+        phase(&legacy_report, "manufacturing-package")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("DFM profile binding"))
+    );
+
+    type OriginMutation = fn(&mut Value);
+    let replacements: [(&str, OriginMutation); 4] = [
+        ("pack-revision", |origin: &mut Value| {
+            origin["revision"] = json!(2);
+        }),
+        ("pack-content", |origin: &mut Value| {
+            origin["canonical_sha256"] = Value::String("0".repeat(64));
+        }),
+        ("pack-formatting", |origin: &mut Value| {
+            origin["source"]["sha256"] = Value::String("1".repeat(64));
+        }),
+        ("pack-basename", |origin: &mut Value| {
+            origin["source"]["path"] = Value::String("renamed-policy.json".into());
+        }),
+    ];
+    for (label, update_origin) in replacements {
+        write_manufacturing_package_with_dfm_profile(
+            &inputs.manufacturing_package,
+            &inputs.board,
+            &policy_dfm_binding,
+        );
+        rewrite_manufacturing_manifest(&inputs.manufacturing_package, |manifest| {
+            update_origin(&mut manifest["dfm_profile"]["origin"]);
+        });
+        let report_path = temporary.path().join(format!("policy-pack-{label}.json"));
+        let output = inputs.command(&report_path).output().unwrap();
+        assert!(
+            !output.status.success(),
+            "{label} substitution unexpectedly passed"
+        );
+        let report = read_json(&report_path);
+        assert!(
+            phase(&report, "manufacturing-package")["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure.as_str().unwrap().contains("DFM profile binding")),
+            "{label} substitution did not fail at the DFM binding"
+        );
+    }
 }
 
 #[test]

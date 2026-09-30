@@ -102,6 +102,13 @@ The plan must set `require_factory:true` and include both
 `factory_receipt` and `analysis_policy_pack`. Its package bytes must equal the
 captured v1.477 package before any selected executable runs.
 
+If the retained DRC handoff explicitly selects an `analysis_policy_pack`, its
+raw identity must equal the plan-selected pack. Release then replays that exact
+captured pack with its descriptor basename, including through executable-pinned
+wrappers. Other manufacturing selectors cannot be combined with it. A pack in
+the authorization plan alone does not implicitly select a routing profile;
+legacy handoffs without this source retain their existing replay behavior.
+
 ## Replay order
 
 1. **Capture the routing closure.** Freeze and bounded-read the complete direct

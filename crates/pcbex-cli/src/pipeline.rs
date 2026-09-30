@@ -2,6 +2,7 @@
 
 use crate::dfm_profile_binding::{
     DfmProfileBinding, builtin_dfm_profile_binding, external_dfm_profile_binding,
+    policy_pack_dfm_profile_binding,
 };
 use crate::factory::{
     FactorySubmissionReceipt, factory_feedback_passed, validate_factory_submission_receipt,
@@ -805,7 +806,21 @@ fn recompute_analysis(
         match parse_policy_pack(source) {
             Ok(pack)
                 if manifest.configuration.organization_policy_pack.as_ref() == Some(&pack.id)
-                    && manifest.configuration.dfm_profile.as_ref() == Some(&pack.dfm_profile) => {}
+                    && manifest.configuration.dfm_profile.as_ref() == Some(&pack.dfm_profile) =>
+            {
+                let path = inputs
+                    .analysis_policy_pack
+                    .expect("descriptor snapshot requires an explicit policy pack path");
+                match policy_pack_dfm_profile_binding(&pack, path, &snapshot.bytes) {
+                    Ok(binding) => dfm_binding = Some(binding),
+                    Err(error) => {
+                        phase.fail(format!(
+                            "cannot construct analysis policy-pack DFM binding: {error:#}"
+                        ));
+                        return None;
+                    }
+                }
+            }
             Ok(_) => {
                 phase.fail(
                     "analysis organization policy pack does not match the embedded identity/profile",

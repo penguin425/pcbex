@@ -62,8 +62,12 @@ the external-profile loader. For an external or built-in DFM selected during
 analysis, the manufacturing phase requires the complete matching DFM binding
 in a schema-v3 manufacturing package: profile ID/revision, canonical digest,
 and external origin source descriptor (or the closed built-in origin).
-Policy-pack DFM remains on its existing analysis-only contract and is not part
-of this cross-phase binding.
+Policy-pack DFM also requires schema v3: the embedded DFM identity plus its
+containing pack's ID/revision/canonical digest and exact source basename,
+bytes, and raw digest must match. Existing pack-analysis runs with an unbound
+ZIP must regenerate it using `fabricate --policy-pack` with the same source.
+This records and compares provenance; it does not authenticate or approve the
+pack.
 
 ## Composite Action parity
 
@@ -138,9 +142,9 @@ unchanged and appends `factory-dfm` as a strict sixth phase:
    job, and complete declared layer set must validate. The embedded input
    descriptor must identify the exact board passed with `--board`. Its optional
    physical-profile binding must exactly equal the analysis binding. When an
-   external or built-in DFM profile is selected, its complete schema-v3 binding
-   must also exactly equal the analysis binding; policy-pack DFM is not checked
-   at this cross-phase boundary. This proves internal ZIP integrity and
+   external, built-in, or policy-pack DFM profile is selected, its complete
+   schema-v3 binding must also exactly equal the analysis binding, including
+   the full pack origin when selected. This proves internal ZIP integrity and
    manifest identity binding; it does not regenerate Gerber/BOM/CPL from the
    board or establish signed producer provenance.
 5. **firmware-build** strictly validates the generated firmware manifest,

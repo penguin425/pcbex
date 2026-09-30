@@ -1003,6 +1003,7 @@ def main() -> None:
     manufacturing_profiles = manufacturing_replay.add_mutually_exclusive_group()
     manufacturing_profiles.add_argument("--fab")
     manufacturing_profiles.add_argument("--fab-profile", type=Path)
+    manufacturing_profiles.add_argument("--policy-pack", type=Path)
     manufacturing_profiles.add_argument("--physical-profile", type=Path)
     manufacturing_replay.add_argument("--timeout-seconds", type=float, default=120.0)
     manufacturing_replay_schema = sub.add_parser(
@@ -1049,6 +1050,7 @@ def main() -> None:
     )
     routing_manufacturing_profiles.add_argument("--fab")
     routing_manufacturing_profiles.add_argument("--fab-profile", type=Path)
+    routing_manufacturing_profiles.add_argument("--analysis-policy-pack", type=Path)
     routing_manufacturing_profiles.add_argument("--physical-profile", type=Path)
     routing_manufacturing.add_argument(
         "--timeout-seconds", type=float, default=300.0
@@ -1117,6 +1119,7 @@ def main() -> None:
     routing_drc_profiles.add_argument("--fab")
     routing_drc_profiles.add_argument("--fab-profile", type=Path)
     routing_drc_profiles.add_argument("--physical-profile", type=Path)
+    routing_drc_profiles.add_argument("--analysis-policy-pack", type=Path)
     routing_drc_manufacturing.add_argument(
         "--timeout-seconds", type=float, default=300.0
     )
@@ -2795,6 +2798,7 @@ def main() -> None:
                 kicad_rules=args.kicad_rules,
                 fab=args.fab,
                 fab_profile=args.fab_profile,
+                policy_pack=args.policy_pack,
                 physical_profile=args.physical_profile,
                 timeout_seconds=args.timeout_seconds,
             )
@@ -2837,6 +2841,7 @@ def main() -> None:
                     args.kicad_project,
                     args.kicad_rules,
                     args.fab_profile,
+                    args.analysis_policy_pack,
                     args.physical_profile,
                 ),
             )
@@ -2859,6 +2864,7 @@ def main() -> None:
                 via_cost=args.via_cost,
                 fab=args.fab,
                 fab_profile=args.fab_profile,
+                analysis_policy_pack=args.analysis_policy_pack,
                 physical_profile=args.physical_profile,
                 timeout_seconds=args.timeout_seconds,
             )
@@ -2923,6 +2929,7 @@ def main() -> None:
                     args.kicad_rules,
                     args.fab_profile,
                     args.physical_profile,
+                    args.analysis_policy_pack,
                 ),
                 label="routing/DRC/manufacturing",
             )
@@ -2948,6 +2955,7 @@ def main() -> None:
                 fab=args.fab,
                 fab_profile=args.fab_profile,
                 physical_profile=args.physical_profile,
+                analysis_policy_pack=args.analysis_policy_pack,
                 timeout_seconds=args.timeout_seconds,
             )
             rendered = render_routing_drc_manufacturing_handoff_report(result)

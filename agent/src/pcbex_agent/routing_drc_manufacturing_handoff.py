@@ -33,6 +33,7 @@ ROUTING_DRC_MANUFACTURING_HANDOFF_SCOPE = (
 
 MAXIMUM_NATIVE_KICAD_DRC_REPORT_BYTES = 32 * 1024 * 1024
 MAXIMUM_ROUTING_DRC_MANUFACTURING_HANDOFF_REPORT_BYTES = 1024 * 1024
+MAXIMUM_ANALYSIS_POLICY_PACK_BYTES = 64 * 1024 * 1024
 MAXIMUM_TOTAL_INPUT_BYTES = 724 * 1024 * 1024
 MAXIMUM_CHILD_STDOUT_BYTES = 64 * 1024
 MAXIMUM_CHILD_STDERR_BYTES = 1024 * 1024
@@ -765,11 +766,15 @@ def _evaluate_impl(
     fab: str | None = None,
     fab_profile: str | os.PathLike[str] | None = None,
     physical_profile: str | os.PathLike[str] | None = None,
+    analysis_policy_pack: str | os.PathLike[str] | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     _clock: Callable[[], float] = time.monotonic,
     _root: str,
 ) -> dict[str, Any]:
-    selections = sum(source is not None for source in (fab, fab_profile, physical_profile))
+    selections = sum(
+        source is not None
+        for source in (fab, fab_profile, physical_profile, analysis_policy_pack)
+    )
     if selections > 1:
         raise _fail("manufacturing profile selections are mutually exclusive")
 
@@ -835,6 +840,9 @@ def _evaluate_impl(
         physical_profile,
         _manufacturing.MAXIMUM_PROFILE_BYTES,
         "physical profile",
+    )
+    analysis_policy_pack_source, analysis_policy_pack_raw = capture_optional(
+        analysis_policy_pack, MAXIMUM_ANALYSIS_POLICY_PACK_BYTES, "analysis policy pack"
     )
     _reject_aliases(
         [(label, path) for path, _raw, _maximum, label in caller_sources]
@@ -1005,6 +1013,17 @@ def _evaluate_impl(
                     "staged physical profile",
                 )
             )
+            staged_analysis_policy_pack = (
+                None
+                if analysis_policy_pack_raw is None
+                else stage(
+                    "profile",
+                    Path(analysis_policy_pack_source or "analysis-policy-pack.json").name,
+                    analysis_policy_pack_raw,
+                    MAXIMUM_ANALYSIS_POLICY_PACK_BYTES,
+                    "staged analysis policy pack",
+                )
+            )
             _verify_staged(staged)
 
             outer_remaining = _remaining(deadline, guarded_clock)
@@ -1032,6 +1051,7 @@ def _evaluate_impl(
                     fab=fab,
                     fab_profile=staged_fab_profile,
                     physical_profile=staged_physical_profile,
+                    analysis_policy_pack=staged_analysis_policy_pack,
                     timeout_seconds=handoff_timeout,
                     _clock=guarded_clock,
                 )
@@ -1123,7 +1143,12 @@ def _evaluate_impl(
         "physical_profile": (
             None if physical_profile_raw is None else _identity(physical_profile_raw)
         ),
+        "analysis_policy_pack": (
+            None if analysis_policy_pack_raw is None else _identity(analysis_policy_pack_raw)
+        ),
     }
+    if analysis_policy_pack_raw is None:
+        expected_handoff_sources.pop("analysis_policy_pack")
     if handoff_sources != expected_handoff_sources:
         raise _fail("routing/manufacturing handoff sources do not match the outer closure")
     if normalized_native_drc["source"] != _identity(routed_raw):
@@ -1159,6 +1184,7 @@ def _evaluate_impl(
         "rules_file": expected_handoff_sources["rules_file"],
         "fab_profile": expected_handoff_sources["fab_profile"],
         "physical_profile": expected_handoff_sources["physical_profile"],
+        **({"analysis_policy_pack": expected_handoff_sources["analysis_policy_pack"]} if analysis_policy_pack_raw is not None else {}),
     }
     result: dict[str, Any] = {
         "schema_version": ROUTING_DRC_MANUFACTURING_HANDOFF_SCHEMA_VERSION,
@@ -1215,6 +1241,7 @@ def evaluate_routing_drc_manufacturing_handoff(
     fab: str | None = None,
     fab_profile: str | os.PathLike[str] | None = None,
     physical_profile: str | os.PathLike[str] | None = None,
+    analysis_policy_pack: str | os.PathLike[str] | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     _clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
@@ -1246,6 +1273,7 @@ def evaluate_routing_drc_manufacturing_handoff(
             fab=fab,
             fab_profile=fab_profile,
             physical_profile=physical_profile,
+            analysis_policy_pack=analysis_policy_pack,
             timeout_seconds=timeout_seconds,
             _clock=_clock,
             _root=root,
@@ -1285,7 +1313,10 @@ def _normalize_handoff_projection(value: Any) -> dict[str, Any]:
     sources_value = value.get("sources")
     if not isinstance(sources_value, Mapping):
         raise _fail("routing/manufacturing projected sources are invalid")
-    _exact_keys(sources_value, _handoff._SOURCE_KEYS, "projected handoff sources")
+    source_keys = tuple(_handoff._SOURCE_KEYS)
+    if "analysis_policy_pack" in sources_value:
+        source_keys += ("analysis_policy_pack",)
+    _exact_keys(sources_value, source_keys, "projected handoff sources")
     sources = {
         "input_board": _normalize_identity(
             sources_value.get("input_board"),
@@ -1333,6 +1364,22 @@ def _normalize_handoff_projection(value: Any) -> dict[str, Any]:
             "projected physical profile",
         ),
     }
+    if "analysis_policy_pack" in sources_value:
+        sources["analysis_policy_pack"] = _normalize_identity(
+            sources_value["analysis_policy_pack"],
+            MAXIMUM_ANALYSIS_POLICY_PACK_BYTES,
+            "projected analysis policy pack",
+        )
+    if sum(
+        source is not None
+        for source in (
+            built_in,
+            sources["fab_profile"],
+            sources["physical_profile"],
+            sources.get("analysis_policy_pack"),
+        )
+    ) > 1:
+        raise _fail("projected manufacturing profile selections are mutually exclusive")
     return {
         "retained_report": retained,
         "schema_version": 1,
@@ -1424,7 +1471,10 @@ def _normalize_report(value: Any) -> dict[str, Any]:
     sources_value = value.get("sources")
     if not isinstance(sources_value, Mapping):
         raise _fail("routing/DRC/manufacturing sources are invalid")
-    _exact_keys(sources_value, _SOURCE_KEYS, "routing/DRC/manufacturing sources")
+    allowed_source_keys = set(_SOURCE_KEYS)
+    if "analysis_policy_pack" in sources_value:
+        allowed_source_keys.add("analysis_policy_pack")
+    _exact_keys(sources_value, tuple(allowed_source_keys), "routing/DRC/manufacturing sources")
     sources = {
         "input_board": _normalize_identity(
             sources_value.get("input_board"),
@@ -1478,15 +1528,21 @@ def _normalize_report(value: Any) -> dict[str, Any]:
             "physical profile",
         ),
     }
+    if "analysis_policy_pack" in sources_value:
+        sources["analysis_policy_pack"] = _normalize_identity(
+            sources_value["analysis_policy_pack"],
+            MAXIMUM_ANALYSIS_POLICY_PACK_BYTES,
+            "analysis policy pack",
+        )
     handoff = _normalize_handoff_projection(value.get("routing_manufacturing_handoff"))
     native_value = value.get("native_kicad_drc")
     native = None if native_value is None else _normalize_native_projection(native_value)
     if handoff["retained_report"] != sources["routing_manufacturing_handoff_report"]:
         raise _fail("routing/manufacturing retained-report identity is inconsistent")
-    if handoff["sources"] != {
-        key: sources[key]
-        for key in _handoff._SOURCE_KEYS
-    }:
+    expected_handoff_sources = {key: sources[key] for key in _handoff._SOURCE_KEYS}
+    if "analysis_policy_pack" in sources:
+        expected_handoff_sources["analysis_policy_pack"] = sources["analysis_policy_pack"]
+    if handoff["sources"] != expected_handoff_sources:
         raise _fail("routing/manufacturing projected sources are inconsistent")
     if native is not None:
         if (
@@ -1613,9 +1669,7 @@ def routing_drc_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
         "input_board": _handoff.MAXIMUM_ROUTING_INPUT_BYTES,
         "routed_board": _handoff.MAXIMUM_ROUTED_BOARD_BYTES,
         "convergence_report": _handoff.MAXIMUM_CONVERGENCE_REPORT_BYTES,
-        "routing_verification_report": (
-            _handoff.MAXIMUM_ROUTING_VERIFICATION_REPORT_BYTES
-        ),
+        "routing_verification_report": _handoff.MAXIMUM_ROUTING_VERIFICATION_REPORT_BYTES,
         "manufacturing_package": _handoff.MAXIMUM_MANUFACTURING_PACKAGE_BYTES,
         "project": _manufacturing.MAXIMUM_PROJECT_BYTES,
         "rules_file": _manufacturing.MAXIMUM_RULES_BYTES,
@@ -1636,6 +1690,9 @@ def routing_drc_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
         )
         for key in _handoff._SOURCE_KEYS
     }
+    handoff_source_properties["analysis_policy_pack"] = identity(
+        MAXIMUM_ANALYSIS_POLICY_PACK_BYTES
+    )
     outer_source_limits = {
         **handoff_source_limits,
         "routing_manufacturing_handoff_report": (
@@ -1651,6 +1708,7 @@ def routing_drc_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
         )
         for key in _SOURCE_KEYS
     }
+    source_properties["analysis_policy_pack"] = identity(MAXIMUM_ANALYSIS_POLICY_PACK_BYTES)
     handoff_projection = {
         "type": "object",
         "additionalProperties": False,
@@ -1915,6 +1973,36 @@ def routing_drc_manufacturing_handoff_report_json_schema() -> dict[str, Any]:
             }
         ],
     }
+    schema["allOf"].append(
+        {
+            "if": {"properties": {"sources": {"required": ["analysis_policy_pack"]}}},
+            "then": {
+                "properties": {
+                    "sources": {
+                        "properties": {
+                            "fab_profile": {"const": None},
+                            "physical_profile": {"const": None},
+                        }
+                    },
+                    "routing_manufacturing_handoff": {
+                        "properties": {
+                            "built_in_dfm_profile": {"const": None},
+                            "sources": {"required": ["analysis_policy_pack"]},
+                        }
+                    },
+                }
+            },
+            "else": {
+                "properties": {
+                    "routing_manufacturing_handoff": {
+                        "properties": {
+                            "sources": {"not": {"required": ["analysis_policy_pack"]}}
+                        }
+                    }
+                }
+            },
+        }
+    )
     return schema
 
 

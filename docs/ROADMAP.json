@@ -1189,6 +1189,11 @@
     {
       "id": "verified-circuit-to-routed-kicad-board-workflow",
       "release": "v1.531.0",
+      "status": "released"
+    },
+    {
+      "id": "policy-pack-dfm-manufacturing-binding-and-fresh-replay",
+      "release": "v1.532.0",
       "status": "current"
     }
   ]

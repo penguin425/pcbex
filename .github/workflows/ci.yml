@@ -1889,6 +1889,13 @@ jobs:
         run: >-
           python -m unittest
           agent.tests.test_routing_manufacturing_handoff_v1476 -v
+      - name: Run cross-platform v1.532 policy-pack replay boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_policy_pack_manufacturing_v1532
+          agent.tests.test_policy_pack_drc_handoff_v1532 -v
       - name: Run cross-platform v1.477 routing-DRC-manufacturing handoff boundaries
         env:
           PYTHONPATH: agent/src

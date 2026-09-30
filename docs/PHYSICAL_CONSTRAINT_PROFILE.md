@@ -99,8 +99,9 @@ add, remove, or substitute the profile binding.
 Physical and DFM selections are mutually exclusive. A run using the external
 or built-in DFM profile path instead emits a schema-v3 manufacturing manifest
 with the DFM identity; the physical-profile binding remains unchanged at
-schema v2. An organization policy-pack DFM object retains its existing
-analysis-only provenance and is not promoted to this cross-phase binding.
+schema v2. An organization policy-pack DFM object instead uses the schema-v3
+DFM binding with its containing pack's raw source, canonical digest, ID, and
+revision. Its provenance is kept separate from a physical-profile binding.
 
 The composite GitHub Action forwards its `physical-profile` input into the
 opt-in `pipeline-verify` invocation as `--analysis-physical-profile`; the
