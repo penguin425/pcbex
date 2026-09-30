@@ -26,6 +26,8 @@ run_fixture() {
 }
 
 run_fixture usb_diff 8000
+run_fixture differential_endpoint_pitch 8000
+run_fixture differential_endpoint_rotated 8000
 run_fixture four_layer_power 15000
 run_fixture bga_fanout 12000
 large_fixture="${output_dir}/large_backplane.json"
