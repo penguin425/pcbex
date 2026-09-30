@@ -8329,6 +8329,156 @@ while pending:
         pending.extend(value)
 PY
 
+# v1.532 carries one policy-pack DFM selection through routing, manufacturing,
+# and both exact replay boundaries. The authorization pack roles below remain
+# independent; no approval or signed-pack authentication is implied here.
+policy_pack_manufacturing_source="$output_directory/policy-pack-manufacturing.json"
+policy_pack_manufacturing_input="$output_directory/policy-pack-manufacturing.input.kicad_pcb"
+policy_pack_manufacturing_project="$output_directory/policy-pack-manufacturing.input.kicad_pro"
+policy_pack_manufacturing_board="$output_directory/policy-pack-manufacturing.routed.kicad_pcb"
+policy_pack_manufacturing_convergence="$output_directory/policy-pack-manufacturing.convergence.json"
+policy_pack_manufacturing_verification="$output_directory/policy-pack-manufacturing.verification.json"
+policy_pack_manufacturing_directory="$output_directory/policy-pack-manufacturing.package"
+policy_pack_manufacturing_package="$policy_pack_manufacturing_directory/manufacturing.zip"
+policy_pack_manufacturing_replay="$output_directory/policy-pack-manufacturing.replay.json"
+policy_pack_manufacturing_handoff="$output_directory/policy-pack-manufacturing.handoff.json"
+policy_pack_manufacturing_substituted="$output_directory/policy-pack-manufacturing.substituted.json"
+policy_pack_manufacturing_renamed="$output_directory/policy-pack-manufacturing.renamed.json"
+policy_pack_manufacturing_error="$output_directory/policy-pack-manufacturing.stderr"
+policy_pack_manufacturing_bad_output="$output_directory/policy-pack-manufacturing.bad-handoff.json"
+cp examples/acme-policy-pack.json "$policy_pack_manufacturing_source"
+cp crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pcb \
+  "$policy_pack_manufacturing_input"
+cp crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
+  "$policy_pack_manufacturing_project"
+cp "$policy_pack_manufacturing_project" \
+  "$output_directory/policy-pack-manufacturing.routed.kicad_pro"
+"$pcbex_binary" route-kicad "$policy_pack_manufacturing_input" \
+  --project "$policy_pack_manufacturing_project" \
+  --policy-pack "$policy_pack_manufacturing_source" \
+  --output "$policy_pack_manufacturing_board" \
+  --convergence-report "$policy_pack_manufacturing_convergence" \
+  --convergence-rounds 2 --convergence-candidates 3 --convergence-workers 2 \
+  --convergence-router-workers 1 --drc
+"$pcbex_binary" verify-kicad-routing-convergence "$policy_pack_manufacturing_input" \
+  --project "$policy_pack_manufacturing_project" \
+  --routed "$policy_pack_manufacturing_board" \
+  --report "$policy_pack_manufacturing_convergence" \
+  --policy-pack "$policy_pack_manufacturing_source" \
+  --output "$policy_pack_manufacturing_verification" --require-complete
+"$pcbex_binary" fabricate "$policy_pack_manufacturing_board" \
+  --policy-pack "$policy_pack_manufacturing_source" \
+  --output-dir "$policy_pack_manufacturing_directory"
+PYTHONPATH=agent/src python3 -m pcbex_agent replay-manufacturing-package \
+  "$policy_pack_manufacturing_board" "$policy_pack_manufacturing_package" \
+  --policy-pack "$policy_pack_manufacturing_source" \
+  --kicad-project "$policy_pack_manufacturing_project" \
+  --pcbex "$pcbex_binary" --kicad-cli "$kicad_cli_binary" \
+  >"$policy_pack_manufacturing_replay"
+PYTHONPATH=agent/src python3 -m pcbex_agent replay-routing-manufacturing-handoff \
+  "$policy_pack_manufacturing_input" "$policy_pack_manufacturing_board" \
+  --convergence-report "$policy_pack_manufacturing_convergence" \
+  --routing-verification-report "$policy_pack_manufacturing_verification" \
+  --manufacturing-package "$policy_pack_manufacturing_package" \
+  --analysis-policy-pack "$policy_pack_manufacturing_source" \
+  --kicad-project "$policy_pack_manufacturing_project" \
+  --pcbex "$pcbex_binary" --kicad-cli "$kicad_cli_binary" \
+  --output "$policy_pack_manufacturing_handoff" --require-ready
+PYTHONPATH=agent/src python3 - \
+  "$policy_pack_manufacturing_source" "$policy_pack_manufacturing_package" \
+  "$policy_pack_manufacturing_replay" "$policy_pack_manufacturing_handoff" \
+  "$policy_pack_manufacturing_substituted" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+import zipfile
+from jsonschema import Draft202012Validator
+from pcbex_agent.manufacturing_replay import manufacturing_package_replay_result_json_schema
+from pcbex_agent.routing_manufacturing_handoff import routing_manufacturing_handoff_report_json_schema
+
+pack_path, package_path, replay_path, handoff_path, changed_path = map(Path, sys.argv[1:])
+raw = pack_path.read_bytes()
+pack = json.loads(raw)
+identity = {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+with zipfile.ZipFile(package_path) as archive:
+    manifest = json.loads(archive.read("manifest.json"))
+assert manifest["schema_version"] == 3
+binding = manifest["dfm_profile"]
+assert binding["id"] == pack["dfm_profile"]["id"]
+assert binding["revision"] == pack["dfm_profile"]["revision"]
+assert binding["origin"]["kind"] == "policy_pack"
+assert binding["origin"]["id"] == pack["id"]
+assert binding["origin"]["revision"] == pack["revision"]
+assert binding["origin"]["source"] == {"path": pack_path.name, **identity}
+replay = json.loads(replay_path.read_bytes())
+handoff = json.loads(handoff_path.read_bytes())
+Draft202012Validator(manufacturing_package_replay_result_json_schema()).validate(replay)
+Draft202012Validator(routing_manufacturing_handoff_report_json_schema()).validate(handoff)
+assert replay["verified"] is True
+assert replay["profile"] == {
+    "kind": "policy-pack", "source": {"name": pack_path.name, **identity}
+}
+assert handoff["ready"] is True
+assert handoff["sources"]["analysis_policy_pack"] == identity
+assert handoff["routing_verification"]["sources"]["policy_pack"] == identity
+assert handoff["manufacturing_replay"]["profile"] == replay["profile"]
+pack["revision"] += 1
+changed_path.write_text(json.dumps(pack, indent=2) + "\n", encoding="utf-8")
+PY
+
+# Same embedded DFM, different pack version or basename: exact ZIP replay must
+# reject both. Selecting a different analysis pack must publish no handoff.
+cp "$policy_pack_manufacturing_source" "$policy_pack_manufacturing_renamed"
+for substituted_pack in \
+  "$policy_pack_manufacturing_substituted" "$policy_pack_manufacturing_renamed"; do
+  if PYTHONPATH=agent/src python3 -m pcbex_agent replay-manufacturing-package \
+    "$policy_pack_manufacturing_board" "$policy_pack_manufacturing_package" \
+    --policy-pack "$substituted_pack" \
+    --kicad-project "$policy_pack_manufacturing_project" \
+    --pcbex "$pcbex_binary" --kicad-cli "$kicad_cli_binary" \
+    >"$output_directory/policy-pack-manufacturing.bad-replay.json" \
+    2>"$policy_pack_manufacturing_error"; then
+    echo "expected containing policy-pack substitution to fail exact ZIP replay" >&2
+    exit 1
+  fi
+  grep -Fq 'did not reproduce the retained package' "$policy_pack_manufacturing_error"
+done
+if PYTHONPATH=agent/src python3 -m pcbex_agent replay-routing-manufacturing-handoff \
+  "$policy_pack_manufacturing_input" "$policy_pack_manufacturing_board" \
+  --convergence-report "$policy_pack_manufacturing_convergence" \
+  --routing-verification-report "$policy_pack_manufacturing_verification" \
+  --manufacturing-package "$policy_pack_manufacturing_package" \
+  --analysis-policy-pack "$policy_pack_manufacturing_substituted" \
+  --kicad-project "$policy_pack_manufacturing_project" \
+  --pcbex "$pcbex_binary" --kicad-cli "$kicad_cli_binary" \
+  --output "$policy_pack_manufacturing_bad_output" \
+  2>"$policy_pack_manufacturing_error"; then
+  echo "expected routing policy-pack substitution to fail without publication" >&2
+  exit 1
+fi
+test ! -e "$policy_pack_manufacturing_bad_output"
+
+# A selected pack must never be replaced by publication of an equally named
+# artifact, even when the manufacturing directory already contains files.
+for pack_leaf in manifest.json drc.rpt; do
+  pack_alias_directory="$output_directory/policy-pack-input-alias-$pack_leaf"
+  mkdir "$pack_alias_directory"
+  cp "$policy_pack_manufacturing_source" "$pack_alias_directory/$pack_leaf"
+  cp "$policy_pack_manufacturing_package" "$pack_alias_directory/previous.zip"
+  if "$pcbex_binary" fabricate "$policy_pack_manufacturing_board" \
+    --policy-pack "$pack_alias_directory/$pack_leaf" \
+    --output-dir "$pack_alias_directory" \
+    2>"$policy_pack_manufacturing_error"; then
+    echo "expected manufacturing publication to reject policy-pack input alias" >&2
+    exit 1
+  fi
+  grep -Fq 'must not alias an input' "$policy_pack_manufacturing_error"
+  cmp "$policy_pack_manufacturing_source" "$pack_alias_directory/$pack_leaf"
+  cmp "$policy_pack_manufacturing_package" "$pack_alias_directory/previous.zip"
+  test ! -e "$pack_alias_directory/manufacturing.zip"
+done
+
 # v1.477 binds one additional, independent boundary: the retained
 # normalized native KiCad DRC report must freshly replay against the same
 # routed board and companions already bound to the exact manufacturing ZIP.
@@ -8635,8 +8785,20 @@ cp crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
   crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pcb \
   --project crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
   --output "$fabrication_release_routing_input" --drc
+python3 scripts/fabrication_authorization_action_ci.py \
+  --pcbex "$pcbex_binary" \
+  --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci \
+  --policy-template "$factory_receipt_policy_template" \
+  --board "$fabrication_release_routing_input" \
+  --native-manufacturing --kicad-cli "$kicad_cli_binary" \
+  --kicad-project "$fabrication_release_input_project" \
+  --output-dir "$fabrication_release_fixture" \
+  --timeout-seconds 300 >/dev/null
+fabrication_release_policy_pack="$fabrication_release_fixture/final-policy-pack.json"
+fabrication_release_package="$fabrication_release_fixture/manufacturing.zip"
 "$pcbex_binary" route-kicad "$fabrication_release_routing_input" \
   --project "$fabrication_release_input_project" \
+  --policy-pack "$fabrication_release_policy_pack" \
   --output "$fabrication_release_routed_board" \
   --convergence-report "$fabrication_release_convergence" \
   --convergence-rounds 2 \
@@ -8644,15 +8806,15 @@ cp crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci/design.kicad_pro \
   --convergence-workers 2 \
   --convergence-router-workers 1 \
   --drc
+cmp "$fabrication_release_fixture/design.kicad_pcb" "$fabrication_release_routed_board"
 "$pcbex_binary" verify-kicad-routing-convergence \
   "$fabrication_release_routing_input" \
+  --project "$fabrication_release_input_project" \
+  --policy-pack "$fabrication_release_policy_pack" \
   --routed "$fabrication_release_routed_board" \
   --report "$fabrication_release_convergence" \
   --output "$fabrication_release_verification" \
   --require-complete
-mkdir -p "$fabrication_release_package_dir"
-"$pcbex_binary" fabricate "$fabrication_release_routed_board" \
-  --output-dir "$fabrication_release_package_dir"
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   replay-routing-manufacturing-handoff \
   "$fabrication_release_routing_input" "$fabrication_release_routed_board" \
@@ -8662,6 +8824,7 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --pcbex "$pcbex_binary" \
   --kicad-cli "$kicad_cli_binary" \
   --kicad-project "$fabrication_release_routed_project" \
+  --analysis-policy-pack "$fabrication_release_policy_pack" \
   --output "$fabrication_release_routing_handoff" \
   --require-ready
 "$pcbex_binary" run-native-kicad-drc "$fabrication_release_routed_board" \
@@ -8680,6 +8843,7 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --pcbex "$pcbex_binary" \
   --kicad-cli "$kicad_cli_binary" \
   --kicad-project "$fabrication_release_routed_project" \
+  --analysis-policy-pack "$fabrication_release_policy_pack" \
   --output "$fabrication_release_retained_routing" \
   --require-ready
 
@@ -8703,15 +8867,6 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --pcbex "$pcbex_binary" \
   --kicad-cli "$kicad_cli_binary" \
   --output "$fabrication_release_partial_retained"
-
-python3 scripts/fabrication_authorization_action_ci.py \
-  --pcbex "$pcbex_binary" \
-  --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci \
-  --policy-template "$factory_receipt_policy_template" \
-  --board "$fabrication_release_routed_board" \
-  --manufacturing-package "$fabrication_release_package" \
-  --output-dir "$fabrication_release_fixture" \
-  --timeout-seconds 300 >/dev/null
 
 fabrication_release_plan="$fabrication_release_fixture/factory-required-plan.json"
 fabrication_release_pipeline_report="$fabrication_release_fixture/factory-required-report.json"

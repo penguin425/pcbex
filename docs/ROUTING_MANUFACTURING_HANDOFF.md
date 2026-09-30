@@ -79,15 +79,28 @@ The public command accepts KiCad only:
 | Explicit KiCad project | no | 128 MiB |
 | Explicit custom rules | no | 128 MiB |
 | External DFM or physical profile | no | 4 MiB |
+| Analysis policy pack | no | 64 MiB |
 
 The manufacturing sub-closure retains its existing 512 MiB aggregate ceiling.
 The complete outer source union is capped at 688 MiB. Every selected file must
 be nonempty, regular, stable, and free of symbolic-link or Windows reparse
 components under the shared bounded reader.
 
-Select at most one of `--fab`, `--fab-profile`, and `--physical-profile`.
-Organization policy-pack DFM is not accepted by this v1 composition because
-the standalone manufacturing replay has no matching raw policy-pack role.
+Select at most one of `--fab`, `--fab-profile`, `--analysis-policy-pack`, and
+`--physical-profile`. With `--analysis-policy-pack`, one captured pack is passed
+to both the routing verifier and manufacturing replay. The native routing and
+`fabricate` commands must have used that same pack. The report cross-binds its
+raw identity across both children and adds `sources.analysis_policy_pack` only
+when selected; omission preserves the existing report shape and bytes.
+
+The standalone manufacturing replay uses `--policy-pack`. The primary composer
+uses `--analysis-policy-pack` to keep this manufacturing/analysis selection
+distinct from authorization policy packs. The native-DRC composer accepts the
+same explicit selection. Fabrication release replays it only when the retained
+DRC handoff selects the exact pack already captured by its pipeline plan;
+authorization alone does not select a routing profile. Circuit-handoff
+composers do not yet expose this selection. No pack authentication or approval
+is implied by DFM selection.
 
 ## Replay sequence
 

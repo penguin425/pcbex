@@ -278,6 +278,7 @@ use deterministic_pipeline_runner::{
 };
 use dfm_profile_binding::{
     DfmProfileBinding, builtin_dfm_profile_binding, external_dfm_profile_binding,
+    policy_pack_dfm_profile_binding,
 };
 use fabrication_authorization::{
     FabricationApprovalDecision, FabricationAuthorizationReport, FabricationAuthorizationScope,
@@ -7885,13 +7886,16 @@ enum Command {
         #[arg(long, hide = true)]
         outer_process_tree_supervised: bool,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long, conflicts_with_all = ["fab_profile", "physical_profile"])]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack", "physical_profile"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "physical_profile"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack", "physical_profile"])]
         fab_profile: Option<PathBuf>,
+        /// Apply the embedded DFM profile and bind the exact containing organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "physical_profile"])]
+        policy_pack: Option<PathBuf>,
         /// Revalidate the board against this profile and bind it into the package manifest.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
         physical_profile: Option<PathBuf>,
     },
     /// Print the closed exact final-BOM verification report JSON Schema.
@@ -41436,14 +41440,39 @@ fn run_cli() -> Result<()> {
             outer_process_tree_supervised,
             fab,
             fab_profile,
+            policy_pack,
             physical_profile,
         } => {
             let deadline = manufacturing_deadline(timeout_seconds)?;
             validate_outer_process_tree_supervision(outer_process_tree_supervised)?;
             let manufacturing_process =
                 ManufacturingProcessContext::new(deadline, outer_process_tree_supervised);
-            let (dfm_profile, dfm_profile_binding, _dfm_profile_file) =
-                resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
+            let policy_pack_source = policy_pack
+                .as_deref()
+                .map(|path| {
+                    freeze_circuit_kicad_board_input(
+                        path,
+                        "manufacturing organization policy pack",
+                        MAX_POLICY_PACK_BYTES,
+                    )
+                })
+                .transpose()?;
+            let (dfm_profile, dfm_profile_binding) =
+                if let Some(source) = policy_pack_source.as_ref() {
+                    let pack = parse_policy_pack(&source.source)
+                        .map_err(anyhow::Error::msg)
+                        .context("parsing captured manufacturing organization policy pack")?;
+                    let binding = policy_pack_dfm_profile_binding(
+                        &pack,
+                        &source.path,
+                        source.source.as_bytes(),
+                    )?;
+                    (Some(pack.dfm_profile), Some(binding))
+                } else {
+                    let (profile, binding, _) =
+                        resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
+                    (profile, binding)
+                };
             let physical_profile = physical_profile
                 .as_deref()
                 .map(load_physical_profile)
@@ -41648,6 +41677,20 @@ fn run_cli() -> Result<()> {
             check_manufacturing_deadline(deadline, "post-package quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "package creation")?;
             check_manufacturing_deadline(deadline, "manufacturing package publication")?;
+            if let Some(source) = policy_pack_source.as_ref() {
+                for entry in fs::read_dir(&staging_dir)
+                    .context("checking manufacturing policy pack publication aliases")?
+                {
+                    let entry = entry.context("checking staged manufacturing destination")?;
+                    reject_pipeline_output_aliases(
+                        &output_dir.join(entry.file_name()),
+                        &[source.path.as_path()],
+                        "manufacturing package publication",
+                    )?;
+                }
+                recheck_frozen_circuit_kicad_board_input(source)
+                    .context("rechecking manufacturing organization policy pack before publication")?;
+            }
             let archive =
                 publish_staged_package_before_deadline(&staging_dir, &output_dir, deadline)?;
             eprintln!(
@@ -51001,6 +51044,51 @@ exit 0
             let nested_error = resolve_dfm_profile(None, Some(&nested)).unwrap_err();
             let nested_error_text = format!("{nested_error:#}");
             assert!(nested_error_text.contains("symlink"), "{nested_error_text}");
+        }
+    }
+
+    #[test]
+    fn fabrication_policy_pack_selection_is_explicit_and_exclusive() {
+        let selected = parse_cli(&[
+            "pcbex",
+            "fabricate",
+            "board.kicad_pcb",
+            "--output-dir",
+            "manufacturing",
+            "--policy-pack",
+            "organization-policy.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *selected.command,
+            Command::Fabricate {
+                policy_pack: Some(path),
+                fab: None,
+                fab_profile: None,
+                physical_profile: None,
+                ..
+            } if path.as_os_str() == "organization-policy.json"
+        ));
+        for (other_flag, other_value) in [
+            ("--fab", "jlcpcb-2layer"),
+            ("--fab-profile", "dfm.json"),
+            ("--physical-profile", "physical.json"),
+        ] {
+            assert!(
+                parse_cli(&[
+                    "pcbex",
+                    "fabricate",
+                    "board.kicad_pcb",
+                    "--output-dir",
+                    "manufacturing",
+                    "--policy-pack",
+                    "organization-policy.json",
+                    other_flag,
+                    other_value,
+                ])
+                .is_err(),
+                "policy pack did not conflict with {other_flag}"
+            );
         }
     }
 

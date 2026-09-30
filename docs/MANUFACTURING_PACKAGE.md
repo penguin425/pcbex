@@ -68,10 +68,41 @@ uses schema v3 and includes the DFM profile ID/revision, the
 domain-separated canonical SHA-256, and an explicit origin: an external origin
 contains one portable basename/byte-count/raw-SHA-256 source descriptor, while
 a built-in origin contains only the closed built-in ID (no fabricated raw
-source). Physical and DFM selections remain mutually exclusive, so this
+source). With `--policy-pack <pack.json>`, the embedded DFM is applied and the
+origin additionally binds the containing pack's ID, revision, canonical SHA-256,
+and exact portable basename/byte-count/raw-SHA-256. The pack is captured as a
+stable non-link regular file under 64 MiB, parsed from those captured bytes,
+and rechecked before publication. Pack contents are not added to the ZIP.
+Physical and DFM selections remain mutually exclusive, so this
 release intentionally has no schema v4. The factory validator accepts v1,
 v2, and v3, rejects profile fields in the wrong version, and factory feedback
 repair cannot add, drop, or substitute the complete binding.
+
+### One policy pack across analysis and manufacturing
+
+```sh
+pcbex analyze-kicad board.kicad_pcb \
+  --policy-pack config/organization-policy.json --output-dir analysis
+pcbex fabricate board.kicad_pcb \
+  --policy-pack config/organization-policy.json --output-dir manufacturing
+pcbex-agent replay-manufacturing-package \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --policy-pack config/organization-policy.json
+```
+
+Select exactly the same pack bytes and basename at each phase. A pipeline whose
+analysis selects a pack now requires that pack-derived schema-v3 DFM binding;
+an older unbound package must be regenerated. Pack revision, non-DFM content,
+raw formatting, and basename changes are all distinguishable even when its
+embedded DFM is unchanged. Factory ZIP validation checks the recorded binding's
+structure; pipeline verification recomputes it from the explicit pack, and
+fresh replay regenerates the complete ZIP.
+
+This selection does not authenticate the pack, apply its electrical/AI policy
+during fabrication, sign approvals, or authorize manufacturing. Use the
+existing signed-pack and approval workflows when those independent checks are
+required. `--policy-pack` conflicts with `--fab`, `--fab-profile`, and
+`--physical-profile`.
 
 Generation occurs entirely in the private stage. Contents of files already
 present in the requested output directory are never read or added to the
@@ -329,15 +360,16 @@ paths are optional explicit inputs; when present their exact captured bytes are
 staged under the board-derived same-stem `.kicad_pro` and `.kicad_dru` names.
 They must be omitted when those companions were not part of the retained
 package. Built-in fabrication IDs match `[a-z0-9][a-z0-9.-]{0,127}`. An
-external DFM or physical profile is staged under its validated
+external DFM, policy pack, or physical profile is staged under its validated
 portable caller basename because that name is retained in the manufacturing
-manifest. A built-in `--fab`, file-backed `--fab-profile`, and
+manifest. A built-in `--fab`, file-backed `--fab-profile`, `--policy-pack`, and
 `--physical-profile` remain mutually exclusive.
 
 Before native execution, the adapter stable-reads every caller source as a
 nonempty regular non-link file. Board, project, rules, retained package, and
 fresh package reads are each limited to 128 MiB; an external profile is limited
-to 4 MiB; and all caller inputs together may not exceed 512 MiB. The board must
+to 4 MiB, a policy pack to 64 MiB; and all caller inputs together may not exceed
+512 MiB. The board must
 have one portable `.kicad_pcb` basename. Each caller `PathLike` is converted to
 immutable path text exactly once; the identity computed at the first stable
 read is retained for the result rather than recomputed from a later path. The

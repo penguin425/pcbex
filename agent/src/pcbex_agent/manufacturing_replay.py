@@ -67,11 +67,13 @@ class _ManufacturingReplayCapture:
     project_source: str | None
     rules_source: str | None
     fab_profile_source: str | None
+    policy_pack_source: str | None
     physical_profile_source: str | None
     board_name: str
     project_name: str
     rules_name: str
     fab_profile_name: str | None
+    policy_pack_name: str | None
     physical_profile_name: str | None
     fab: str | None
     board_raw: bytes
@@ -79,12 +81,14 @@ class _ManufacturingReplayCapture:
     project_raw: bytes | None
     rules_raw: bytes | None
     fab_profile_raw: bytes | None
+    policy_pack_raw: bytes | None
     physical_profile_raw: bytes | None
     board_identity: dict[str, Any]
     retained_identity: dict[str, Any]
     project_identity: dict[str, Any] | None
     rules_identity: dict[str, Any] | None
     fab_profile_identity: dict[str, Any] | None
+    policy_pack_identity: dict[str, Any] | None
     physical_profile_identity: dict[str, Any] | None
     caller_sources: tuple[tuple[str, bytes, int, str], ...]
 
@@ -289,6 +293,8 @@ def _profile_result(
     fab: str | None,
     fab_profile_identity: dict[str, Any] | None,
     fab_profile_name: str | None,
+    policy_pack_identity: dict[str, Any] | None = None,
+    policy_pack_name: str | None = None,
     physical_profile_identity: dict[str, Any] | None,
     physical_profile_name: str | None,
 ) -> dict[str, Any]:
@@ -299,6 +305,12 @@ def _profile_result(
         return {
             "kind": "dfm-file",
             "source": {"name": fab_profile_name, **fab_profile_identity},
+        }
+    if policy_pack_identity is not None:
+        assert policy_pack_name is not None
+        return {
+            "kind": "policy-pack",
+            "source": {"name": policy_pack_name, **policy_pack_identity},
         }
     if physical_profile_identity is not None:
         assert physical_profile_name is not None
@@ -357,6 +369,16 @@ def manufacturing_package_replay_result_json_schema() -> dict[str, Any]:
         },
         **profile_source["properties"],
     }
+    policy_pack_source = identity(64 * 1024 * 1024)
+    policy_pack_source["required"] = ["name", "bytes", "sha256"]
+    policy_pack_source["properties"] = {
+        "name": {
+            "type": "string", "minLength": 1,
+            "maxLength": MAXIMUM_PORTABLE_NAME_BYTES,
+            "pattern": r"^(?!.*[ .]$)[^<>:\"/\\|?*\u0000-\u001f]+$",
+        },
+        **policy_pack_source["properties"],
+    }
     profile = {
         "oneOf": [
             {
@@ -395,6 +417,15 @@ def manufacturing_package_replay_result_json_schema() -> dict[str, Any]:
                 "properties": {
                     "kind": {"const": "physical-file"},
                     "source": profile_source,
+                },
+            },
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "source"],
+                "properties": {
+                    "kind": {"const": "policy-pack"},
+                    "source": policy_pack_source,
                 },
             },
         ]
@@ -465,6 +496,7 @@ def _capture_manufacturing_replay_inputs(
     kicad_rules: str | os.PathLike[str] | None,
     fab: str | None,
     fab_profile: str | os.PathLike[str] | None,
+    policy_pack: str | os.PathLike[str] | None = None,
     physical_profile: str | os.PathLike[str] | None,
     deadline: float,
     clock: Callable[[], float],
@@ -473,7 +505,7 @@ def _capture_manufacturing_replay_inputs(
     """Capture all manufacturing inputs before any composed child can run."""
 
     selections = sum(
-        source is not None for source in (fab, fab_profile, physical_profile)
+        source is not None for source in (fab, fab_profile, policy_pack, physical_profile)
     )
     if selections > 1:
         raise _fail("manufacturing profile selections are mutually exclusive")
@@ -499,6 +531,11 @@ def _capture_manufacturing_replay_inputs(
         if fab_profile is None
         else _freeze_path(fab_profile, "DFM profile source")
     )
+    policy_pack_source = (
+        None
+        if policy_pack is None
+        else _freeze_path(policy_pack, "policy pack source")
+    )
     physical_profile_source = (
         None
         if physical_profile is None
@@ -511,6 +548,11 @@ def _capture_manufacturing_replay_inputs(
         None
         if fab_profile_source is None
         else _source_leaf(fab_profile_source, "DFM profile")
+    )
+    policy_pack_name = (
+        None
+        if policy_pack_source is None
+        else _source_leaf(policy_pack_source, "policy pack")
     )
     physical_profile_name = (
         None
@@ -556,6 +598,7 @@ def _capture_manufacturing_replay_inputs(
         (project_source, MAXIMUM_PROJECT_BYTES, "KiCad project"),
         (rules_source, MAXIMUM_RULES_BYTES, "KiCad rules"),
         (fab_profile_source, MAXIMUM_PROFILE_BYTES, "DFM profile"),
+        (policy_pack_source, 64 * 1024 * 1024, "policy pack"),
         (physical_profile_source, MAXIMUM_PROFILE_BYTES, "physical profile"),
     )
     captured_optional: list[bytes | None] = []
@@ -574,12 +617,14 @@ def _capture_manufacturing_replay_inputs(
         project_raw,
         rules_raw,
         fab_profile_raw,
+        policy_pack_raw,
         physical_profile_raw,
     ) = captured_optional
     (
         project_identity,
         rules_identity,
         fab_profile_identity,
+        policy_pack_identity,
         physical_profile_identity,
     ) = captured_optional_identities
     if (
@@ -594,11 +639,13 @@ def _capture_manufacturing_replay_inputs(
         project_source=project_source,
         rules_source=rules_source,
         fab_profile_source=fab_profile_source,
+        policy_pack_source=policy_pack_source,
         physical_profile_source=physical_profile_source,
         board_name=board_name,
         project_name=project_name,
         rules_name=rules_name,
         fab_profile_name=fab_profile_name,
+        policy_pack_name=policy_pack_name,
         physical_profile_name=physical_profile_name,
         fab=fab,
         board_raw=captured_board_raw,
@@ -606,12 +653,14 @@ def _capture_manufacturing_replay_inputs(
         project_raw=project_raw,
         rules_raw=rules_raw,
         fab_profile_raw=fab_profile_raw,
+        policy_pack_raw=policy_pack_raw,
         physical_profile_raw=physical_profile_raw,
         board_identity=board_identity,
         retained_identity=retained_identity,
         project_identity=project_identity,
         rules_identity=rules_identity,
         fab_profile_identity=fab_profile_identity,
+        policy_pack_identity=policy_pack_identity,
         physical_profile_identity=physical_profile_identity,
         caller_sources=tuple(sources),
     )
@@ -679,6 +728,19 @@ def _replay_captured_manufacturing_package(
                     (profile_path, capture.fab_profile_raw, MAXIMUM_PROFILE_BYTES)
                 )
                 profile_arguments.append(f"--fab-profile={profile_path}")
+                _remaining(deadline, clock)
+            elif capture.policy_pack_raw is not None:
+                assert capture.policy_pack_name is not None
+                profile_directory = root / "profile-input"
+                profile_directory.mkdir(mode=0o700)
+                profile_path = profile_directory / capture.policy_pack_name
+                atomic_write_no_clobber(
+                    profile_path,
+                    capture.policy_pack_raw,
+                    max_bytes=64 * 1024 * 1024,
+                )
+                staged.append((profile_path, capture.policy_pack_raw, 64 * 1024 * 1024))
+                profile_arguments.append(f"--policy-pack={profile_path}")
                 _remaining(deadline, clock)
             elif capture.physical_profile_raw is not None:
                 assert capture.physical_profile_name is not None
@@ -803,6 +865,8 @@ def _replay_captured_manufacturing_package(
             fab=capture.fab,
             fab_profile_identity=capture.fab_profile_identity,
             fab_profile_name=capture.fab_profile_name,
+            policy_pack_identity=capture.policy_pack_identity,
+            policy_pack_name=capture.policy_pack_name,
             physical_profile_identity=capture.physical_profile_identity,
             physical_profile_name=capture.physical_profile_name,
         ),
@@ -832,6 +896,7 @@ def replay_manufacturing_package(
     kicad_rules: str | os.PathLike[str] | None = None,
     fab: str | None = None,
     fab_profile: str | os.PathLike[str] | None = None,
+    policy_pack: str | os.PathLike[str] | None = None,
     physical_profile: str | os.PathLike[str] | None = None,
     timeout_seconds: float = 120.0,
     _clock: Callable[[], float] = time.monotonic,
@@ -856,7 +921,7 @@ def replay_manufacturing_package(
         raise _fail("aggregate timeout is invalid")
 
     selections = sum(
-        source is not None for source in (fab, fab_profile, physical_profile)
+        source is not None for source in (fab, fab_profile, policy_pack, physical_profile)
     )
     if selections > 1:
         raise _fail("manufacturing profile selections are mutually exclusive")
@@ -871,6 +936,7 @@ def replay_manufacturing_package(
         kicad_rules=kicad_rules,
         fab=fab,
         fab_profile=fab_profile,
+        policy_pack=policy_pack,
         physical_profile=physical_profile,
         deadline=deadline,
         clock=_clock,

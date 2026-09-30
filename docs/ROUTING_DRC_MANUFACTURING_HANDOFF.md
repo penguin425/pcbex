@@ -87,12 +87,17 @@ second DRC engine.
 | Retained native DRC report | 32 MiB |
 | Explicit project or custom rules | 128 MiB each |
 | External DFM or physical profile | 4 MiB |
+| Organization analysis policy-pack | 64 MiB |
 
 The complete direct source union is capped at 724 MiB. All file roles must be
 nonempty, stable, regular, link-free inputs and must not alias each other.
 
-Exactly one of `--fab`, `--fab-profile`, and `--physical-profile` may be
-selected. The selection must reproduce the retained v1.476 bytes.
+Select at most one of `--fab`, `--fab-profile`, `--physical-profile`, and
+`--analysis-policy-pack`. The selection must reproduce the retained handoff
+bytes. A selected pack is captured once, staged with its original basename,
+and passed through both routing and manufacturing replay. Its non-null raw
+identity is retained in the outer and primary projections. Pack omission keeps
+the legacy source shape; pack selection does not authenticate or approve it.
 
 ## Replay sequence
 
