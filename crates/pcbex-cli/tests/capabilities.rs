@@ -161,6 +161,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "check-circuit-spec",
         "write-circuit-spec-kicad-schematic",
         "generate-circuit-kicad-board",
+        "generate-circuit-kicad-routed-board",
+        "circuit-kicad-routed-board-manifest-schema",
         "footprint-closure-schema",
         "board-construction-profile-schema",
         "circuit-kicad-board-manifest-schema",
@@ -534,6 +536,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "Footprint closure v1",
         "Board construction profile v1",
         "Circuit-to-KiCad board manifest v1",
+        "Verified circuit-to-routed-KiCad board workflow manifest v1",
         "Final BOM verification report v1",
     ] {
         assert!(

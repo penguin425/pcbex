@@ -160,12 +160,19 @@ publishes an artifact.
 5. **Verify board binding.** Recheck the exact specification, schematic, and
    generated board with `verify-circuit-kicad-board-binding`.
 
+For one command that also performs convergence routing and fresh exact replay,
+use [Circuit to Routed Board Workflow](CIRCUIT_ROUTED_BOARD_WORKFLOW.md).
+It retains the four input snapshots and publishes only a completely routed,
+internally checked result. Native KiCad DRC and manufacturing remain separate
+downstream gates.
+
 The focused contracts document each boundary:
 
 - [KiCad Schematic Writer](CIRCUIT_KICAD_SCHEMATIC_WRITER.md)
 - [Multi-unit Circuit Spec](MULTI_UNIT_CIRCUIT_SPEC.md)
 - [Circuit-to-KiCad Handoff](CIRCUIT_KICAD_HANDOFF.md)
 - [KiCad Board Writer](CIRCUIT_KICAD_BOARD_WRITER.md)
+- [Circuit to Routed Board Workflow](CIRCUIT_ROUTED_BOARD_WORKFLOW.md)
 - [Circuit-to-Board Binding](CIRCUIT_KICAD_BOARD_BINDING.md)
 
 Use the [Circuit Handoff Bundle](CIRCUIT_HANDOFF_BUNDLE.md) when one portable ZIP

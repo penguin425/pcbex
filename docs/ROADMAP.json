@@ -1184,6 +1184,11 @@
     {
       "id": "verifier-bound-factory-release-final-checkpoint-witness-receipt-quorum-checkpoint-witness-receipt-admission-quorum",
       "release": "v1.530.0",
+      "status": "released"
+    },
+    {
+      "id": "verified-circuit-to-routed-kicad-board-workflow",
+      "release": "v1.531.0",
       "status": "current"
     }
   ]
