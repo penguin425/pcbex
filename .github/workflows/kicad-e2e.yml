@@ -28,7 +28,7 @@ jobs:
         run: |
           sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends kicad
+          sudo apt-get install --yes --no-install-recommends kicad python3-jsonschema
           kicad-cli --version
       - name: Install Rust toolchain
         run: |

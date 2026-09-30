@@ -14070,6 +14070,78 @@ for offset in range(0, len(arguments), 2):
     assert "** Found 0 Footprint errors **" in report
 PY
 
+# v1.531 composes schematic and board production with exact construction
+# routing rules, complete convergence, and independent fresh replay. The
+# bundle itself does not claim native DRC; verify that separately here.
+circuit_routed_bundle="$output_directory/circuit-routed-board-workflow"
+circuit_routed_schema="$output_directory/circuit-routed-board-workflow.schema.json"
+circuit_routed_drc="$output_directory/circuit-routed-board-workflow.drc"
+"$pcbex_binary" generate-circuit-kicad-routed-board \
+  examples/circuit-board-spec-v3.json \
+  --footprint-closure examples/circuit-board-footprint-closure-v1.json \
+  --construction-profile examples/circuit-board-construction-profile-v1.json \
+  --physical-profile examples/circuit-board-physical-profile-v1.json \
+  --output-dir "$circuit_routed_bundle"
+"$pcbex_binary" circuit-kicad-routed-board-manifest-schema \
+  --output "$circuit_routed_schema"
+/usr/bin/python3 - "$circuit_routed_bundle" "$circuit_routed_schema" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sys
+from jsonschema import Draft202012Validator
+
+bundle = Path(sys.argv[1])
+schema = json.loads(Path(sys.argv[2]).read_bytes())
+manifest = json.loads((bundle / "manifest.json").read_bytes())
+Draft202012Validator.check_schema(schema)
+validator = Draft202012Validator(schema)
+validator.validate(manifest)
+expected = {"manifest.json"}
+for role in ("circuit_spec", "footprint_closure", "construction_profile", "physical_profile"):
+    name = {"circuit_spec": "circuit-spec.json", "footprint_closure": "footprint-closure.json",
+            "construction_profile": "construction-profile.json", "physical_profile": "physical-profile.json"}[role]
+    expected.add(name)
+    raw = (bundle / name).read_bytes()
+    assert manifest[role] == {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+for artifact in manifest["outputs"]:
+    expected.add(artifact["name"])
+    raw = (bundle / artifact["name"]).read_bytes()
+    assert artifact["identity"] == {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+assert len(expected) == 14
+assert {entry.name for entry in bundle.iterdir()} == expected
+assert all(entry.is_file() and not entry.is_symlink() for entry in bundle.iterdir())
+assert json.loads((bundle / "routing-verification.json").read_bytes())["routing_complete"] is True
+for mutation in ("unknown", "missing_rule", "missing_option", "duplicate_output", "workers", "drc_claim"):
+    changed = copy.deepcopy(manifest)
+    if mutation == "unknown":
+        changed["unexpected"] = True
+    elif mutation == "missing_rule":
+        del changed["effective_rules"]["via_cost"]
+    elif mutation == "missing_option":
+        del changed["convergence_options"]["router_workers"]
+    elif mutation == "duplicate_output":
+        changed["outputs"][1] = changed["outputs"][0]
+    elif mutation == "workers":
+        changed["convergence_options"]["candidate_workers"] = 9
+    else:
+        changed["native_kicad_drc_verified"] = True
+    assert not validator.is_valid(changed), mutation
+PY
+"$kicad_cli_binary" pcb drc "$circuit_routed_bundle/board.kicad_pcb" \
+  --output "$circuit_routed_drc"
+python3 - "$circuit_routed_drc" <<'PY'
+from pathlib import Path
+import sys
+
+report = Path(sys.argv[1]).read_text(encoding="utf-8")
+categories = [line.split("]", 1)[0] + "]" for line in report.splitlines() if line.startswith("[")]
+assert categories == ["[lib_footprint_issues]", "[lib_footprint_issues]"], categories
+assert "** Found 0 unconnected pads **" in report
+assert "** Found 0 Footprint errors **" in report
+PY
+
 # v1.464 composes the real retained manufacturing ZIP with a fully replayed
 # historical catalog selection.  The unrelated catalog circuit is
 # intentionally a semantic mismatch: the Rust final-BOM verifier must approve

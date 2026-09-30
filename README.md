@@ -174,8 +174,8 @@ use the [routing/DRC fabrication-release boundary](docs/ROUTING_DRC_FABRICATION_
 
 ### Generate a multi-unit KiCad handoff
 
-Use circuit-spec v3 when one physical package appears as multiple schematic
-units. Existing v2 documents continue to work without migration.
+Use circuit-spec v3 for multi-unit packages; v2 remains compatible. For one
+command through verified routing, see the [routed board workflow](docs/CIRCUIT_ROUTED_BOARD_WORKFLOW.md).
 
 ```sh
 ./target/release/pcbex check-circuit-spec \

@@ -6,6 +6,11 @@ placement, routing, and manufacturing commands. It creates a new KiCad board
 from explicit, local, digest-bound inputs; it does not use an installed KiCad
 footprint library or a network service.
 
+To generate the schematic and perform completely verified convergence routing
+in the same invocation, use the
+[Circuit to Routed Board Workflow](CIRCUIT_ROUTED_BOARD_WORKFLOW.md). The
+placed-only command described here remains unchanged.
+
 ```sh
 pcbex write-circuit-spec-kicad-schematic \
   examples/circuit-board-spec-v2.json \

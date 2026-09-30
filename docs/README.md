@@ -289,6 +289,9 @@ boundary document for the artifact you plan to produce or trust.
 - [KiCad Board Writer](CIRCUIT_KICAD_BOARD_WRITER.md) — generate a deterministic
   board from the approved circuit handoff.
 
+- [Circuit to Routed Board Workflow](CIRCUIT_ROUTED_BOARD_WORKFLOW.md) — generate
+  a schematic and complete routing with fresh verification in one command.
+
 - [Circuit-to-Board Binding](CIRCUIT_KICAD_BOARD_BINDING.md) — bind specification,
   schematic, and board identities.
 

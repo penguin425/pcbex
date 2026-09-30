@@ -185,6 +185,7 @@ mod anchored_io;
 mod bounded_io;
 mod bounded_process;
 mod canary_completion;
+mod circuit_routed_board_workflow;
 mod deterministic_pipeline_compiler;
 mod deterministic_pipeline_runner;
 mod dfm_profile_binding;
@@ -1576,6 +1577,11 @@ enum Command {
     },
     /// Print the closed deterministic circuit-to-KiCad board manifest v1 JSON Schema.
     CircuitKicadBoardManifestSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed verified circuit-to-routed-KiCad-board workflow manifest schema.
+    CircuitKicadRoutedBoardManifestSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -3124,6 +3130,33 @@ enum Command {
         /// New directory for exactly board.kicad_pcb, board-binding.json, and manifest.json.
         #[arg(long, value_name = "NEW_DIR")]
         output_dir: PathBuf,
+    },
+    /// Generate a schematic and completely routed KiCad board with fresh exact verification.
+    GenerateCircuitKicadRoutedBoard {
+        /// Closed circuit-spec v2 or explicit multi-unit v3 JSON source.
+        circuit_spec: PathBuf,
+        /// Closed footprint closure with all embedded `.kicad_mod` sources.
+        #[arg(long, value_name = "JSON")]
+        footprint_closure: PathBuf,
+        /// Closed construction profile; all seven routing defaults are applied exactly.
+        #[arg(long, value_name = "JSON")]
+        construction_profile: PathBuf,
+        /// Closed pcbex physical constraint profile.
+        #[arg(long, value_name = "JSON")]
+        physical_profile: PathBuf,
+        /// New directory for the exact fourteen-file verified workflow bundle.
+        #[arg(long, value_name = "NEW_DIR")]
+        output_dir: PathBuf,
+        #[arg(long)]
+        convergence_rounds: Option<usize>,
+        #[arg(long)]
+        convergence_candidates: Option<usize>,
+        #[arg(long)]
+        convergence_workers: Option<usize>,
+        #[arg(long)]
+        convergence_router_workers: Option<usize>,
+        #[arg(long)]
+        convergence_work_budget: Option<usize>,
     },
     /// Verify that a circuit specification and KiCad schematic are an exact electrical handoff.
     VerifyCircuitKicadHandoff {
@@ -21028,6 +21061,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "Footprint closure v1",
             "Board construction profile v1",
             "Circuit-to-KiCad board manifest v1",
+            "Verified circuit-to-routed-KiCad board workflow manifest v1",
             "Native KiCad schematic ERC report v1",
             "SPDX JSON",
         ],
@@ -21155,6 +21189,13 @@ fn run_cli() -> Result<()> {
                 &circuit_kicad_board_manifest_v1_json_schema(),
                 output.as_deref(),
                 "circuit-to-KiCad board manifest schema output",
+            )?;
+        }
+        Command::CircuitKicadRoutedBoardManifestSchema { output } => {
+            write_closed_schema(
+                &circuit_routed_board_workflow::manifest_json_schema(),
+                output.as_deref(),
+                "circuit-to-routed-KiCad-board workflow manifest schema output",
             )?;
         }
         Command::SchematicDiffSchema { output } => {
@@ -25952,6 +25993,34 @@ fn run_cli() -> Result<()> {
                 &output_dir,
             )?;
             eprintln!("generated deterministic KiCad board bundle");
+        }
+        Command::GenerateCircuitKicadRoutedBoard {
+            circuit_spec,
+            footprint_closure,
+            construction_profile,
+            physical_profile,
+            output_dir,
+            convergence_rounds,
+            convergence_candidates,
+            convergence_workers,
+            convergence_router_workers,
+            convergence_work_budget,
+        } => {
+            circuit_routed_board_workflow::generate(
+                &circuit_spec,
+                &footprint_closure,
+                &construction_profile,
+                &physical_profile,
+                &output_dir,
+                &routing_convergence_options(
+                    convergence_rounds,
+                    convergence_candidates,
+                    convergence_workers,
+                    convergence_router_workers,
+                    convergence_work_budget,
+                ),
+            )?;
+            eprintln!("generated fresh-verified, completely routed KiCad board bundle");
         }
         Command::VerifyCircuitKicadHandoff {
             circuit_spec,
@@ -46334,7 +46403,7 @@ fn stage_circuit_kicad_board_file(
 
 fn validate_circuit_kicad_board_stage(
     staging: &Path,
-    expected: &[(&str, &[u8], u64); 3],
+    expected: &[(&str, &[u8], u64)],
 ) -> Result<()> {
     let mut actual = Vec::new();
     let entries = fs::read_dir(staging)
@@ -46356,13 +46425,13 @@ fn validate_circuit_kicad_board_stage(
         actual.push(name);
     }
     actual.sort();
-    let mut names = CIRCUIT_KICAD_BOARD_OUTPUT_FILES
+    let mut names = expected
         .iter()
-        .map(ToString::to_string)
+        .map(|(name, _, _)| name.to_string())
         .collect::<Vec<_>>();
     names.sort();
     if actual != names {
-        bail!("private board stage does not contain the exact three-file bundle");
+        bail!("private board stage does not contain the exact expected bundle");
     }
     for (name, contents, maximum_bytes) in expected {
         let observed = fs::read_with_limit(staging.join(name), *maximum_bytes)
@@ -50425,6 +50494,27 @@ mod tests {
                 && diagnostic.contains("changed during board generation"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn circuit_kicad_board_stage_validation_uses_exact_supplied_inventory() {
+        let workspace = tempfile::tempdir().unwrap();
+        let expected: [(&str, &[u8], u64); 4] = [
+            ("one.json", b"one", 16),
+            ("two.json", b"two", 16),
+            ("three.json", b"three", 16),
+            ("four.json", b"four", 16),
+        ];
+        for (name, bytes, _) in &expected {
+            std::fs::write(workspace.path().join(name), bytes).unwrap();
+        }
+        validate_circuit_kicad_board_stage(workspace.path(), &expected).unwrap();
+        assert!(validate_circuit_kicad_board_stage(workspace.path(), &expected[..3]).is_err());
+        std::fs::write(workspace.path().join("unexpected.json"), b"extra").unwrap();
+        assert!(validate_circuit_kicad_board_stage(workspace.path(), &expected).is_err());
+        std::fs::remove_file(workspace.path().join("unexpected.json")).unwrap();
+        std::fs::write(workspace.path().join("four.json"), b"changed").unwrap();
+        assert!(validate_circuit_kicad_board_stage(workspace.path(), &expected).is_err());
     }
 
     #[test]
