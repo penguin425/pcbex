@@ -177,6 +177,12 @@ asset set, and protected-branch status before publication. See
 [CI Execution Limits](CI_EXECUTION_LIMITS.md), and
 [Completion Audit](COMPLETION_AUDIT.md).
 
+Expensive repository boundary jobs use a separate optimized `ci-boundary`
+profile and a compiler/platform/manifest-keyed target cache. PRs restore only;
+successful main pushes alone save. Cargo's locked build/test steps and every
+verification remain mandatory. Release builds, public Actions and their
+attestations never consume this CI target cache.
+
 ## Routing convergence ownership
 
 Routing convergence stays inside `pcbex-core`: it allocates one bounded A* work

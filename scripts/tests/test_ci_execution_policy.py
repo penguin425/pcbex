@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+CARGO_TOML = ROOT / "Cargo.toml"
 ACTION = ROOT / "action.yml"
 BOARDLESS_NATIVE_ERC_ACTION = ROOT / "actions" / "native-kicad-erc" / "action.yml"
 FABRICATION_AUTHORIZATION_ACTION = (
@@ -107,6 +108,138 @@ def _direct_integer(block: str, key: str) -> int | None:
 
 
 class CiExecutionPolicyTests(unittest.TestCase):
+    def test_ci_boundary_profile_is_explicit_and_ci_workflows_use_its_binary_path(self):
+        cargo = CARGO_TOML.read_text(encoding="utf-8")
+        profile_start = cargo.index("[profile.ci-boundary]")
+        profile = cargo[profile_start : cargo.find("\n[", profile_start + 2)]
+        for setting in (
+            'inherits = "release"',
+            "opt-level = 1",
+            "lto = false",
+            "codegen-units = 16",
+            "debug = false",
+            'strip = "debuginfo"',
+        ):
+            self.assertIn(setting, profile)
+
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        kicad = (WORKFLOWS / "kicad-e2e.yml").read_text(encoding="utf-8")
+        self.assertIn("--profile ci-boundary --locked", ci)
+        self.assertIn("target/ci-boundary/pcbex", ci)
+        self.assertIn("target/ci-boundary/pcbex.exe", ci)
+        self.assertIn("cargo build -p pcbex --release --locked", kicad)
+        self.assertIn("target/release/pcbex", kicad)
+
+    def test_ci_boundary_cache_is_main_write_only_and_profile_scoped(self):
+        document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        self.assertEqual(document.count("actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57"), 3)
+        self.assertEqual(document.count("actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57"), 3)
+        self.assertEqual(document.count("path: target/ci-boundary"), 6)
+        self.assertEqual(document.count('subprocess.check_output(["rustc", "+stable", "-Vv"])'), 3)
+        self.assertEqual(document.count("hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml')"), 6)
+        self.assertEqual(
+            document.count("github.event_name == 'push' && github.ref == 'refs/heads/main'"),
+            3,
+        )
+        self.assertNotIn("actions/cache", (WORKFLOWS / "kicad-e2e.yml").read_text(encoding="utf-8"))
+        for block in _job_blocks(document).values():
+            if "Restore ci-boundary target cache" not in block:
+                continue
+            self.assertIn("runner.os", block)
+            self.assertIn("runner.arch", block)
+            self.assertIn("host_triple", block)
+            self.assertIn("rustc_digest", block)
+            self.assertIn("hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml')", block)
+            self.assertIn("ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-", block)
+        self.assertNotIn("Verify ci-boundary executable guard", _job_blocks(document)["rust-windows-boundaries"])
+
+    def test_ci_boundary_contract_preserves_release_consumers_and_fail_closed_guards(self):
+        cargo = CARGO_TOML.read_text(encoding="utf-8")
+        profile = cargo[cargo.index("[profile.ci-boundary]") :]
+        self.assertIn('inherits = "release"', profile)
+        self.assertIn("opt-level = 1", profile)
+        self.assertIn("lto = false", profile)
+        self.assertNotIn("[profile.release]", cargo)
+
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        jobs = _job_blocks(ci)
+        for job in ("deterministic-pipeline", "python-boundaries"):
+            block = jobs[job]
+            self.assertIn("--profile ci-boundary --locked", block)
+            self.assertIn("target/ci-boundary/pcbex", block)
+            self.assertIn("stat.S_ISREG", block)
+            self.assertIn("is_symlink()", block)
+            self.assertIn("64 * 1024 * 1024", block)
+            self.assertIn("raise SystemExit", block)
+            self.assertIn("os.X_OK", block)
+        for job in ("deterministic-pipeline", "python-boundaries", "rust-windows-boundaries"):
+            block = jobs[job]
+            self.assertIn("path: target/ci-boundary", block)
+            self.assertRegex(
+                block,
+                r"if: \$\{\{ success\(\) && steps\.ci-boundary-cache\.outputs\.cache-hit != 'true'"
+                r" && github\.event_name == 'push' && github\.ref == 'refs/heads/main' \}\}",
+            )
+
+        rust = jobs["rust"]
+        self.assertIn("cargo build --workspace --release --locked", rust)
+        kicad = (WORKFLOWS / "kicad-e2e.yml").read_text(encoding="utf-8")
+        self.assertIn("cargo build -p pcbex --release --locked", kicad)
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertNotIn("ci-boundary", release)
+        self.assertNotIn("ci-boundary", ACTION.read_text(encoding="utf-8"))
+
+    def test_ci_boundary_optimizer_stack_is_compile_step_only(self):
+        document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        jobs = _job_blocks(document)
+        self.assertEqual(document.count('RUST_MIN_STACK: "16777216"'), 3)
+        for job in ("python-boundaries", "rust-windows-boundaries"):
+            block = jobs[job]
+            header, separator, _ = block.partition("    steps:")
+            self.assertTrue(separator)
+            self.assertNotIn("RUST_MIN_STACK", header)
+            steps = re.split(r"(?m)^      - ", block)[1:]
+            compile_indices = [
+                index for index, step in enumerate(steps)
+                if step.startswith("name: Compile ci-boundary Rust test harness\n")
+            ]
+            self.assertEqual(len(compile_indices), 1)
+            compile_index = compile_indices[0]
+            compile_step = steps[compile_index]
+            self.assertIn('RUST_MIN_STACK: "16777216"', compile_step)
+            self.assertIn("--profile ci-boundary --locked", compile_step)
+            self.assertIn("--no-run", compile_step)
+            if job == "python-boundaries":
+                self.assertIn("if: ${{ runner.os != 'Windows' }}", compile_step)
+            else:
+                self.assertNotIn("        if:", compile_step)
+            runtime_indices = [
+                index for index, step in enumerate(steps)
+                if "--bin pcbex" in step and "--no-run" not in step
+            ]
+            self.assertTrue(runtime_indices)
+            self.assertLess(compile_index, min(runtime_indices))
+            allowed_indices = {compile_index}
+            if job == "python-boundaries":
+                build_indices = [
+                    index for index, step in enumerate(steps)
+                    if step.startswith("name: Build pcbex release binary\n")
+                ]
+                self.assertEqual(len(build_indices), 1)
+                build_index = build_indices[0]
+                self.assertLess(build_index, compile_index)
+                self.assertIn('RUST_MIN_STACK: "16777216"', steps[build_index])
+                self.assertIn("cargo +stable build --package pcbex --profile ci-boundary --locked", steps[build_index])
+                allowed_indices.add(build_index)
+            for index, step in enumerate(steps):
+                if index not in allowed_indices:
+                    self.assertNotIn("RUST_MIN_STACK", step)
+        for job, block in jobs.items():
+            if job not in ("python-boundaries", "rust-windows-boundaries"):
+                self.assertNotIn("RUST_MIN_STACK", block)
+        self.assertNotIn("RUST_MIN_STACK", (WORKFLOWS / "release.yml").read_text(encoding="utf-8"))
+        self.assertNotIn("RUST_MIN_STACK", ACTION.read_text(encoding="utf-8"))
+
     def test_ci_required_context_triggers_are_not_path_or_activity_filtered(self):
         document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
         header, separator, _ = document.partition("\npermissions:\n")
@@ -417,10 +550,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         self.assertIn("persist-credentials: false", block)
         self.assertIn("rustup toolchain install stable --profile minimal", block)
-        self.assertIn("cargo +stable build --package pcbex --release --locked", block)
+        self.assertIn("cargo +stable build --package pcbex --profile ci-boundary --locked", block)
         self.assertIn("continue-on-error: true", block)
         self.assertIn("python3 scripts/deterministic_pipeline_ci.py", block)
-        self.assertIn("--pcbex target/release/pcbex", block)
+        self.assertIn("--pcbex target/ci-boundary/pcbex", block)
         self.assertIn(
             "--fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci",
             block,
@@ -519,35 +652,35 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertRegex(
             boundaries,
             r"(?m)^          - runner: macos-latest\n"
-            r"            pcbex: target/release/pcbex$",
+            r"            pcbex: target/ci-boundary/pcbex$",
         )
         self.assertRegex(
             boundaries,
             r"(?m)^          - runner: windows-latest\n"
-            r"            pcbex: target/release/pcbex\.exe$",
+            r"            pcbex: target/ci-boundary/pcbex\.exe$",
         )
         self.assertEqual(boundaries.count("- runner:"), 2)
         self.assertIn(
             "rustup toolchain install stable --profile minimal", boundaries
         )
         self.assertIn(
-            "cargo +stable build --package pcbex --release --locked", boundaries
+            "cargo +stable build --package pcbex --profile ci-boundary --locked", boundaries
         )
         self.assertIn(
-            "cargo +stable test --package pcbex --test capabilities --release --locked board_producer",
+            "cargo +stable test --package pcbex --test capabilities --profile ci-boundary --locked board_producer",
             boundaries,
         )
         self.assertIn(
-            "cargo +stable test --package pcbex --test circuit_kicad_board_writer --release --locked",
+            "cargo +stable test --package pcbex --test circuit_kicad_board_writer --profile ci-boundary --locked",
             boundaries,
         )
         final_cpl_command = (
-            "cargo +stable test --package pcbex --test final_cpl --release --locked"
+            "cargo +stable test --package pcbex --test final_cpl --profile ci-boundary --locked"
         )
         self.assertIn(final_cpl_command, boundaries)
         self.assertNotIn(final_cpl_command, rust_windows)
         firmware_build_command = (
-            "cargo +stable test --package pcbex --test firmware_build --release --locked"
+            "cargo +stable test --package pcbex --test firmware_build --profile ci-boundary --locked"
         )
         self.assertEqual(document.count(firmware_build_command), 1)
         self.assertNotIn(firmware_build_command, rust_windows)
@@ -643,19 +776,19 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         procurement_reservation_rust_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test procurement_authorization_reservation --release --locked"
+            "          --test procurement_authorization_reservation --profile ci-boundary --locked"
         )
         multi_unit_kicad_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test circuit_spec_v3 --release --locked"
+            "          --test circuit_spec_v3 --profile ci-boundary --locked"
         )
         routing_convergence_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test routing_convergence --release --locked"
+            "          --test routing_convergence --profile ci-boundary --locked"
         )
         routing_convergence_verification_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test routing_convergence_verification --release --locked"
+            "          --test routing_convergence_verification --profile ci-boundary --locked"
         )
         routing_manufacturing_handoff_command = (
             "python -m unittest\n"
@@ -678,7 +811,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "          agent.tests.test_signed_factory_receipt_release_v1480 -v"
         )
         factory_receipt_attestation_command = (
-            "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
+            "cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked\n"
             "          factory_receipt_attestation"
         )
         signed_release_reservation_command = (
@@ -687,31 +820,31 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         signed_release_reservation_rust_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test signed_factory_receipt_release_reservation --release --locked"
+            "          --test signed_factory_receipt_release_reservation --profile ci-boundary --locked"
         )
         signed_release_submission_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test signed_factory_receipt_release_submission --release --locked"
+            "          --test signed_factory_receipt_release_submission --profile ci-boundary --locked"
         )
         authenticated_factory_response_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test factory_release_adapter_response_authentication --release --locked"
+            "          --test factory_release_adapter_response_authentication --profile ci-boundary --locked"
         )
         monotonic_factory_state_command = (
-            "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
+            "cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked\n"
             "          factory_release_adapter_monotonic_state"
         )
         factory_state_transparency_command = (
-            "cargo +stable test --package pcbex --bin pcbex --release --locked\n"
+            "cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked\n"
             "          factory_release_state_transparency"
         )
         observer_rotation_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test factory_release_external_gossip_observer_rotation --release --locked"
+            "          --test factory_release_external_gossip_observer_rotation --profile ci-boundary --locked"
         )
         organization_registry_command = (
             "cargo +stable test --package pcbex\n"
-            "          --test factory_release_external_gossip_organization_registry --release --locked"
+            "          --test factory_release_external_gossip_organization_registry --profile ci-boundary --locked"
         )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
@@ -791,12 +924,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
             1,
         )
         self.assertIn(
-            "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
+            "cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked windows_",
             rust_windows,
         )
         self.assertLess(
             rust_windows.index(
-                "cargo +stable test --package pcbex --bin pcbex --release --locked windows_"
+                "cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked windows_"
             ),
             rust_windows.index(
                 "- name: Run Windows factory-receipt cryptographic boundaries"

@@ -1519,8 +1519,54 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
+      - name: Compute ci-boundary cache key
+        id: ci-boundary-cache-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+          python - <<'PY'
+          import hashlib
+          import re
+          import subprocess
+
+          raw = subprocess.check_output(["rustc", "+stable", "-Vv"])
+          text = raw.decode("utf-8")
+          host = re.search(r"^host: (.+)$", text, re.MULTILINE)
+          if host is None:
+              raise SystemExit("rustc +stable -Vv did not report host")
+          print(f"rustc_digest={hashlib.sha256(raw).hexdigest()}")
+          print(f"host_triple={host.group(1)}")
+          PY
+          } >> "$GITHUB_OUTPUT"
+      # Restore is available to PRs, but the trusted-main prefix is never written by PRs.
+      - name: Restore ci-boundary target cache
+        id: ci-boundary-cache
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: target/ci-boundary
+          key: ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml') }}
+          restore-keys: |
+            ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-
       - name: Build pcbex
-        run: cargo +stable build --package pcbex --release --locked
+        run: cargo +stable build --package pcbex --profile ci-boundary --locked
+      - name: Verify ci-boundary executable guard
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+
+          executable = Path("target/ci-boundary/pcbex")
+          file_stat = executable.lstat()
+          if not stat.S_ISREG(file_stat.st_mode) or executable.is_symlink():
+              raise SystemExit("ci-boundary binary is not a regular non-symlink file")
+          if not 1 <= file_stat.st_size <= 64 * 1024 * 1024:
+              raise SystemExit("ci-boundary binary size is outside 1..64 MiB")
+          if os.name != "nt" and not os.access(executable, os.X_OK):
+              raise SystemExit("ci-boundary binary is not executable")
+          PY
       - name: Run deterministic pipeline fixture
         id: pipeline
         continue-on-error: true
@@ -1531,7 +1577,7 @@ jobs:
           --max-stderr-bytes 8388608
           --output-root build/deterministic-pipeline-ci
           -- python3 scripts/deterministic_pipeline_ci.py
-          --pcbex target/release/pcbex
+          --pcbex target/ci-boundary/pcbex
           --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci
           --output-dir build/deterministic-pipeline-ci
       - name: Replay retained deterministic pipeline reports
@@ -1545,14 +1591,14 @@ jobs:
           python3 -m pcbex_agent.cli replay-deterministic-pipeline \
             build/deterministic-pipeline-ci/accepted/plan.json \
             build/deterministic-pipeline-ci/accepted/report.json \
-            --pcbex "$(pwd)/target/release/pcbex" \
+            --pcbex "$(pwd)/target/ci-boundary/pcbex" \
             --require-approved \
             --timeout-seconds 120 \
             > build/deterministic-pipeline-ci/accepted-replay.json
           python3 -m pcbex_agent.cli replay-deterministic-pipeline \
             build/deterministic-pipeline-ci/rejected/plan.json \
             build/deterministic-pipeline-ci/rejected/report.json \
-            --pcbex "$(pwd)/target/release/pcbex" \
+            --pcbex "$(pwd)/target/ci-boundary/pcbex" \
             --timeout-seconds 120 \
             > build/deterministic-pipeline-ci/rejected-replay.json
           python3 - <<'PY'
@@ -1727,6 +1773,12 @@ jobs:
           test "$SCAN_OUTCOME" = success
           test "$SUMMARY_OUTCOME" = success
           test "$UPLOAD_OUTCOME" = success
+      - name: Save ci-boundary target cache
+        if: ${{ success() && steps.ci-boundary-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: target/ci-boundary
+          key: ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml') }}
 
   rust:
     name: Rust
@@ -1794,9 +1846,9 @@ jobs:
       matrix:
         include:
           - runner: macos-latest
-            pcbex: target/release/pcbex
+            pcbex: target/ci-boundary/pcbex
           - runner: windows-latest
-            pcbex: target/release/pcbex.exe
+            pcbex: target/ci-boundary/pcbex.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1806,14 +1858,62 @@ jobs:
           python-version: "3.11"
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
+      - name: Compute ci-boundary cache key
+        id: ci-boundary-cache-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+          python - <<'PY'
+          import hashlib
+          import re
+          import subprocess
+
+          raw = subprocess.check_output(["rustc", "+stable", "-Vv"])
+          text = raw.decode("utf-8")
+          host = re.search(r"^host: (.+)$", text, re.MULTILINE)
+          if host is None:
+              raise SystemExit("rustc +stable -Vv did not report host")
+          print(f"rustc_digest={hashlib.sha256(raw).hexdigest()}")
+          print(f"host_triple={host.group(1)}")
+          PY
+          } >> "$GITHUB_OUTPUT"
+      # PRs may restore; only successful pushes to main may populate this cache.
+      - name: Restore ci-boundary target cache
+        id: ci-boundary-cache
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: target/ci-boundary
+          key: ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml') }}
+          restore-keys: |
+            ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-
       - name: Build pcbex release binary
-        run: cargo +stable build --package pcbex --release --locked
+        env:
+          RUST_MIN_STACK: "16777216"
+        run: cargo +stable build --package pcbex --profile ci-boundary --locked
+      - name: Verify ci-boundary executable guard
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import stat
+          from pathlib import Path
+
+          executable = Path("${{ matrix.pcbex }}")
+          file_stat = executable.lstat()
+          if not stat.S_ISREG(file_stat.st_mode) or executable.is_symlink():
+              raise SystemExit("ci-boundary binary is not a regular non-symlink file")
+          if not 1 <= file_stat.st_size <= 64 * 1024 * 1024:
+              raise SystemExit("ci-boundary binary size is outside 1..64 MiB")
+          if os.name != "nt" and not os.access(executable, os.X_OK):
+              raise SystemExit("ci-boundary binary is not executable")
+          PY
       - name: Run cross-platform deterministic board producer regressions
         run: |
-          cargo +stable test --package pcbex --test capabilities --release --locked board_producer
-          cargo +stable test --package pcbex --test circuit_kicad_board_writer --release --locked
+          cargo +stable test --package pcbex --test capabilities --profile ci-boundary --locked board_producer
+          cargo +stable test --package pcbex --test circuit_kicad_board_writer --profile ci-boundary --locked
       - name: Run cross-platform v1.465 exact final-CPL boundaries
-        run: cargo +stable test --package pcbex --test final_cpl --release --locked
+        run: cargo +stable test --package pcbex --test final_cpl --profile ci-boundary --locked
       - name: Run cross-platform v1.464 procurement-intent boundaries
         env:
           PCBEX_TEST_BINARY: ${{ matrix.pcbex }}
@@ -1866,23 +1966,23 @@ jobs:
       - name: Run cross-platform v1.472 local-ledger helper boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test procurement_authorization_reservation --release --locked
+          --test procurement_authorization_reservation --profile ci-boundary --locked
       - name: Run cross-platform v1.473 multi-unit KiCad boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test circuit_spec_v3 --release --locked
+          --test circuit_spec_v3 --profile ci-boundary --locked
       - name: Run cross-platform v1.474 routing-convergence boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test routing_convergence --release --locked
+          --test routing_convergence --profile ci-boundary --locked
       - name: Run cross-platform v1.475 fresh routing-convergence verification boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test routing_convergence_verification --release --locked
+          --test routing_convergence_verification --profile ci-boundary --locked
       - name: Run cross-platform v1.531 circuit to routed board workflow
         run: >-
           cargo +stable test --package pcbex
-          --test circuit_routed_board_workflow --release --locked
+          --test circuit_routed_board_workflow --profile ci-boundary --locked
       - name: Run cross-platform v1.476 routing-manufacturing handoff boundaries
         env:
           PYTHONPATH: agent/src
@@ -1920,12 +2020,20 @@ jobs:
         run: >-
           python -m unittest
           agent.tests.test_signed_factory_receipt_release_v1480 -v
+      - name: Compile ci-boundary Rust test harness
+        # Scope Rust's optimizer stack reservation to compilation, not test execution.
+        if: ${{ runner.os != 'Windows' }}
+        env:
+          RUST_MIN_STACK: "16777216"
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
+          --no-run
       - name: Run cross-platform v1.480 factory-receipt cryptographic boundaries
-        # Windows reuses the already-linked bin test harness in the dedicated
-        # Rust boundary job, keeping this 45-minute matrix below its ceiling.
+        # Windows runs these bin-harness regressions in the dedicated Rust
+        # boundary job; skip redundant compilation in this matrix.
         if: ${{ runner.os != 'Windows' }}
         run: >-
-          cargo +stable test --package pcbex --bin pcbex --release --locked
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
           factory_receipt_attestation
       - name: Run cross-platform v1.481 signed-release reservation boundaries
         env:
@@ -1936,37 +2044,37 @@ jobs:
       - name: Run cross-platform v1.481 local-ledger helper boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test signed_factory_receipt_release_reservation --release --locked
+          --test signed_factory_receipt_release_reservation --profile ci-boundary --locked
       - name: Run cross-platform v1.482 durable factory-release submission boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test signed_factory_receipt_release_submission --release --locked
+          --test signed_factory_receipt_release_submission --profile ci-boundary --locked
       - name: Run cross-platform v1.483 authenticated factory-response boundaries
         run: >-
           cargo +stable test --package pcbex
-          --test factory_release_adapter_response_authentication --release --locked
+          --test factory_release_adapter_response_authentication --profile ci-boundary --locked
       - name: Run cross-platform v1.484 monotonic factory-state boundaries
-        # Windows reuses the already-linked bin test harness in the dedicated
-        # Rust boundary job, keeping this 45-minute matrix below its ceiling.
+        # Windows runs these bin-harness regressions in the dedicated Rust
+        # boundary job; skip redundant compilation in this matrix.
         if: ${{ runner.os != 'Windows' }}
         run: >-
-          cargo +stable test --package pcbex --bin pcbex --release --locked
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
           factory_release_adapter_monotonic_state
       - name: Run cross-platform v1.485-v1.530 factory-state transparency boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
-          cargo +stable test --package pcbex --bin pcbex --release --locked
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
           factory_release_state_transparency
       - name: Run cross-platform v1.492 observer-rotation ledger boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex
-          --test factory_release_external_gossip_observer_rotation --release --locked
+          --test factory_release_external_gossip_observer_rotation --profile ci-boundary --locked
       - name: Run cross-platform v1.493-v1.530 organization-registry ledger boundaries
         if: ${{ runner.os != 'Windows' }}
         run: >-
           cargo +stable test --package pcbex
-          --test factory_release_external_gossip_organization_registry --release --locked
+          --test factory_release_external_gossip_organization_registry --profile ci-boundary --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -1980,7 +2088,7 @@ jobs:
           }
           $toolchain | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Run cross-platform v1.466 fresh firmware build boundaries
-        run: cargo +stable test --package pcbex --test firmware_build --release --locked
+        run: cargo +stable test --package pcbex --test firmware_build --profile ci-boundary --locked
       - name: Build real deterministic pipeline replay fixtures
         run: >-
           python scripts/deterministic_pipeline_ci.py
@@ -2058,6 +2166,12 @@ jobs:
           agent.tests.test_circuit_handoff_bundle_v1457
           agent.tests.test_circuit_handoff_bundle_v1458
           scripts.tests.test_ci_runtime
+      - name: Save ci-boundary target cache
+        if: ${{ success() && steps.ci-boundary-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: target/ci-boundary
+          key: ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml') }}
 
   rust-windows-boundaries:
     name: Rust Windows boundaries
@@ -2069,17 +2183,59 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal
+      - name: Compute ci-boundary cache key
+        id: ci-boundary-cache-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+          python - <<'PY'
+          import hashlib
+          import re
+          import subprocess
+
+          raw = subprocess.check_output(["rustc", "+stable", "-Vv"])
+          text = raw.decode("utf-8")
+          host = re.search(r"^host: (.+)$", text, re.MULTILINE)
+          if host is None:
+              raise SystemExit("rustc +stable -Vv did not report host")
+          print(f"rustc_digest={hashlib.sha256(raw).hexdigest()}")
+          print(f"host_triple={host.group(1)}")
+          PY
+          } >> "$GITHUB_OUTPUT"
+      # PRs may restore; only successful pushes to main may populate this cache.
+      - name: Restore ci-boundary target cache
+        id: ci-boundary-cache
+        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: target/ci-boundary
+          key: ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml') }}
+          restore-keys: |
+            ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-
+      - name: Compile ci-boundary Rust test harness
+        # The following filtered tests run with their default runtime stack settings.
+        env:
+          RUST_MIN_STACK: "16777216"
+        run: >-
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
+          --no-run
       - name: Run Windows Rust process regressions
-        run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_
+        run: cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked windows_
       - name: Run Windows factory-receipt cryptographic boundaries
         run: >-
-          cargo +stable test --package pcbex --bin pcbex --release --locked
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
           factory_receipt_attestation
       - name: Run Windows monotonic factory-state boundaries
         run: >-
-          cargo +stable test --package pcbex --bin pcbex --release --locked
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
           factory_release_adapter_monotonic_state
       - name: Run Windows v1.485-v1.530 factory-state transparency boundaries
         run: >-
-          cargo +stable test --package pcbex --bin pcbex --release --locked
+          cargo +stable test --package pcbex --bin pcbex --profile ci-boundary --locked
           factory_release_state_transparency
+      - name: Save ci-boundary target cache
+        if: ${{ success() && steps.ci-boundary-cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: target/ci-boundary
+          key: ci-boundary-${{ runner.os }}-${{ runner.arch }}-${{ steps.ci-boundary-cache-key.outputs.host_triple }}-${{ steps.ci-boundary-cache-key.outputs.rustc_digest }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', '.cargo/config', '.cargo/config.toml') }}
