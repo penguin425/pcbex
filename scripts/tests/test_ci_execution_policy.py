@@ -63,6 +63,13 @@ EXPECTED_TIMEOUTS = {
         "audit": 15,
         "publish": 10,
     },
+    "release-recovery.yml": {
+        "verify": 45,
+        "prepare": 10,
+        "build": 60,
+        "audit": 15,
+        "publish": 10,
+    },
 }
 
 MAX_REVIEWED_TIMEOUT_MINUTES = 90
@@ -79,7 +86,8 @@ EXPECTED_CONCURRENCY = {
         "pcbex-pr-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}",
         "true",
     ),
-    "release.yml": ("group: release-${{ github.ref }}", "false"),
+    "release.yml": ("group: release-v2-${{ github.ref }}", "false"),
+    "release-recovery.yml": ("group: release-v2-refs/tags/${{ inputs.tag }}", "false"),
 }
 
 
@@ -174,6 +182,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
                 ("codeql.yml", "analyze"),
                 ("fuzz.yml", "fuzz"),
                 ("release.yml", "build"),
+                ("release-recovery.yml", "build"),
             },
         )
 
@@ -196,7 +205,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
 
     def test_release_runs_are_serial_and_never_cancelled_mid_publish(self):
         document = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
-        self.assertIn("group: release-${{ github.ref }}", document)
+        self.assertIn("group: release-v2-${{ github.ref }}", document)
         self.assertRegex(document, r"(?m)^  cancel-in-progress:\s*false\s*$")
 
     def test_release_publication_requires_successful_required_check_runs(self):
@@ -208,6 +217,114 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("--check-required-runs", audit)
         self.assertNotIn("--check-protection", audit)
         self.assertRegex(publish, r"(?m)^    needs:\s*audit\s*$")
+
+    def test_recovery_is_explicit_and_uses_a_shared_release_lock(self):
+        normal = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        recovery = (WORKFLOWS / "release-recovery.yml").read_text(encoding="utf-8")
+        header = recovery.partition("\npermissions:\n")[0]
+        self.assertIn("  workflow_dispatch:", header)
+        self.assertNotIn("  push:", header)
+        self.assertNotIn("  pull_request:", header)
+        self.assertNotIn("  repository_dispatch:", header)
+        self.assertEqual(header.count("        required: true"), 4)
+        for name in ("tag", "expected_sha", "expected_tag_object", "rust_toolchain"):
+            self.assertIn(f"      {name}:", header)
+        self.assertIn("group: release-v2-${{ github.ref }}", normal)
+        self.assertIn("group: release-v2-refs/tags/${{ inputs.tag }}", recovery)
+        for document in (normal, recovery):
+            self.assertNotIn("group: release-${{ github.ref }}", document)
+            group = re.search(r"(?m)^  group: (.+)$", document)
+            self.assertIsNotNone(group)
+            assert group is not None
+            self.assertNotIn("github.run_id", group.group(1))
+            self.assertNotIn("github.run_attempt", group.group(1))
+            self.assertRegex(document, r"(?m)^  cancel-in-progress:\s*false\s*$")
+
+    def test_recovery_keeps_all_source_validation_and_test_gates(self):
+        document = (WORKFLOWS / "release-recovery.yml").read_text(encoding="utf-8")
+        verify = _job_blocks(document)["verify"]
+        for required in (
+            "path: control",
+            "ref: ${{ github.sha }}",
+            "path: source",
+            "ref: ${{ steps.resolve.outputs.sha }}",
+            "python3 scripts/release_recovery.py resolve",
+            '--expected-tag-object "$EXPECTED_TAG_OBJECT"',
+            'test "$(git rev-parse HEAD)" = "$SOURCE_SHA"',
+            'git merge-base --is-ancestor "$SOURCE_SHA" origin/main',
+            'test "$RELEASE_TAG" = "v$rust_version"',
+            "cargo fmt --all -- --check",
+            "cargo test --workspace --locked",
+            "cargo clippy --workspace --all-targets --locked -- -D warnings",
+            "python -m unittest discover -s agent/tests -v",
+            "python -m unittest discover -s scripts/tests -v",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, verify)
+        self.assertNotRegex(document, r"(?m)^\s+GITHUB_SHA:")
+        self.assertNotRegex(document, r"(?m)^\s+GITHUB_REF(?:_NAME)?:")
+        self.assertIn('rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt', verify)
+        self.assertIn('rustup default "$RUST_TOOLCHAIN"', verify)
+        self.assertIn('--rust-toolchain "$REQUESTED_RUST_TOOLCHAIN"', verify)
+        # Raw dispatch inputs only enter env/checkout-independent controller
+        # validation, never executable shell interpolation.
+        for line in document.splitlines():
+            if "${{ inputs." in line:
+                self.assertTrue(
+                    line.startswith("  group:") or re.match(r"^          [A-Z_]+:", line),
+                    line,
+                )
+
+    def test_recovery_retains_four_normal_release_builds_and_attestations(self):
+        document = (WORKFLOWS / "release-recovery.yml").read_text(encoding="utf-8")
+        build = _job_blocks(document)["build"]
+        for runner, target in (
+            ("ubuntu-latest", "x86_64-unknown-linux-gnu"),
+            ("macos-15-intel", "x86_64-apple-darwin"),
+            ("macos-latest", "aarch64-apple-darwin"),
+            ("windows-latest", "x86_64-pc-windows-msvc"),
+        ):
+            self.assertIn(f"- runner: {runner}\n            target: {target}", build)
+        self.assertIn('cargo build -p pcbex --release --locked --target "${{ matrix.target }}"', build)
+        self.assertNotIn("--profile ci-boundary", build)
+        self.assertNotIn("RUST_MIN_STACK", build)
+        self.assertEqual(build.count("uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d"), 3)
+        self.assertIn("- name: Attest build provenance", build)
+        self.assertIn("- name: Attest SBOM", build)
+        self.assertIn("predicate-type: https://github.com/penguin425/pcbex/attestations/release-source/v1", build)
+        self.assertIn("predicate-path: control/release-source.json", build)
+        self.assertIn('rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal', build)
+        self.assertIn('--rust-toolchain "$RUST_TOOLCHAIN"', build)
+        binding = build.partition("- name: Bind archive to immutable release source")[2]
+        self.assertIn("working-directory: .", binding)
+        self.assertIn('--archive "source/dist/$ARCHIVE_NAME" --output control/release-source.json', binding)
+
+    def test_recovery_publication_requires_full_audit_and_signed_source_binding(self):
+        document = (WORKFLOWS / "release-recovery.yml").read_text(encoding="utf-8")
+        jobs = _job_blocks(document)
+        self.assertRegex(jobs["prepare"], r"(?m)^    needs:\s*verify\s*$")
+        self.assertIn("needs: [verify, prepare]", jobs["build"])
+        self.assertIn("needs: [verify, build]", jobs["audit"])
+        self.assertIn("needs: [verify, audit]", jobs["publish"])
+        for name in ("prepare", "build", "publish"):
+            self.assertIn("release_recovery.py check-remote", jobs[name])
+            self.assertIn('--expected-tag-object "$TAG_OBJECT"', jobs[name])
+            self.assertIn('--json isDraft --jq .isDraft)" = "true"', jobs[name])
+        self.assertIn("--verify-tag --draft", jobs["prepare"])
+        audit = jobs["audit"]
+        self.assertIn("checks: read", audit)
+        self.assertIn("attestations: read", audit)
+        self.assertIn('python3 scripts/release-audit.py', audit)
+        self.assertIn('--expected-sha "$SOURCE_SHA" --allow-draft --check-required-runs', audit)
+        self.assertNotIn("--skip-download", audit)
+        self.assertIn("working-directory: .", audit)
+        self.assertIn("release_recovery.py verify", audit)
+        self.assertIn('--rust-toolchain "$RUST_TOOLCHAIN"', audit)
+        self.assertIn('--archive "control/recovery-assets/pcbex-$RELEASE_TAG-$target.$extension"', audit)
+        self.assertIn("--timeout-seconds 120", audit)
+        self.assertIn("--max-entries 4 --max-depth 1", audit)
+        self.assertIn("--max-file-bytes 134217728 --max-total-bytes 536870912", audit)
+        self.assertLess(audit.index("scripts/release-audit.py"), audit.index("release_recovery.py verify"))
 
     def test_composite_action_supervises_commands_and_gates_publication(self):
         document = ACTION.read_text(encoding="utf-8")

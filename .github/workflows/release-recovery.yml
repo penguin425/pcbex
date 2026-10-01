@@ -1,0 +1,394 @@
+name: Release Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing unpublished semantic-version tag
+        required: true
+        type: string
+      expected_sha:
+        description: Immutable source commit behind the tag (40 hex characters)
+        required: true
+        type: string
+      expected_tag_object:
+        description: Immutable annotated tag object (40 hex characters)
+        required: true
+        type: string
+      rust_toolchain:
+        description: Exact stable Rust version used by the source release
+        required: true
+        type: string
+        default: "1.98.1"
+
+permissions:
+  contents: read
+
+# Share the new namespace with normal tag-push releases. Never use run_id here:
+# two runs targeting the same release must not upload/publish concurrently.
+concurrency:
+  group: release-v2-refs/tags/${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify recovery release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag_object: ${{ steps.resolve.outputs.tag_object }}
+      rust_toolchain: ${{ steps.resolve.outputs.rust_toolchain }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Resolve immutable release source on main
+        id: resolve
+        working-directory: control
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          EXPECTED_TAG_OBJECT: ${{ inputs.expected_tag_object }}
+          REQUESTED_RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
+        run: |
+          python3 scripts/release_recovery.py resolve \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$REQUESTED_TAG" \
+            --expected-sha "$EXPECTED_SHA" \
+            --expected-tag-object "$EXPECTED_TAG_OBJECT" \
+            --rust-toolchain "$REQUESTED_RUST_TOOLCHAIN" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install Rust toolchain
+        working-directory: source
+        env:
+          RUST_TOOLCHAIN: ${{ steps.resolve.outputs.rust_toolchain }}
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+      - working-directory: source
+        env:
+          RUST_TOOLCHAIN: ${{ steps.resolve.outputs.rust_toolchain }}
+        run: |
+          rustup default "$RUST_TOOLCHAIN"
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$RUST_TOOLCHAIN"
+      - name: Verify source tag and versions
+        working-directory: source
+        env:
+          RELEASE_TAG: ${{ steps.resolve.outputs.tag }}
+          SOURCE_SHA: ${{ steps.resolve.outputs.sha }}
+        shell: bash
+        run: |
+          git fetch origin main
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          rust_version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "pcbex") | .version'
+          )"
+          python_version="$(
+            python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("agent/pyproject.toml").read_text())["project"]["version"])'
+          )"
+          test "$rust_version" = "$python_version"
+          test "$RELEASE_TAG" = "v$rust_version"
+      - name: Check formatting
+        working-directory: source
+        run: cargo fmt --all -- --check
+      - name: Run Rust tests
+        working-directory: source
+        run: cargo test --workspace --locked
+      - name: Run Clippy
+        working-directory: source
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run agent tests
+        working-directory: source
+        env:
+          PYTHONPATH: agent/src
+        run: python -m unittest discover -s agent/tests -v
+      - name: Test release audit
+        working-directory: source
+        run: python -m unittest discover -s scripts/tests -v
+
+  prepare:
+    name: Prepare recovery draft release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+      TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Recheck tag and create or reuse unpublished draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 control/scripts/release_recovery.py check-remote \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true"
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --draft --generate-notes --title "pcbex $RELEASE_TAG"
+          fi
+
+  build:
+    name: Recovery build ${{ matrix.target }}
+    needs: [verify, prepare]
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+            extension: tar.gz
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar
+            extension: tar.gz
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar
+            extension: tar.gz
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            extension: zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    defaults:
+      run:
+        working-directory: source
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+      TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
+      ASSET_NAME: pcbex-${{ needs.verify.outputs.tag }}-${{ matrix.target }}
+      ARCHIVE_NAME: pcbex-${{ needs.verify.outputs.tag }}-${{ matrix.target }}.${{ matrix.extension }}
+      RUST_TOOLCHAIN: ${{ needs.verify.outputs.rust_toolchain }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$RUST_TOOLCHAIN"
+      - name: Build
+        shell: bash
+        run: cargo build -p pcbex --release --locked --target "${{ matrix.target }}"
+      - name: Package Unix binary
+        if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          mkdir -p "dist/$ASSET_NAME"
+          cp "target/${{ matrix.target }}/release/pcbex" "dist/$ASSET_NAME/"
+          cp README.md LICENSE Cargo.lock "dist/$ASSET_NAME/"
+          tar -C dist -czf "dist/$ARCHIVE_NAME" "$ASSET_NAME"
+          (
+            cd dist
+            shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          )
+      - name: Package Windows binary
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "dist/$env:ASSET_NAME" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/pcbex.exe" "dist/$env:ASSET_NAME/"
+          Copy-Item README.md, LICENSE, Cargo.lock "dist/$env:ASSET_NAME/"
+          Compress-Archive -Path "dist/$env:ASSET_NAME" -DestinationPath "dist/$env:ARCHIVE_NAME"
+          $hash = (Get-FileHash "dist/$env:ARCHIVE_NAME" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $env:ARCHIVE_NAME" |
+            Set-Content "dist/$env:ARCHIVE_NAME.sha256" -NoNewline
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: source/dist/${{ env.ASSET_NAME }}
+          format: spdx-json
+          output-file: source/dist/${{ env.ASSET_NAME }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      # The certificate correctly identifies this main-based controller run.
+      # A separate signed binding below identifies the immutable source tag.
+      - name: Attest build provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: source/dist/${{ env.ARCHIVE_NAME }}
+      - name: Attest SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: source/dist/${{ env.ARCHIVE_NAME }}
+          sbom-path: source/dist/${{ env.ASSET_NAME }}.spdx.json
+      - name: Bind archive to immutable release source
+        working-directory: .
+        shell: bash
+        run: |
+          python3 control/scripts/release_recovery.py predicate \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT" \
+            --archive "source/dist/$ARCHIVE_NAME" --output control/release-source.json \
+            --rust-toolchain "$RUST_TOOLCHAIN" \
+            --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Attest immutable release source binding
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: source/dist/${{ env.ARCHIVE_NAME }}
+          predicate-type: https://github.com/penguin425/pcbex/attestations/release-source/v1
+          predicate-path: control/release-source.json
+      - name: Upload release assets to unpublished draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 ../control/scripts/release_recovery.py check-remote \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT"
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true"
+          gh release upload "$RELEASE_TAG" \
+            "dist/$ARCHIVE_NAME" "dist/$ARCHIVE_NAME.sha256" "dist/$ASSET_NAME.spdx.json" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  audit:
+    name: Audit recovery release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      checks: read
+      attestations: read
+    defaults:
+      run:
+        working-directory: source
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+      TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
+      RUST_TOOLCHAIN: ${{ needs.verify.outputs.rust_toolchain }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.verify.outputs.sha }}
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Verify roadmap, release metadata, assets, checksums, SBOMs, and required runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python3 ../control/scripts/release_recovery.py check-remote \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT"
+          python3 scripts/release-audit.py \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --expected-sha "$SOURCE_SHA" --allow-draft --check-required-runs
+      - name: Verify signed source binding on actual release archives
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 control/scripts/ci_runtime.py exec \
+            --timeout-seconds 120 --max-stdout-bytes 1048576 --max-stderr-bytes 1048576 \
+            --output-root control/recovery-assets \
+            -- gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --dir control/recovery-assets \
+            --pattern "pcbex-$RELEASE_TAG-*.tar.gz" --pattern "pcbex-$RELEASE_TAG-*.zip"
+          python3 control/scripts/ci_runtime.py scan \
+            --output-root control/recovery-assets --max-entries 4 --max-depth 1 \
+            --max-file-bytes 134217728 --max-total-bytes 536870912
+          for target in aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-gnu; do
+            extension=tar.gz
+            if test "$target" = "x86_64-pc-windows-msvc"; then extension=zip; fi
+            python3 control/scripts/release_recovery.py verify \
+              --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+              --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT" \
+              --archive "control/recovery-assets/pcbex-$RELEASE_TAG-$target.$extension" \
+              --rust-toolchain "$RUST_TOOLCHAIN" \
+              --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+              --run-attempt "$GITHUB_RUN_ATTEMPT"
+          done
+
+  publish:
+    name: Publish recovery release
+    needs: [verify, audit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+      SOURCE_SHA: ${{ needs.verify.outputs.sha }}
+      TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Recheck immutable tag and publish audited draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 control/scripts/release_recovery.py check-remote \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
+            --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT"
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

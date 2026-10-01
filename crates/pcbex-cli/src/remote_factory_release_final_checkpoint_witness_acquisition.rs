@@ -2127,9 +2127,10 @@ mod tests {
         }
     }
 
-    fn receipt_quorum_report()
-    -> RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport
-    {
+    type ReceiptQuorumReport =
+        RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport;
+
+    fn receipt_quorum_report() -> ReceiptQuorumReport {
         let first = receipt();
         let second_key = SigningKey::from_bytes(&[155; 32]);
         RemoteFactoryReleaseFinalCheckpointWitnessReceiptQuorumLogCheckpointWitnessReceiptQuorumReport {

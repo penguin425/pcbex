@@ -672,10 +672,8 @@ pub fn validate_exported_layer_set(
                 .ok_or_else(|| anyhow::anyhow!("manufacturing artifact filename is not UTF-8"))
         })
         .collect::<Result<Vec<_>>>()?;
-    for required in ["drc.rpt"] {
-        if !names.contains(&required) {
-            bail!("KiCad manufacturing export is missing {required}");
-        }
+    if !names.contains(&"drc.rpt") {
+        bail!("KiCad manufacturing export is missing drc.rpt");
     }
     if !names.iter().any(|name| name.ends_with(".drl")) {
         bail!("KiCad manufacturing export did not produce an Excellon drill file");
