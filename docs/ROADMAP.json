@@ -1199,6 +1199,11 @@
     {
       "id": "differential-pair-endpoint-fanouts",
       "release": "v1.533.0",
+      "status": "released"
+    },
+    {
+      "id": "isolated-ci-optimized-boundary-build-reuse",
+      "release": "v1.534.0",
       "status": "current"
     }
   ]

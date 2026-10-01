@@ -2,8 +2,16 @@
 members = ["crates/pcbex-core", "crates/pcbex-kicad", "crates/pcbex-cli"]
 resolver = "2"
 
+[profile.ci-boundary]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 16
+debug = false
+strip = "debuginfo"
+
 [workspace.package]
-version = "1.533.0"
+version = "1.534.0"
 edition = "2024"
 license = "MIT"
 

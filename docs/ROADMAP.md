@@ -249,6 +249,8 @@ auditable release.
 
 | v1.533.0 | Differential-pair endpoint fanouts | Extend two-terminal, common-layer pairs to unequal endpoint pitch and orientation with at most 32 coupled-trunk/local-connector candidates; preserve original net ownership and differential dimensions, share the existing A* budget without refunds, accept only original-board-valid pairs, retain legacy axial search, and add clean deterministic idempotent corpus fixtures without claiming multi-terminal or via fanouts |
 
+| v1.534.0 | Isolated CI optimized boundary build reuse | Reduce compilation cost in deterministic and cross-platform boundary jobs with a release-derived optimized profile and compiler/platform/manifest-keyed target cache; let PRs restore but only successful protected-main pushes save, retain all locked builds and required verification, enforce a 64-MiB regular executable guard, and leave release assets, attestations, Linux release/performance checks, KiCad's shared release build and public Actions unchanged |
+
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
 tag; `released` and `current` milestones require tags. The release audit rejects

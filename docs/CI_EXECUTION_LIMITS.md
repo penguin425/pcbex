@@ -17,14 +17,14 @@ and are never cancelled during publication.
 | CI deterministic pipeline | 45 minutes |
 | CI Rust | 45 minutes |
 | CI Python | 20 minutes |
-| CI Python boundary matrix | 45 minutes |
-| CI Rust Windows boundaries | 45 minutes |
+| CI Python boundary matrix | 90 minutes |
+| CI Rust Windows boundaries | 60 minutes |
 | CodeQL language matrix | 30 minutes |
 | Fuzz target matrix | 30 minutes |
 | KiCad end-to-end | 45 minutes |
 | Release verify | 45 minutes |
 | Release draft preparation | 10 minutes |
-| Release target build | 45 minutes |
+| Release target build | 60 minutes |
 | Release audit | 15 minutes |
 | Release publication | 10 minutes |
 | Trusted PR comment publisher | 10 minutes |
@@ -70,8 +70,45 @@ overwritten through this path.
 The shared runtime boundary suite is also repeated on macOS and Windows. The
 Windows-only Rust process regressions run as a separate required job in
 parallel with that matrix, and the aggregate `Python` check requires both jobs
-to succeed. This keeps the real Windows release build/replay and release-mode
-Rust process tests independent without serializing their compilation costs.
+to succeed. This keeps the real Windows CLI build/replay and optimized Rust
+process tests independent without serializing their compilation costs.
+
+## CI-only build reuse
+
+The deterministic pipeline, macOS/Windows Python boundary matrix and Windows
+Rust boundary job use the explicit `ci-boundary` Cargo profile. It inherits
+release behavior, including disabled debug assertions, while using
+`opt-level = 1`, sixteen codegen units and stripped debug information.
+The explicit `lto = false` retains in-crate thin LTO without cross-crate LTO,
+as specified by [Cargo's profile semantics](https://doc.rust-lang.org/cargo/reference/profiles.html#lto).
+The actual CLI build jobs reject linked, non-regular, empty, non-executable
+(on Unix), or larger-than-64-MiB binaries before running their checks.
+
+macOS/Windows CLI compilation and optimized CLI test-harness compilation use
+a step-local 16-MiB `RUST_MIN_STACK` reservation, avoiding the observed Rust 1.98
+optimizer stack overflow. Test harnesses are compiled with `--no-run`; macOS
+and the dedicated Windows Rust job then reuse that harness for their existing
+filtered tests without this environment setting.
+The Windows Python matrix does not duplicate the dedicated bin-test compilation.
+CLI execution, actual test execution and public release builds retain their
+default stack settings.
+
+Only `target/ci-boundary` is cached. Keys bind runner OS/architecture, host
+target triple, the complete `rustc +stable -Vv` digest, the profile, and all
+workspace Cargo manifests/lock/config files. A partial match is limited to the
+same platform, compiler and profile; every `--locked` Cargo build/test still
+runs and re-evaluates its source and dependency fingerprints. Cache restoration
+does not substitute for any verification step.
+
+PRs may restore caches, but only successful pushes to protected `main` may
+save them. The external cache restore/save Actions are immutable-SHA-pinned;
+GitHub's branch-scoped cache rules keep PR-created cache state out of main's
+restore scope. These caches never feed release assets or their attestations.
+Linux's complete Rust tests, Clippy, ordinary release builds, performance
+budgets and public composite Actions retain their existing configurations.
+KiCad E2E also keeps its release profile because its subsequent native ERC
+Action builds the same profile; switching only the first build would compile
+two profiles in that job.
 
 ## Shared script runtime
 
