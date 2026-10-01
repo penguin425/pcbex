@@ -1194,6 +1194,11 @@
     {
       "id": "policy-pack-dfm-manufacturing-binding-and-fresh-replay",
       "release": "v1.532.0",
+      "status": "released"
+    },
+    {
+      "id": "differential-pair-endpoint-fanouts",
+      "release": "v1.533.0",
       "status": "current"
     }
   ]

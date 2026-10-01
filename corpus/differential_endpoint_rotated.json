@@ -1,0 +1,46 @@
+{
+  "schema_version": 2,
+  "width_nm": 80000000,
+  "height_nm": 20000000,
+  "copper_layers": ["F.Cu"],
+  "rules": {
+    "grid_nm": 250000,
+    "track_width_nm": 250000,
+    "clearance_nm": 200000,
+    "via_diameter_nm": 600000,
+    "via_drill_nm": 300000,
+    "bend_cost": 5,
+    "via_cost": 20
+  },
+  "differential_pairs": [
+    {
+      "name": "LINK",
+      "positive_net_id": 1,
+      "negative_net_id": 2,
+      "gap_nm": 750000,
+      "gap_tolerance_nm": 50000,
+      "max_skew_nm": 3000000,
+      "min_coupled_percent": 80
+    }
+  ],
+  "nets": [
+    {
+      "id": 1,
+      "name": "P",
+      "priority": 0,
+      "terminals": [
+        {"position": {"x_nm": 5000000, "y_nm": 8000000}, "layers": ["F.Cu"]},
+        {"position": {"x_nm": 75000000, "y_nm": 8000000}, "layers": ["F.Cu"]}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "N",
+      "priority": 0,
+      "terminals": [
+        {"position": {"x_nm": 5000000, "y_nm": 9000000}, "layers": ["F.Cu"]},
+        {"position": {"x_nm": 76000000, "y_nm": 8000000}, "layers": ["F.Cu"]}
+      ]
+    }
+  ]
+}

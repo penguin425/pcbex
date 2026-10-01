@@ -114,6 +114,32 @@ Failed nets may trigger deterministic shove or rip-up work within fixed budgets.
 Imported locked routes remain protected unless the selected repair contract
 explicitly authorizes replacement.
 
+### Two-terminal differential fanouts
+
+Pairs with equal axial terminal offsets keep the existing coupled A* search.
+For unequal endpoint pitch or orientation, two-terminal pairs with identical
+effective routing dimensions and a common copper layer try at most 32
+deterministic port/layer choices. Each choice combines a constant-offset
+coupled A* trunk with four independently searched endpoint connectors. All
+searches, including rejected candidates, consume the same aggregate A* budget;
+their expanded states remain visible in the routing report.
+
+Local search retains the original net IDs, pad ownership and differential
+width, reserves existing segments/vias and the opposite member's copper, and
+uses no layer changes. Admission validates resource bounds and the complete
+pair against the original board's connectivity, clearance, coupling, skew,
+class constraints and pair minimum length. An unrelated unrouted net does not
+reject a clean pair. No candidate is admitted merely to be fixed later by
+translating the entire negative member.
+
+This bounded first slice does not add multi-terminal fanouts, via fanouts,
+escape-stub composition, or reservations for existing arcs, zones and
+teardrops. These cases retain the ordinary routing path. Exhausting the shared
+budget is a hard error, not permission to restart with a fresh budget.
+The endpoint-pitch and rotated-endpoint corpus fixtures require clean,
+worker-count-independent, byte-idempotent output alongside the unchanged USB
+differential search ceiling.
+
 For detailed limits, read [A* Work Budget](ASTAR_WORK_BUDGET.md),
 [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md), and
 [Numeric and Raster Limits](NUMERIC_RASTER_LIMITS.md).

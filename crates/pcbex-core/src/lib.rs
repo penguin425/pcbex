@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 pub mod analysis;
 pub mod checking;
 pub mod dfm_profiles;
+mod differential_fanout;
 mod geometry;
 pub mod impedance;
 pub mod physical_profile;
@@ -1191,6 +1192,7 @@ impl PartialOrd for QueueItem {
     }
 }
 
+#[derive(Clone)]
 pub struct Router<'a> {
     board: &'a Board,
     blocked: HashSet<(i32, i32, u8)>,
@@ -2369,6 +2371,16 @@ impl<'a> Router<'a> {
         negative: &Net,
         budget: &mut WorkBudget,
     ) -> Result<Option<(Route, Route, usize)>, WorkBudgetError> {
+        self.route_coupled_pair_tracked(positive, negative, budget, &mut 0)
+    }
+
+    fn route_coupled_pair_tracked(
+        &self,
+        positive: &Net,
+        negative: &Net,
+        budget: &mut WorkBudget,
+        total_expanded: &mut usize,
+    ) -> Result<Option<(Route, Route, usize)>, WorkBudgetError> {
         if positive.terminals.len() != 2 || negative.terminals.len() != 2 {
             return Ok(None);
         }
@@ -2429,6 +2441,7 @@ impl<'a> Router<'a> {
                 continue;
             }
             expanded += 1;
+            *total_expanded += 1;
             if goals.contains(&(item.node.x, item.node.y, item.node.layer)) {
                 let mut path = vec![item.node];
                 let mut cursor = item.node;
@@ -3318,11 +3331,40 @@ pub(crate) fn route_board_with_variant_and_work_budget(
         ) else {
             continue;
         };
-        let Some((positive_route, negative_route, expanded)) =
-            Router::new_with_variant(&seeded, search_variant)?
+        let router = Router::new_with_variant(&seeded, search_variant)?;
+        let legacy = differential_fanout::legacy_geometry_supported(
+            positive,
+            negative,
+            &board.rules_for_net(positive.id),
+        );
+        if !legacy
+            && escape_stubs.iter().any(|stub| {
+                stub.net_id == pair.positive_net_id || stub.net_id == pair.negative_net_id
+            })
+        {
+            continue;
+        }
+        let (routes, expanded) = if legacy {
+            match router
                 .route_coupled_pair(positive, negative, &mut budget)
                 .map_err(|_| ASTAR_WORK_BUDGET_ERROR.to_string())?
-        else {
+            {
+                Some((positive, negative, expanded)) => (Some((positive, negative)), expanded),
+                None => (None, 0),
+            }
+        } else {
+            (
+                differential_fanout::route_differential_fanout_coupled(
+                    &router,
+                    positive,
+                    negative,
+                    &mut budget,
+                    &mut paired_expanded,
+                )?,
+                0,
+            )
+        };
+        let Some((positive_route, negative_route)) = routes else {
             continue;
         };
         seeded.routes.push(positive_route);

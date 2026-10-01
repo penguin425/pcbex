@@ -247,6 +247,8 @@ auditable release.
 | v1.531.0 | Verified circuit to routed KiCad board workflow | Generate a schematic, placed board, and completely routed board from four frozen local inputs; apply all seven construction routing defaults without floating-point conversion; independently replay electrical binding and routing convergence; retain exact input snapshots and nine outputs in one fourteen-file no-clobber bundle; expose a closed manifest without claiming native KiCad DRC, manufacturing suitability, source authenticity, human approval, or release authorization |
 | v1.532.0 | Policy-pack DFM manufacturing binding and fresh replay | Apply one captured policy-pack embedded DFM during fabrication; bind the containing pack source, canonical digest, ID and revision in schema-v3 manufacturing manifests; require full analysis-to-package equality and exact ZIP replay; cross-bind primary/native-DRC handoffs and replay their explicit selection in plan-matched fabrication release, preserving omitted-selection bytes and separating authentication and authorization |
 
+| v1.533.0 | Differential-pair endpoint fanouts | Extend two-terminal, common-layer pairs to unequal endpoint pitch and orientation with at most 32 coupled-trunk/local-connector candidates; preserve original net ownership and differential dimensions, share the existing A* budget without refunds, accept only original-board-valid pairs, retain legacy axial search, and add clean deterministic idempotent corpus fixtures without claiming multi-terminal or via fanouts |
+
 `ROADMAP.json` is the canonical machine-readable milestone ledger. A `bundled`
 milestone remains ordered and documented but intentionally has no standalone
 tag; `released` and `current` milestones require tags. The release audit rejects
