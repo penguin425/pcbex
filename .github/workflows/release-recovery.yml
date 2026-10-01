@@ -15,6 +15,11 @@ on:
         description: Immutable annotated tag object (40 hex characters)
         required: true
         type: string
+      rust_toolchain:
+        description: Exact stable Rust version used by the source release
+        required: true
+        type: string
+        default: "1.98.1"
 
 permissions:
   contents: read
@@ -34,6 +39,7 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       sha: ${{ steps.resolve.outputs.sha }}
       tag_object: ${{ steps.resolve.outputs.tag_object }}
+      rust_toolchain: ${{ steps.resolve.outputs.rust_toolchain }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -51,12 +57,14 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           EXPECTED_TAG_OBJECT: ${{ inputs.expected_tag_object }}
+          REQUESTED_RUST_TOOLCHAIN: ${{ inputs.rust_toolchain }}
         run: |
           python3 scripts/release_recovery.py resolve \
             --repository "$GITHUB_REPOSITORY" \
             --tag "$REQUESTED_TAG" \
             --expected-sha "$EXPECTED_SHA" \
-            --expected-tag-object "$EXPECTED_TAG_OBJECT" >> "$GITHUB_OUTPUT"
+            --expected-tag-object "$EXPECTED_TAG_OBJECT" \
+            --rust-toolchain "$REQUESTED_RUST_TOOLCHAIN" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.resolve.outputs.sha }}
@@ -65,9 +73,15 @@ jobs:
           persist-credentials: false
       - name: Install Rust toolchain
         working-directory: source
-        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+        env:
+          RUST_TOOLCHAIN: ${{ steps.resolve.outputs.rust_toolchain }}
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
       - working-directory: source
-        run: rustup default stable
+        env:
+          RUST_TOOLCHAIN: ${{ steps.resolve.outputs.rust_toolchain }}
+        run: |
+          rustup default "$RUST_TOOLCHAIN"
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$RUST_TOOLCHAIN"
       - name: Verify source tag and versions
         working-directory: source
         env:
@@ -180,6 +194,7 @@ jobs:
       TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
       ASSET_NAME: pcbex-${{ needs.verify.outputs.tag }}-${{ matrix.target }}
       ARCHIVE_NAME: pcbex-${{ needs.verify.outputs.tag }}-${{ matrix.target }}.${{ matrix.extension }}
+      RUST_TOOLCHAIN: ${{ needs.verify.outputs.rust_toolchain }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -198,8 +213,9 @@ jobs:
         shell: bash
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+          test "$(rustc --version | cut -d ' ' -f 2)" = "$RUST_TOOLCHAIN"
       - name: Build
         shell: bash
         run: cargo build -p pcbex --release --locked --target "${{ matrix.target }}"
@@ -253,6 +269,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
             --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT" \
             --archive "source/dist/$ARCHIVE_NAME" --output control/release-source.json \
+            --rust-toolchain "$RUST_TOOLCHAIN" \
             --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Attest immutable release source binding
@@ -290,6 +307,7 @@ jobs:
       RELEASE_TAG: ${{ needs.verify.outputs.tag }}
       SOURCE_SHA: ${{ needs.verify.outputs.sha }}
       TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
+      RUST_TOOLCHAIN: ${{ needs.verify.outputs.rust_toolchain }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -339,6 +357,7 @@ jobs:
               --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" \
               --expected-sha "$SOURCE_SHA" --expected-tag-object "$TAG_OBJECT" \
               --archive "control/recovery-assets/pcbex-$RELEASE_TAG-$target.$extension" \
+              --rust-toolchain "$RUST_TOOLCHAIN" \
               --workflow-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
               --run-attempt "$GITHUB_RUN_ATTEMPT"
           done

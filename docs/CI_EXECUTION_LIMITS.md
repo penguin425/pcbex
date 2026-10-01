@@ -54,7 +54,11 @@ must match the explicit inputs before any write job starts.
 Recovery build certificates identify the new main-based controller commit,
 not the older source tag. Normal build-provenance and SPDX attestations remain;
 an additional signed release-source predicate binds each archive to the exact
-tag object, source SHA, controller SHA, and run/attempt. After the unchanged
+tag object, source SHA, exact Rust toolchain, controller SHA, and run/attempt.
+Recovery pins an explicitly supplied numeric stable toolchain version so an
+immutable tag can repeat all checks with its previously successful compiler;
+normal CI and new tag-push releases continue to use the latest stable channel.
+After the unchanged
 source release audit, the recovery audit cryptographically verifies that
 binding on the downloaded release archives, with the exact controller
 certificate identity/digest and hosted-runner constraints. The extra archive

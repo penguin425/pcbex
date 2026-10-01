@@ -226,8 +226,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn("  push:", header)
         self.assertNotIn("  pull_request:", header)
         self.assertNotIn("  repository_dispatch:", header)
-        self.assertEqual(header.count("        required: true"), 3)
-        for name in ("tag", "expected_sha", "expected_tag_object"):
+        self.assertEqual(header.count("        required: true"), 4)
+        for name in ("tag", "expected_sha", "expected_tag_object", "rust_toolchain"):
             self.assertIn(f"      {name}:", header)
         self.assertIn("group: release-v2-${{ github.ref }}", normal)
         self.assertIn("group: release-v2-refs/tags/${{ inputs.tag }}", recovery)
@@ -263,6 +263,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
                 self.assertIn(required, verify)
         self.assertNotRegex(document, r"(?m)^\s+GITHUB_SHA:")
         self.assertNotRegex(document, r"(?m)^\s+GITHUB_REF(?:_NAME)?:")
+        self.assertIn('rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt', verify)
+        self.assertIn('rustup default "$RUST_TOOLCHAIN"', verify)
+        self.assertIn('--rust-toolchain "$REQUESTED_RUST_TOOLCHAIN"', verify)
         # Raw dispatch inputs only enter env/checkout-independent controller
         # validation, never executable shell interpolation.
         for line in document.splitlines():
@@ -290,6 +293,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("- name: Attest SBOM", build)
         self.assertIn("predicate-type: https://github.com/penguin425/pcbex/attestations/release-source/v1", build)
         self.assertIn("predicate-path: control/release-source.json", build)
+        self.assertIn('rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal', build)
+        self.assertIn('--rust-toolchain "$RUST_TOOLCHAIN"', build)
         binding = build.partition("- name: Bind archive to immutable release source")[2]
         self.assertIn("working-directory: .", binding)
         self.assertIn('--archive "source/dist/$ARCHIVE_NAME" --output control/release-source.json', binding)
@@ -314,6 +319,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertNotIn("--skip-download", audit)
         self.assertIn("working-directory: .", audit)
         self.assertIn("release_recovery.py verify", audit)
+        self.assertIn('--rust-toolchain "$RUST_TOOLCHAIN"', audit)
         self.assertIn('--archive "control/recovery-assets/pcbex-$RELEASE_TAG-$target.$extension"', audit)
         self.assertIn("--timeout-seconds 120", audit)
         self.assertIn("--max-entries 4 --max-depth 1", audit)

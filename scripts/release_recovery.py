@@ -23,6 +23,7 @@ import ci_runtime  # noqa: E402
 PREDICATE_TYPE = "https://github.com/penguin425/pcbex/attestations/release-source/v1"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 TAG_RE = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$")
+RUST_TOOLCHAIN_RE = re.compile(r"^1\.[0-9]{1,3}\.[0-9]{1,3}$")
 REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 ARCHIVE_LIMIT = 128 * 1024 * 1024
 PREDICATE_LIMIT = 64 * 1024
@@ -55,6 +56,12 @@ def _tag(value: str) -> str:
 def _repository(value: str) -> str:
     if not isinstance(value, str) or REPOSITORY_RE.fullmatch(value) is None:
         raise RecoveryError("repository must be OWNER/REPO")
+    return value
+
+
+def _rust_toolchain(value: str) -> str:
+    if not isinstance(value, str) or len(value) > 32 or RUST_TOOLCHAIN_RE.fullmatch(value) is None:
+        raise RecoveryError("rust-toolchain must be an explicit stable 1.x.y version")
     return value
 
 
@@ -103,6 +110,7 @@ def resolve(args: argparse.Namespace) -> None:
     tag = _tag(args.tag)
     expected_sha = _sha(args.expected_sha, "expected-sha")
     tag_object = _sha(args.expected_tag_object, "expected-tag-object")
+    rust_toolchain = _rust_toolchain(args.rust_toolchain)
     workflow_sha = _sha(os.environ.get("GITHUB_SHA", ""), "GITHUB_SHA")
     if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
         raise RecoveryError("resolve requires workflow_dispatch")
@@ -123,7 +131,7 @@ def resolve(args: argparse.Namespace) -> None:
     if cargo_version != python_version or tag != f"v{cargo_version}":
         raise RecoveryError("tag and Cargo/Python versions do not agree")
     # These are the only values intended for GITHUB_OUTPUT.
-    print(f"tag={tag}\nsha={expected_sha}\ntag_object={tag_object}")
+    print(f"tag={tag}\nsha={expected_sha}\ntag_object={tag_object}\nrust_toolchain={rust_toolchain}")
 
 
 def check_remote(args: argparse.Namespace) -> None:
@@ -171,6 +179,7 @@ def predicate(args: argparse.Namespace) -> None:
     source_sha = _sha(args.expected_sha, "expected-sha")
     tag_object = _sha(args.expected_tag_object, "expected-tag-object")
     workflow_sha = _sha(args.workflow_sha, "workflow-sha")
+    rust_toolchain = _rust_toolchain(args.rust_toolchain)
     if isinstance(args.run_id, bool) or not isinstance(args.run_id, int) or args.run_id <= 0:
         raise RecoveryError("run-id must be a positive integer")
     if isinstance(args.run_attempt, bool) or not isinstance(args.run_attempt, int) or args.run_attempt <= 0:
@@ -190,6 +199,7 @@ def predicate(args: argparse.Namespace) -> None:
         "tag": tag,
         "tag_object": tag_object,
         "workflow_sha": workflow_sha,
+        "rust_toolchain": rust_toolchain,
     }
     payload = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
     try:
@@ -218,6 +228,7 @@ def verify(args: argparse.Namespace) -> None:
     expected_sha = _sha(args.expected_sha, "expected-sha")
     expected_tag_object = _sha(args.expected_tag_object, "expected-tag-object")
     workflow_sha = _sha(args.workflow_sha, "workflow-sha")
+    rust_toolchain = _rust_toolchain(args.rust_toolchain)
     if isinstance(args.run_id, bool) or not isinstance(args.run_id, int) or args.run_id <= 0:
         raise RecoveryError("run-id must be a positive integer")
     if isinstance(args.run_attempt, bool) or not isinstance(args.run_attempt, int) or args.run_attempt <= 0:
@@ -247,6 +258,7 @@ def verify(args: argparse.Namespace) -> None:
         "tag": tag,
         "tag_object": expected_tag_object,
         "workflow_sha": workflow_sha,
+        "rust_toolchain": rust_toolchain,
     }
     if not isinstance(result, list) or not 1 <= len(result) <= 30:
         raise RecoveryError("attestation verifier returned an invalid result list")
@@ -281,18 +293,22 @@ def _parser() -> argparse.ArgumentParser:
         command = sub.add_parser(name)
         _common(command)
         if name == "resolve":
+            command.add_argument("--rust-toolchain", required=True)
+        if name == "resolve":
             continue
     command = sub.add_parser("predicate")
     _common(command)
     command.add_argument("--archive", required=True)
     command.add_argument("--output", required=True)
     command.add_argument("--workflow-sha", required=True)
+    command.add_argument("--rust-toolchain", required=True)
     command.add_argument("--run-id", required=True, type=int)
     command.add_argument("--run-attempt", required=True, type=int)
     command = sub.add_parser("verify")
     _common(command)
     command.add_argument("--archive", required=True)
     command.add_argument("--workflow-sha", required=True)
+    command.add_argument("--rust-toolchain", required=True)
     command.add_argument("--run-id", required=True, type=int)
     command.add_argument("--run-attempt", required=True, type=int)
     return parser

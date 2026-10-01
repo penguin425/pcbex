@@ -30,8 +30,10 @@ class RecoveryTests(unittest.TestCase):
             values += ["--archive", archive]
         if output:
             values += ["--output", output]
+        if command == "resolve":
+            values += ["--rust-toolchain", "1.98.1"]
         if command in ("predicate", "verify"):
-            values += ["--workflow-sha", WORKFLOW, "--run-id", "17", "--run-attempt", "2"]
+            values += ["--workflow-sha", WORKFLOW, "--rust-toolchain", "1.98.1", "--run-id", "17", "--run-attempt", "2"]
         return recovery._parser().parse_args(values)
 
     def test_resolve_uses_workflow_head_but_reads_source_commit(self):
@@ -56,7 +58,7 @@ class RecoveryTests(unittest.TestCase):
             with mock.patch("release_recovery.Path.cwd", return_value=root):
                 recovery.predicate(args)
             value = json.loads((root / "predicate.json").read_text())
-            self.assertEqual(set(value), {"archive_name", "archive_sha256", "repository", "run_attempt", "run_id", "schema_version", "source_sha", "tag", "tag_object", "workflow_sha"})
+            self.assertEqual(set(value), {"archive_name", "archive_sha256", "repository", "run_attempt", "run_id", "schema_version", "source_sha", "tag", "tag_object", "workflow_sha", "rust_toolchain"})
             self.assertEqual(value["archive_sha256"], hashlib.sha256(payload).hexdigest())
 
     def test_verify_requires_documented_nested_result_and_subject(self):
@@ -66,7 +68,7 @@ class RecoveryTests(unittest.TestCase):
             payload = b"archive"
             archive.write_bytes(payload)
             digest = hashlib.sha256(payload).hexdigest()
-            predicate = {"archive_name": archive.name, "archive_sha256": digest, "repository": REPO, "run_attempt": 2, "run_id": 17, "schema_version": 1, "source_sha": SOURCE, "tag": TAG, "tag_object": TAG_OBJECT, "workflow_sha": WORKFLOW}
+            predicate = {"archive_name": archive.name, "archive_sha256": digest, "repository": REPO, "run_attempt": 2, "run_id": 17, "schema_version": 1, "source_sha": SOURCE, "tag": TAG, "tag_object": TAG_OBJECT, "workflow_sha": WORKFLOW, "rust_toolchain": "1.98.1"}
             result = [{"verificationResult": {"statement": {"predicateType": recovery.PREDICATE_TYPE, "predicate": predicate, "subject": [{"name": archive.name, "digest": {"sha256": digest}}]}}}]
             args = self.args("verify", archive.name)
             with mock.patch("release_recovery.Path.cwd", return_value=root), mock.patch.object(recovery, "_json_command", return_value=result) as command:
@@ -81,7 +83,7 @@ class RecoveryTests(unittest.TestCase):
             archive = root / f"pcbex-{TAG}-x86_64-unknown-linux-gnu.tar.gz"
             archive.write_bytes(b"archive")
             digest = hashlib.sha256(b"archive").hexdigest()
-            predicate = {"archive_name": archive.name, "archive_sha256": digest, "repository": REPO, "run_attempt": True, "run_id": 17, "schema_version": 1, "source_sha": SOURCE, "tag": TAG, "tag_object": TAG_OBJECT, "workflow_sha": WORKFLOW}
+            predicate = {"archive_name": archive.name, "archive_sha256": digest, "repository": REPO, "run_attempt": True, "run_id": 17, "schema_version": 1, "source_sha": SOURCE, "tag": TAG, "tag_object": TAG_OBJECT, "workflow_sha": WORKFLOW, "rust_toolchain": "1.98.1"}
             result = [{"verificationResult": {"statement": {"predicateType": recovery.PREDICATE_TYPE, "predicate": predicate, "subject": [{"name": archive.name, "digest": {"sha256": digest}}]}}}]
             with mock.patch("release_recovery.Path.cwd", return_value=root), mock.patch.object(recovery, "_json_command", return_value=result):
                 with self.assertRaises(recovery.RecoveryError):
@@ -97,6 +99,17 @@ class RecoveryTests(unittest.TestCase):
             with self.subTest(environment=environment), mock.patch.dict(recovery.os.environ, environment, clear=False), mock.patch.object(recovery, "_run") as run:
                 with self.assertRaises(recovery.RecoveryError):
                     recovery.resolve(args)
+                run.assert_not_called()
+
+    def test_invalid_rust_toolchains_fail_before_external_commands(self):
+        invalid = ("stable", "nightly", "1.98", "1.98.1-nightly", "--version", "../../rustc", "1.9999.1", "1.98.1\n")
+        for value in invalid:
+            with self.subTest(value=value), mock.patch.object(recovery, "_run") as run:
+                args = self.args("resolve")
+                args.rust_toolchain = value
+                with mock.patch.dict(recovery.os.environ, {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": WORKFLOW}, clear=False):
+                    with self.assertRaises(recovery.RecoveryError):
+                        recovery.resolve(args)
                 run.assert_not_called()
 
     def test_resolve_rejects_controller_tag_and_ancestry_mutations(self):
@@ -134,7 +147,7 @@ class RecoveryTests(unittest.TestCase):
         archive.parent.mkdir(parents=True, exist_ok=True)
         archive.write_bytes(b"archive")
         digest = hashlib.sha256(b"archive").hexdigest()
-        predicate = {"archive_name": archive.name, "archive_sha256": digest, "repository": REPO, "run_attempt": 2, "run_id": 17, "schema_version": 1, "source_sha": SOURCE, "tag": TAG, "tag_object": TAG_OBJECT, "workflow_sha": WORKFLOW}
+        predicate = {"archive_name": archive.name, "archive_sha256": digest, "repository": REPO, "run_attempt": 2, "run_id": 17, "schema_version": 1, "source_sha": SOURCE, "tag": TAG, "tag_object": TAG_OBJECT, "workflow_sha": WORKFLOW, "rust_toolchain": "1.98.1"}
         statement = {"predicateType": recovery.PREDICATE_TYPE, "predicate": predicate, "subject": [{"name": archive.name, "digest": {"sha256": digest}}]}
         return archive, predicate, [{"verificationResult": {"statement": statement}}]
 
@@ -142,7 +155,7 @@ class RecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             archive, predicate, result = self._verify_fixture(root)
-            for key, value in {"source_sha": "d" * 40, "tag_object": "d" * 40, "tag": "v1.533.1", "archive_sha256": "d" * 64, "workflow_sha": "d" * 40, "run_id": 18, "run_attempt": 3, "schema_version": 2}.items():
+            for key, value in {"source_sha": "d" * 40, "tag_object": "d" * 40, "tag": "v1.533.1", "archive_sha256": "d" * 64, "workflow_sha": "d" * 40, "rust_toolchain": "1.99.0", "run_id": 18, "run_attempt": 3, "schema_version": 2}.items():
                 mutated = json.loads(json.dumps(result))
                 mutated[0]["verificationResult"]["statement"]["predicate"][key] = value
                 with self.subTest(key=key), mock.patch("release_recovery.Path.cwd", return_value=root), mock.patch.object(recovery, "_json_command", return_value=mutated):
