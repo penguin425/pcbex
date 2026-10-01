@@ -35,6 +35,22 @@ const MAX_CIRCUIT_KICAD_SCHEMATIC_BYTES: u64 =
     pcbex_kicad::CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64;
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
+fn try_reserve_task_slot(active_tasks: &AtomicUsize) -> bool {
+    let mut active = active_tasks.load(Ordering::SeqCst);
+    while active < MAX_CONCURRENT_TASKS {
+        match active_tasks.compare_exchange_weak(
+            active,
+            active + 1,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => return true,
+            Err(observed) => active = observed,
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 thread_local! {
     static AFTER_FABRICATION_REPORT_READ_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
@@ -557,13 +573,7 @@ impl McpServer {
                 Some(json!({"maximumTasks": MAX_TASKS})),
             );
         }
-        if self
-            .active_tasks
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
-                (active < MAX_CONCURRENT_TASKS).then_some(active + 1)
-            })
-            .is_err()
-        {
+        if !try_reserve_task_slot(&self.active_tasks) {
             return error_response(
                 id,
                 -32000,
@@ -17932,6 +17942,36 @@ fn reject_unknown(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_slot_reservation_is_atomic_bounded_and_reusable() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(std::sync::Barrier::new(MAX_CONCURRENT_TASKS * 2));
+        let workers = (0..MAX_CONCURRENT_TASKS * 2)
+            .map(|_| {
+                let active = Arc::clone(&active);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    try_reserve_task_slot(&active)
+                })
+            })
+            .collect::<Vec<_>>();
+        let reserved = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .filter(|reserved| *reserved)
+            .count();
+        assert_eq!(reserved, MAX_CONCURRENT_TASKS);
+        assert_eq!(active.load(Ordering::SeqCst), MAX_CONCURRENT_TASKS);
+        assert!(!try_reserve_task_slot(&active));
+        active.fetch_sub(1, Ordering::SeqCst);
+        assert!(try_reserve_task_slot(&active));
+        assert_eq!(active.load(Ordering::SeqCst), MAX_CONCURRENT_TASKS);
+        active.store(usize::MAX, Ordering::SeqCst);
+        assert!(!try_reserve_task_slot(&active));
+        assert_eq!(active.load(Ordering::SeqCst), usize::MAX);
+    }
 
     #[test]
     fn bounded_line_accepts_exact_limit_and_drains_oversized_frames() {

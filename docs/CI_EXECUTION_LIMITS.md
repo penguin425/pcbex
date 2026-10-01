@@ -41,6 +41,32 @@ check of the workflow inventory, exact job timeouts, concurrency, matrix
 parallelism, fuzz flags, serialized release policy, fixture-server cleanup,
 and composite-action publication gate. Adding a workflow or job therefore
 requires an explicit policy decision in the same change.
+`Release Recovery` is an explicit, protected-main `workflow_dispatch` path for
+an existing unpublished annotated tag; it does not rerun or replace an old
+attempt, move the tag, skip tests, or publish manually. Its five jobs retain
+the normal Release workflow's 45/10/60/15/10-minute ceilings, four release-mode
+targets, and matrix parallelism of two. Both workflows share the
+`release-v2-refs/tags/<tag>` concurrency namespace without mid-publish
+cancellation. The controller and source commits are checked out separately:
+the tag object, peeled source SHA, main ancestry, and Rust/Python versions
+must match the explicit inputs before any write job starts.
+
+Recovery build certificates identify the new main-based controller commit,
+not the older source tag. Normal build-provenance and SPDX attestations remain;
+an additional signed release-source predicate binds each archive to the exact
+tag object, source SHA, exact Rust toolchain, controller SHA, and run/attempt.
+Recovery pins an explicitly supplied numeric stable toolchain version so an
+immutable tag can repeat all checks with its previously successful compiler;
+normal CI and new tag-push releases continue to use the latest stable channel.
+After the unchanged
+source release audit, the recovery audit cryptographically verifies that
+binding on the downloaded release archives, with the exact controller
+certificate identity/digest and hosted-runner constraints. The extra archive
+download has a 120-second command bound and a four-file, depth-one,
+128-MiB-per-file/512-MiB-total boundary. Remote tag identity and draft status
+are rechecked before uploads and publication; published assets are not
+overwritten through this path.
+
 The shared runtime boundary suite is also repeated on macOS and Windows. The
 Windows-only Rust process regressions run as a separate required job in
 parallel with that matrix, and the aggregate `Python` check requires both jobs
