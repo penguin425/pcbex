@@ -29,7 +29,7 @@ ed25519-dalek = "3"
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 getrandom = "0.4"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-zip = { version = "8.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.0", default-features = false, features = ["deflate"] }
 tempfile = "3"
 rustix = { version = "1", default-features = false, features = ["fs"] }
 windows-sys = { version = "0.61.2", features = [
